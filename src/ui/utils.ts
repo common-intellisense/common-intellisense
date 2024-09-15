@@ -12,19 +12,20 @@ interface PropsOptions {
 }
 
 export function propsReducer(options: PropsOptions) {
-  const { uiName, lib, map, iconData, extensionContext, prefix = '' } = options
+  const { uiName, lib, map, prefix = '' } = options
   const result: any = {}
-  let icons
-  if (iconData) {
-    const prefix = iconData.prefix
-    icons = iconData.icons.map((icon) => {
-      const imagePath = vscode.Uri.file(extensionContext.asAbsolutePath(`images/${iconData.type}/${icon}.svg`))
-      const documentation = new vscode.MarkdownString(`![img](${imagePath})`)
-      const snippet = `${prefix}-${icon}`
-      return createCompletionItem({ content: icon, type: 19, documentation, snippet, params: [uiName] })
-    })
-    result.icons = icons
-  }
+  // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
+  // let icons
+  // if (iconData) {
+  //   const prefix = iconData.prefix
+  //   icons = iconData.icons.map((icon) => {
+  //     const imagePath = vscode.Uri.file(extensionContext.asAbsolutePath(`images/${iconData.type}/${icon}.svg`))
+  //     const documentation = new vscode.MarkdownString(`![img](${imagePath})`)
+  //     const snippet = `${prefix}-${icon}`
+  //     return createCompletionItem({ content: icon, type: 19, documentation, snippet, params: [uiName] })
+  //   })
+  //   result.icons = icons
+  // }
   return map.reduce((result: any, item: any) => {
     const completions: any = []
     const events: any = []
