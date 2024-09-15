@@ -1,10 +1,10 @@
 {
   "publisher": "simonhe",
   "name": "common-intellisense",
-  "displayName": "common-intellisense",
+  "displayName": "%displayName%",
   "version": "0.1.77",
   "packageManager": "pnpm@8.15.9",
-  "description": "common-intellisense",
+  "description": "%description%",
   "author": "Simon He <https://github.com/Simon-He95>",
   "license": "MIT",
   "funding": "https://github.com/sponsors/Simon-He95",
@@ -19,6 +19,27 @@
   "sponsor": {
     "url": "https://github.com/Simon-He95/sponsor"
   },
+  "keywords": [
+    "VSCode",
+    "Intellisense",
+    "UI框架",
+    "智能提示",
+    "插件",
+    "Element UI",
+    "Ant Design",
+    "Vuetify",
+    "Chakra UI",
+    "PrimeVue",
+    "Quasar",
+    "NextUI",
+    "NuxtUI",
+    "Shadcn",
+    "Radix",
+    "Arco Design",
+    "UView",
+    "Taro",
+    "NutUI"
+  ],
   "categories": [
     "Other"
   ],
@@ -32,7 +53,7 @@
   ],
   "contributes": {
     "configuration": {
-      "title": "Common Intellisense",
+      "title": "%configurationTitle%",
       "properties": {
         "common-intellisense.ui": {
           "type": "array",
@@ -72,17 +93,17 @@
               "@nutui/nutui4"
             ]
           },
-          "description": "Choose the UI framework. If your selection includes `auto`, the extension will ignore the config and automatically detect the UI framework."
+          "description": "%uiDescription%"
         },
         "common-intellisense.showSlots": {
           "type": "boolean",
           "default": true,
-          "description": "Whether to show the slots on template completion."
+          "description": "%showSlotsDescription%"
         },
         "common-intellisense.alias": {
           "type": "object",
           "default": {},
-          "description": "Alias for the UI framework. If the UI framework you are using is not in the list, you can add an alias here. like { \"xxx\": \"elementUi2\" }"
+          "description": "%aliasDescription%"
         },
         "common-intellisense.exclude": {
           "type": "array",
@@ -90,14 +111,14 @@
             "**/dist/**",
             "**/node_modules/**"
           ],
-          "description": "The directory you want to be skipped"
+          "description": "%excludeDescription%"
         }
       }
     },
     "commands": [
       {
         "command": "common-intellisense.pickUI",
-        "title": "Specify the UI library you need to prompt"
+        "title": "%pickUITitle%"
       }
     ]
   },
@@ -116,11 +137,12 @@
     "@antfu/eslint-config": "^2.27.3",
     "@babel/types": "^7.25.6",
     "@rollup/pluginutils": "^5.1.0",
+    "@simon_he/latest-version": "^0.0.1",
     "@types/node": "^18.19.50",
     "@types/vscode": "1.77.0",
     "@typescript-eslint/typescript-estree": "^6.21.0",
     "@vscode-use/createwebview": "^0.0.13",
-    "@vscode-use/utils": "0.1.25",
+    "@vscode-use/utils": "0.1.29",
     "@vscode/vsce": "^3.1.0",
     "@vue-vine/compiler": "^0.1.20",
     "@vue/compiler-sfc": "3.3.4",
@@ -130,6 +152,8 @@
     "esno": "^0.16.3",
     "fast-glob": "^3.3.2",
     "find-up": "^6.3.0",
+    "latest-version": "^9.0.0",
+    "ofetch": "^1.3.4",
     "pnpm": "^8.15.9",
     "prettier": "^3.3.3",
     "rimraf": "^4.4.1",

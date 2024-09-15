@@ -6,17 +6,18 @@ import { CreateWebview } from '@vscode-use/createwebview'
 import { parse } from '@vue/compiler-sfc'
 import { createFilter } from '@rollup/pluginutils'
 import { alias, detectSlots, findPkgUI, findRefs, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
-import UI from './ui'
+// import UI from './ui'
 import { UINames as UINamesMap, nameMap } from './constants'
 import type { Directives } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
+import { fetchFromCommonIntellisense } from './fetch'
 // import {createWebviewPanel} from './webview/webview'
 
+const UI = {}
 let UINames: any = []
 export let optionsComponents: any = null
 let UiCompletions: any = null
 const cacheMap: any = new Map()
-let extensionContext: any = null
 let eventCallbacks: any = new Map()
 let completionsCallbacks: any = new Map()
 let currentPkgUiNames: null | string[] = null
@@ -28,9 +29,9 @@ function isSkip() {
   const id = getActiveTextEditorLanguageId()
   return !id || !filter.includes(id)
 }
+// todo: 补充类型
 // todo: 补充example
-export function activate(context: vscode.ExtensionContext) {
-  extensionContext = context
+export async function activate(context: vscode.ExtensionContext) {
   // todo: createWebviewPanel
   // createWebviewPanel(context)
   const isZh = getLocale().includes('zh')
@@ -816,7 +817,17 @@ export function findUI() {
     updateCompletions(uis)
   })
 
-  function updateCompletions(uis: any) {
+  let preUis: any = null
+  async function updateCompletions(uis: any) {
+    if (!preUis) {
+      preUis = uis
+    }
+    else if (UiCompletions && (preUis.join('') === uis.join(''))) {
+      return
+    }
+    else {
+      preUis = uis
+    }
     const uisName: string[] = []
     const originUisName: string[] = []
     uis.forEach(([uiName, version]: any) => {
@@ -845,39 +856,47 @@ export function findUI() {
       UINames = uisName
 
     currentPkgUiNames = uisName
-    optionsComponents = UINames.map((option: string) => `${option}Components`).reduce((result: any, name: string) => {
+    optionsComponents = { prefix: [], data: [], directivesMap: {} }
+
+    await Promise.all(UINames.reduce(async (r: any, name: string) => {
       let componentsNames
-      if (cacheMap.has(name)) {
-        componentsNames = cacheMap.get(name)
+      const key = `${name}Components`
+      if (cacheMap.has(key)) {
+        componentsNames = cacheMap.get(key)
       }
       else {
-        componentsNames = (UI as any)[name]?.()
-        cacheMap.set(name, componentsNames)
+        try {
+          Object.assign(r, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
+          componentsNames = r[key]?.()
+          cacheMap.set(key, componentsNames)
+        }
+        catch (error) {
+          console.error(`fetch fetchFromCommonIntellisense [${name}] error： ${String(error)}`)
+        }
       }
       if (componentsNames) {
         for (const componentsName of componentsNames) {
           const { prefix, data, directives, lib } = componentsName
-          if (!result.prefix.includes(prefix))
-            result.prefix.push(prefix)
-          result.data.push(data)
+          if (!optionsComponents.prefix.includes(prefix))
+            optionsComponents.prefix.push(prefix)
+          optionsComponents.data.push(data)
           const libWithVersion = originUisName.find(item => item.startsWith(lib))!
-          result.directivesMap[libWithVersion] = directives
+          optionsComponents.directivesMap[libWithVersion] = directives
         }
       }
-      return result
-    }, { prefix: [], data: [], directivesMap: {} })
-
-    UiCompletions = UINames.reduce((result: any, option: string) => {
       let completion
-      if (cacheMap.has(option)) {
-        completion = cacheMap.get(option)
+      if (cacheMap.has(name)) {
+        completion = cacheMap.get(name)
       }
       else {
-        completion = (UI as any)[option]?.(extensionContext)
-        cacheMap.set(option, completion)
+        completion = r[name]?.()
+        cacheMap.set(name, completion)
       }
-      return Object.assign(result, completion)
-    }, {} as any)
+      if (!UiCompletions)
+        UiCompletions = {}
+      Object.assign(UiCompletions, completion)
+    }, UI))
+
     if (isShowSlots) {
       const activeText = getActiveText()
       if (activeText)
