@@ -82,13 +82,21 @@ Install the supported ui component library in your project and install the plug-
           "type": "object",
           "default": {},
           "description": "If you need to integrate the supported ui library, the secondary encapsulated library, and the prompt to integrate a certain version of the original ui, you can use the alias { \"@xxx/element\": \"elementUi2\" }"
+},
+"common-intellisense.remoteUris": {
+  "type": "array",
+  "default": [],
+  "description": "Remote URIs"
 }
 ```
 
-## How to contribute
+## 如何参与贡献
 
-This repository is maintained by an individual and needs to be updated with some ui libraries frequently. If you are interested in contributing, you can submit a PR or provide some new ui libraries or some new features. You are welcome to submit [issue](https://github.com/Simon-He95/vscode-common-intellisense/issues/56)
-By referring to the files in other directories, you can easily add new ui libraries, such as new library names and corresponding version numbers. Do not manually fill in json by referring to the document. Please write a script to automatically generate it. Refer to `xx.browser.js` under script, execute the function on the browser side, generate `json`, then create a json file and copy it in. Finally, you can use `scripts/generateIndex` to configure the directory to directly generate the corresponding `index.ts` file, and then import it into `ui/index`. If it is a new ui library, you need to enter `src/constants.ts` to configure it ~
+This repository is maintained by individuals, and needs to be updated with some UI libraries frequently. If you are interested in contributing, you can submit a PR to the corresponding version of the corresponding UI library under @common-intellisense or provide some new UI libraries or some new features. Submissions are welcome. [issue](https://github.com/common-intellisense/common-intellisense/issues/3)
+
+## 如何支持私有库
+
+If your project is a private library, you can also refer to [vuetify](https://github.com/common-intellisense/vuetify3), provide an exported uri, and then configure `common-intellisense.remoteUris` in `package.json`, configure this link, and the plug-in will request this link to obtain the corresponding prompt information.
 
 ## :coffee:
 
