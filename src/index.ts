@@ -790,6 +790,7 @@ export function deactivate() {
 
 // const filters = ['js', 'ts', 'jsx', 'tsx', 'vue', 'svelte']
 export const urlCache = new Map()
+let preUis: any = null
 export function findUI() {
   UINames = []
   optionsComponents = null
@@ -798,6 +799,7 @@ export function findUI() {
   completionsCallbacks.clear()
   currentPkgUiNames = null
   cacheMap.clear()
+  preUis = null
   const selectedUIs = getConfiguration('common-intellisense.ui') as string[]
 
   const cwd = getCurrentFileUrl()
@@ -818,7 +820,6 @@ export function findUI() {
     updateCompletions(uis)
   })
 
-  let preUis: any = null
   async function updateCompletions(uis: any) {
     if (!preUis) {
       preUis = uis
