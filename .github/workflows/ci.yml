@@ -1,46 +1,53 @@
-name: Test
+name: CI
 
 on:
   push:
     branches:
-      - master
+      - main
 
   pull_request:
     branches:
-      - master
+      - main
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
 
-    timeout-minutes: 10
+      - run: pnpm i -g @antfu/ni
+      - run: nci
+      - run: nr lint
+      - run: nr typecheck
+
+  test:
+    runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
-        node_version: [14.x, 16.x]
-        os: [ubuntu-latest, windows-latest]
+        node: [lts/*]
+        os: [ubuntu-latest, windows-latest, macos-latest]
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v2
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
-
-      - name: Set node version to ${{ matrix.node_version }}
-        uses: actions/setup-node@v2
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
         with:
-          node-version: ${{ matrix.node_version }}
+          run_install: false
+      - name: Set node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
           cache: pnpm
 
-      - name: Install
-        run: pnpm i
-
-      - name: Build
-        run: pnpm run build
-
-      - name: Test
-        run: pnpm run test
-
-      - name: Lint
-        run: pnpm run lint
+      - run: pnpm i -g @antfu/ni
+      - run: nci
+      - run: nr build
+      - run: nr test
