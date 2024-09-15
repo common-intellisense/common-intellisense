@@ -1,7 +1,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import * as vscode from 'vscode'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
+import { addEventListener, createCompletionItem, createHover, createLog, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import { CreateWebview } from '@vscode-use/createwebview'
 import { parse } from '@vue/compiler-sfc'
 import { createFilter } from '@rollup/pluginutils'
@@ -13,8 +13,9 @@ import { isVine, isVue, toCamel } from './ui/utils'
 import { fetchFromCommonIntellisense } from './fetch'
 // import {createWebviewPanel} from './webview/webview'
 
-const UI = {}
+const UI: Record<string, () => any> = {}
 let UINames: any = []
+export const logger = createLog('common-intellisense')
 export let optionsComponents: any = null
 let UiCompletions: any = null
 const cacheMap: any = new Map()
@@ -858,7 +859,7 @@ export function findUI() {
     currentPkgUiNames = uisName
     optionsComponents = { prefix: [], data: [], directivesMap: {} }
 
-    await Promise.all(UINames.reduce(async (r: any, name: string) => {
+    await Promise.all(UINames.map(async (name: string) => {
       let componentsNames
       const key = `${name}Components`
       if (cacheMap.has(key)) {
@@ -866,14 +867,16 @@ export function findUI() {
       }
       else {
         try {
-          Object.assign(r, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
-          componentsNames = r[key]?.()
+          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
+          componentsNames = UI[key]?.()
           cacheMap.set(key, componentsNames)
+          logger.info(`fetch ${name} successfully 🎉`)
         }
         catch (error) {
-          console.error(`fetch fetchFromCommonIntellisense [${name}] error： ${String(error)}`)
+          logger.error(`fetch fetchFromCommonIntellisense [${name}] error： ${String(error)}`)
         }
       }
+      logger.info(JSON.stringify(UI))
       if (componentsNames) {
         for (const componentsName of componentsNames) {
           const { prefix, data, directives, lib } = componentsName
@@ -889,14 +892,13 @@ export function findUI() {
         completion = cacheMap.get(name)
       }
       else {
-        completion = r[name]?.()
+        completion = UI[name]?.()
         cacheMap.set(name, completion)
       }
       if (!UiCompletions)
         UiCompletions = {}
       Object.assign(UiCompletions, completion)
-    }, UI))
-
+    }))
     if (isShowSlots) {
       const activeText = getActiveText()
       if (activeText)

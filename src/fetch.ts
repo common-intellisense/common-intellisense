@@ -3,6 +3,7 @@ import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
 import { createFakeProgress, getLocale } from '@vscode-use/utils'
 import { componentsReducer, propsReducer } from './ui/utils'
+import { logger } from '.'
 
 const prefix = '@common-intellisense/'
 const cacheFetch = new Map()
@@ -25,15 +26,21 @@ export async function fetchFromCommonIntellisense(tag: string) {
     },
   })
   try {
+    logger.info(`key: ${key}`)
     const scriptContent = await Promise.any([
-      ofetch(`https://cdn.jsdelivr.net/npm/${key}`, { responseType: 'text' }),
-      ofetch(`https://unpkg.com/${key}`, { responseType: 'text' }),
+      ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
+      ofetch(`https://unpkg.com/${key}/dist.index.cjs`, { responseType: 'text' }),
     ])
-    const module = await import(`data:text/javascript,${encodeURIComponent(scriptContent)}`)
+    logger.info(`scriptContent: ${scriptContent}`)
+    const module: any = {}
+    const runModule = new Function('module', scriptContent)
+    runModule(module)
+    // const module = await import(`data:text/javascript,${encodeURIComponent(scriptContent)}`)
+    const moduleExports = module.exports
     const result: any = {}
     const isZh = getLocale()!.includes('zh')
-    for (const key in module) {
-      const v = module[key]
+    for (const key in moduleExports) {
+      const v = moduleExports[key]
       if (key.endsWith('Components')) {
         result[key] = () => componentsReducer(v(isZh))
       }
@@ -41,13 +48,14 @@ export async function fetchFromCommonIntellisense(tag: string) {
         result[key] = () => propsReducer(v())
       }
     }
-
+    logger.info(JSON.stringify(moduleExports))
     cacheFetch.set(key, result)
     resolver()
     return result
   }
   catch (error) {
     rejecter(String(error))
+    logger.error(String(error))
   }
 }
 

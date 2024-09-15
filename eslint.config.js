@@ -22,6 +22,7 @@ module.exports = antfu(
       'no-template-curly-in-string': 'off',
       'no-undef': 'off',
       'regexp/no-dupe-disjunctions': 'off',
+      'no-new-func': 'off',
     },
   },
 )
