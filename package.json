@@ -112,6 +112,11 @@
             "**/node_modules/**"
           ],
           "description": "%excludeDescription%"
+        },
+        "common-intellisense.remoteUris": {
+          "type": "array",
+          "default": [],
+          "description": "%remoteUris%"
         }
       }
     },

@@ -1,7 +1,6 @@
-// import { getConfiguration } from "@vscode-use/utils";
+import { createFakeProgress, getConfiguration, getLocale } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
-import { createFakeProgress, getLocale } from '@vscode-use/utils'
 import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from '.'
 
@@ -59,10 +58,44 @@ export async function fetchFromCommonIntellisense(tag: string) {
   }
 }
 
-// todo: readConfigRemoteUris
-// export function fetchFromRemoteUrls() {
-//   // 读区 urls
-//   const uris = getConfiguration('common-intellisense.remoteUris')
-//   if (!uris.length)
-//     return
-// }
+export async function fetchFromRemoteUrls() {
+  // 读区 urls
+  let uris = getConfiguration('common-intellisense.remoteUris') as string[]
+  if (!uris.length)
+    return
+
+  const result = {}
+  uris = uris.filter((uri) => {
+    if (cacheFetch.has(uri)) {
+      Object.assign(result, cacheFetch.get(uri))
+      return false
+    }
+    return true
+  })
+  if (!uris.length)
+    return result
+
+  const scriptContents = await Promise.all(uris.map(async uri => [uri, await ofetch(uri, { responseType: 'text' })]))
+  scriptContents.forEach(([uri, scriptContent]) => {
+    const module: any = {}
+    const runModule = new Function('module', scriptContent)
+    runModule(module)
+    const moduleExports = module.exports
+    const temp: any = {}
+    const isZh = getLocale()!.includes('zh')
+    for (const key in moduleExports) {
+      const v = moduleExports[key]
+      if (key.endsWith('Components')) {
+        temp[key] = () => componentsReducer(v(isZh))
+      }
+      else {
+        temp[key] = () => propsReducer(v())
+      }
+    }
+    logger.info(JSON.stringify(moduleExports))
+    Object.assign(result, temp)
+    cacheFetch.set(uri, temp)
+  })
+
+  return result
+}

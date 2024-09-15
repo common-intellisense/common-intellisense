@@ -10,7 +10,7 @@ import { alias, detectSlots, findPkgUI, findRefs, getReactRefsMap, parser, parse
 import { UINames as UINamesMap, nameMap } from './constants'
 import type { Directives } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
-import { fetchFromCommonIntellisense } from './fetch'
+import { fetchFromCommonIntellisense, fetchFromRemoteUrls } from './fetch'
 // import {createWebviewPanel} from './webview/webview'
 
 const UI: Record<string, () => any> = {}
@@ -830,6 +830,8 @@ export function findUI() {
     else {
       preUis = uis
     }
+    // 获取远程的 UI 库
+    Object.assign(uis, await fetchFromRemoteUrls())
     const uisName: string[] = []
     const originUisName: string[] = []
     uis.forEach(([uiName, version]: any) => {
