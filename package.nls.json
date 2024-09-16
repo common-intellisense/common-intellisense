@@ -7,5 +7,6 @@
   "aliasDescription": "Configure aliases",
   "excludeDescription": "Files or folders to exclude",
   "pickUITitle": "Select UI Framework",
-  "remoteUris": "Remote URIs"
+  "remoteUris": "Remote URIs",
+  "localUris": "Local URIs"
 }

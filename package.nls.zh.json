@@ -7,5 +7,6 @@
   "aliasDescription": "配置别名 (Configure aliases)",
   "excludeDescription": "排除文件或文件夹 (Exclude files or folders)",
   "pickUITitle": "选择UI框架 (Select UI Framework)",
-  "remoteUris": "远程URI (Remote URIs)"
+  "remoteUris": "远程URI (Remote URIs)",
+  "localUris": "本地URI (Local URIs)"
 }

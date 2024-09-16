@@ -1,4 +1,5 @@
-import { createFakeProgress, getConfiguration, getLocale } from '@vscode-use/utils'
+import { existsSync } from 'node:fs'
+import { createFakeProgress, getConfiguration, getLocale, getRootPath } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
 import { componentsReducer, propsReducer } from './ui/utils'
@@ -55,6 +56,8 @@ export async function fetchFromCommonIntellisense(tag: string) {
   catch (error) {
     rejecter(String(error))
     logger.error(String(error))
+    // 尝试从本地获取
+    return fetchFromLocalUris()
   }
 }
 
@@ -97,5 +100,56 @@ export async function fetchFromRemoteUrls() {
     cacheFetch.set(uri, temp)
   })
 
+  return result
+}
+
+export async function fetchFromLocalUris() {
+  let uris = getConfiguration('common-intellisense.localUris') as string[]
+  if (!uris.length)
+    return
+  logger.info(`localUris: ${uris}`)
+  // 查找本地文件 是否存在
+  const result = {}
+  uris = uris.map((uri) => {
+    // 如果是相对路径，转换为绝对路径，否则直接用
+    if (uri.startsWith('./'))
+      uri = path.resolve(getRootPath()!, uri)
+    if (cacheFetch.has(uri)) {
+      Object.assign(result, cacheFetch.get(uri))
+      return false
+    }
+
+    if (existsSync(uri)) {
+      return uri
+    }
+    else {
+      logger.error(`加载本地文件不存在: [${uri}]`)
+      return false
+    }
+  }).filter(Boolean) as string[]
+  if (!uris.length)
+    return result
+
+  await Promise.all(uris.map(async (uri) => {
+    const module: any = {}
+    const scriptContent = await fsp.readFile(uri, 'utf-8')
+    const runModule = new Function('module', scriptContent)
+    runModule(module)
+    const moduleExports = module.exports
+    const temp: any = {}
+    const isZh = getLocale()!.includes('zh')
+    for (const key in moduleExports) {
+      const v = moduleExports[key]
+      if (key.endsWith('Components')) {
+        temp[key] = () => componentsReducer(v(isZh))
+      }
+      else {
+        temp[key] = () => propsReducer(v())
+      }
+    }
+    logger.info(JSON.stringify(moduleExports))
+    Object.assign(result, temp)
+    cacheFetch.set(uri, temp)
+  }))
   return result
 }
