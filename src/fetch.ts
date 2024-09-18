@@ -7,6 +7,10 @@ import { logger } from '.'
 
 const prefix = '@common-intellisense/'
 const cacheFetch = new Map()
+let isCommonIntellisenseInProgress = false
+let isRemoteUrisInProgress = false
+let isLocalUrisInProgress = false
+
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
   const version = latestVersion(name)
@@ -15,8 +19,12 @@ export async function fetchFromCommonIntellisense(tag: string) {
   if (cacheFetch.has(key))
     return cacheFetch.get(key)
 
+  if (isCommonIntellisenseInProgress)
+    return
+
   let resolver!: () => void
   let rejecter!: (msg?: string) => void
+  isCommonIntellisenseInProgress = true
   createFakeProgress({
     title: `正在拉取远程的 ${tag}`,
     message: v => `已完成 ${v}%`,
@@ -51,13 +59,16 @@ export async function fetchFromCommonIntellisense(tag: string) {
     logger.info(JSON.stringify(moduleExports))
     cacheFetch.set(key, result)
     resolver()
+    isCommonIntellisenseInProgress = false
     return result
   }
   catch (error) {
     rejecter(String(error))
     logger.error(String(error))
+    isCommonIntellisenseInProgress = false
     // 尝试从本地获取
     return fetchFromLocalUris()
+    // todo：增加重试机制
   }
 }
 
@@ -78,27 +89,50 @@ export async function fetchFromRemoteUrls() {
   if (!uris.length)
     return result
 
-  const scriptContents = await Promise.all(uris.map(async uri => [uri, await ofetch(uri, { responseType: 'text' })]))
-  scriptContents.forEach(([uri, scriptContent]) => {
-    const module: any = {}
-    const runModule = new Function('module', scriptContent)
-    runModule(module)
-    const moduleExports = module.exports
-    const temp: any = {}
-    const isZh = getLocale()!.includes('zh')
-    for (const key in moduleExports) {
-      const v = moduleExports[key]
-      if (key.endsWith('Components')) {
-        temp[key] = () => componentsReducer(v(isZh))
-      }
-      else {
-        temp[key] = () => propsReducer(v())
-      }
-    }
-    logger.info(JSON.stringify(moduleExports))
-    Object.assign(result, temp)
-    cacheFetch.set(uri, temp)
+  if (isRemoteUrisInProgress)
+    return
+
+  let resolver!: () => void
+  let rejecter!: (msg?: string) => void
+  isRemoteUrisInProgress = true
+  createFakeProgress({
+    title: `正在拉取远程文件`,
+    message: v => `已完成 ${v}%`,
+    callback(resolve, reject) {
+      resolver = resolve
+      rejecter = reject
+    },
   })
+
+  try {
+    const scriptContents = await Promise.all(uris.map(async uri => [uri, await ofetch(uri, { responseType: 'text' })]))
+    scriptContents.forEach(([uri, scriptContent]) => {
+      const module: any = {}
+      const runModule = new Function('module', scriptContent)
+      runModule(module)
+      const moduleExports = module.exports
+      const temp: any = {}
+      const isZh = getLocale()!.includes('zh')
+      for (const key in moduleExports) {
+        const v = moduleExports[key]
+        if (key.endsWith('Components')) {
+          temp[key] = () => componentsReducer(v(isZh))
+        }
+        else {
+          temp[key] = () => propsReducer(v())
+        }
+      }
+      logger.info(JSON.stringify(moduleExports))
+      Object.assign(result, temp)
+      cacheFetch.set(uri, temp)
+    })
+    resolver()
+  }
+  catch (error) {
+    rejecter(String(error))
+    logger.error(String(error))
+  }
+  isRemoteUrisInProgress = false
 
   return result
 }
@@ -127,29 +161,52 @@ export async function fetchFromLocalUris() {
       return false
     }
   }).filter(Boolean) as string[]
+
   if (!uris.length)
     return result
 
-  await Promise.all(uris.map(async (uri) => {
-    const module: any = {}
-    const scriptContent = await fsp.readFile(uri, 'utf-8')
-    const runModule = new Function('module', scriptContent)
-    runModule(module)
-    const moduleExports = module.exports
-    const temp: any = {}
-    const isZh = getLocale()!.includes('zh')
-    for (const key in moduleExports) {
-      const v = moduleExports[key]
-      if (key.endsWith('Components')) {
-        temp[key] = () => componentsReducer(v(isZh))
+  if (isLocalUrisInProgress)
+    return
+  let resolver!: () => void
+  let rejecter!: (msg?: string) => void
+  isLocalUrisInProgress = true
+  createFakeProgress({
+    title: `正在加载本地文件`,
+    message: v => `已完成 ${v}%`,
+    callback(resolve, reject) {
+      resolver = resolve
+      rejecter = reject
+    },
+  })
+  try {
+    await Promise.all(uris.map(async (uri) => {
+      const module: any = {}
+      const scriptContent = await fsp.readFile(uri, 'utf-8')
+      const runModule = new Function('module', scriptContent)
+      runModule(module)
+      const moduleExports = module.exports
+      const temp: any = {}
+      const isZh = getLocale()!.includes('zh')
+      for (const key in moduleExports) {
+        const v = moduleExports[key]
+        if (key.endsWith('Components')) {
+          temp[key] = () => componentsReducer(v(isZh))
+        }
+        else {
+          temp[key] = () => propsReducer(v())
+        }
       }
-      else {
-        temp[key] = () => propsReducer(v())
-      }
-    }
-    logger.info(JSON.stringify(moduleExports))
-    Object.assign(result, temp)
-    cacheFetch.set(uri, temp)
-  }))
+      logger.info(JSON.stringify(moduleExports))
+      Object.assign(result, temp)
+      cacheFetch.set(uri, temp)
+    }))
+    resolver()
+  }
+  catch (error) {
+    rejecter(String(error))
+    logger.error(String(error))
+  }
+
+  isLocalUrisInProgress = false
   return result
 }
