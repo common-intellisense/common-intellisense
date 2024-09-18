@@ -873,13 +873,11 @@ export function findUI() {
           Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
           componentsNames = UI[key]?.()
           cacheMap.set(key, componentsNames)
-          logger.info(`fetch ${name} successfully 🎉`)
         }
         catch (error) {
           logger.error(`fetch fetchFromCommonIntellisense [${name}] error： ${String(error)}`)
         }
       }
-      logger.info(JSON.stringify(UI))
       if (componentsNames) {
         for (const componentsName of componentsNames) {
           const { prefix, data, directives, lib } = componentsName

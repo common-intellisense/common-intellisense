@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { createFakeProgress, getConfiguration, getLocale, getRootPath } from '@vscode-use/utils'
+import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
 import { componentsReducer, propsReducer } from './ui/utils'
@@ -10,6 +10,9 @@ const cacheFetch = new Map()
 let isCommonIntellisenseInProgress = false
 let isRemoteUrisInProgress = false
 let isLocalUrisInProgress = false
+const retry = 1
+const timeout = 10000
+const isZh = getLocale()?.includes('zh')
 
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
@@ -26,8 +29,8 @@ export async function fetchFromCommonIntellisense(tag: string) {
   let rejecter!: (msg?: string) => void
   isCommonIntellisenseInProgress = true
   createFakeProgress({
-    title: `正在拉取远程的 ${tag}`,
-    message: v => `已完成 ${v}%`,
+    title: isZh ? `正在拉取远程的 ${tag}` : `Pulling remote ${tag}`,
+    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
     callback: (resolve, reject) => {
       resolver = resolve
       rejecter = reject
@@ -36,8 +39,8 @@ export async function fetchFromCommonIntellisense(tag: string) {
   try {
     logger.info(`key: ${key}`)
     const scriptContent = await Promise.any([
-      ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
-      ofetch(`https://unpkg.com/${key}/dist.index.cjs`, { responseType: 'text' }),
+      ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+      ofetch(`https://unpkg.com/${key}/dist.index.cjs`, { responseType: 'text', retry, timeout }),
     ])
     logger.info(`scriptContent: ${scriptContent}`)
     const module: any = {}
@@ -67,6 +70,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
     logger.error(String(error))
     isCommonIntellisenseInProgress = false
     // 尝试从本地获取
+    message.error(isZh ? `从远程拉取 UI 包失败 ☹️，请检查代理` : `Failed to pull UI package from remote ☹️, please check the proxy`)
     return fetchFromLocalUris()
     // todo：增加重试机制
   }
@@ -96,8 +100,8 @@ export async function fetchFromRemoteUrls() {
   let rejecter!: (msg?: string) => void
   isRemoteUrisInProgress = true
   createFakeProgress({
-    title: `正在拉取远程文件`,
-    message: v => `已完成 ${v}%`,
+    title: isZh ? `正在拉取远程文件` : 'Pulling remote files',
+    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
     callback(resolve, reject) {
       resolver = resolve
       rejecter = reject
@@ -105,7 +109,7 @@ export async function fetchFromRemoteUrls() {
   })
 
   try {
-    const scriptContents = await Promise.all(uris.map(async uri => [uri, await ofetch(uri, { responseType: 'text' })]))
+    const scriptContents = await Promise.all(uris.map(async uri => [uri, await ofetch(uri, { responseType: 'text', retry, timeout })]))
     scriptContents.forEach(([uri, scriptContent]) => {
       const module: any = {}
       const runModule = new Function('module', scriptContent)
@@ -157,7 +161,7 @@ export async function fetchFromLocalUris() {
       return uri
     }
     else {
-      logger.error(`加载本地文件不存在: [${uri}]`)
+      logger.error(isZh ? `加载本地文件不存在: [${uri}]` : `Local file does not exist: [${uri}]`)
       return false
     }
   }).filter(Boolean) as string[]
@@ -171,8 +175,8 @@ export async function fetchFromLocalUris() {
   let rejecter!: (msg?: string) => void
   isLocalUrisInProgress = true
   createFakeProgress({
-    title: `正在加载本地文件`,
-    message: v => `已完成 ${v}%`,
+    title: isZh ? `正在加载本地文件` : 'Loading local files',
+    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
     callback(resolve, reject) {
       resolver = resolve
       rejecter = reject
@@ -196,7 +200,6 @@ export async function fetchFromLocalUris() {
           temp[key] = () => propsReducer(v())
         }
       }
-      logger.info(JSON.stringify(moduleExports))
       Object.assign(result, temp)
       cacheFetch.set(uri, temp)
     }))
