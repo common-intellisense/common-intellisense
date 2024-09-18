@@ -11,7 +11,7 @@ let isCommonIntellisenseInProgress = false
 let isRemoteUrisInProgress = false
 let isLocalUrisInProgress = false
 const retry = 1
-const timeout = 10000
+const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
 const isZh = getLocale()?.includes('zh')
 
 export async function fetchFromCommonIntellisense(tag: string) {
