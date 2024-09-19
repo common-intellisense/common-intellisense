@@ -129,6 +129,10 @@
       {
         "command": "common-intellisense.pickUI",
         "title": "%pickUITitle%"
+      },
+      {
+        "command": "common-intellisense.cleanCache",
+        "title": "%cleanLocalCache%"
       }
     ]
   },

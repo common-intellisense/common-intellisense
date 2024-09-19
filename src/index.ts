@@ -10,7 +10,7 @@ import { alias, detectSlots, findPkgUI, findRefs, getReactRefsMap, parser, parse
 import { UINames as UINamesMap, nameMap } from './constants'
 import type { Directives } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
-import { fetchFromCommonIntellisense, fetchFromRemoteUrls } from './fetch'
+import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteUrls, localCacheUri } from './fetch'
 // import {createWebviewPanel} from './webview/webview'
 
 const UI: Record<string, () => any> = {}
@@ -46,6 +46,11 @@ export async function activate(context: vscode.ExtensionContext) {
     scripts: ['main.js'],
   })
 
+  context.subscriptions.push(registerCommand('common-intellisense.cleanCache', () => {
+    fsp.rmdir(localCacheUri)
+    cacheFetch.clear()
+    findUI()
+  }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
   context.subscriptions.push(addEventListener('activeText-change', (editor?: vscode.TextEditor) => {
@@ -832,6 +837,7 @@ export function findUI() {
     }
     // 获取远程的 UI 库
     Object.assign(uis, await fetchFromRemoteUrls())
+
     const uisName: string[] = []
     const originUisName: string[] = []
     uis.forEach(([uiName, version]: any) => {
@@ -900,6 +906,13 @@ export function findUI() {
         UiCompletions = {}
       Object.assign(UiCompletions, completion)
     }))
+
+    try {
+      fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
+    }
+    catch (error) {
+      logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
+    }
     if (isShowSlots) {
       const activeText = getActiveText()
       if (activeText)

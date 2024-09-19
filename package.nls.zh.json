@@ -8,5 +8,6 @@
   "excludeDescription": "排除文件或文件夹 (Exclude files or folders)",
   "pickUITitle": "选择UI框架 (Select UI Framework)",
   "remoteUris": "远程URI (Remote URIs)",
-  "localUris": "本地URI (Local URIs)"
+  "localUris": "本地URI (Local URIs)",
+  "cleanLocalCache": "清理本地UI缓存 (Clean Local UI Cache)"
 }

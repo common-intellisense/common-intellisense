@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
@@ -6,47 +8,66 @@ import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from '.'
 
 const prefix = '@common-intellisense/'
-const cacheFetch = new Map()
+
+export const cacheFetch = new Map()
+export const localCacheUri = path.resolve(__dirname, 'mapping.json')
 let isCommonIntellisenseInProgress = false
 let isRemoteUrisInProgress = false
 let isLocalUrisInProgress = false
 const retry = 1
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
 const isZh = getLocale()?.includes('zh')
+if (existsSync(localCacheUri)) {
+  fsp.readFile(localCacheUri, 'utf-8').then((res) => {
+    logger.info(isZh ? `正在读取 ${localCacheUri} 中的数据` : `Reading data from ${localCacheUri}`)
+    try {
+      const oldMap = JSON.parse(res) as [string, string][]
+      oldMap.forEach(([key, value]) => {
+        cacheFetch.set(key, value)
+      })
+    }
+    catch (error) {
+      logger.error(String(error))
+    }
+  })
+}
 
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
   const version = latestVersion(name)
   const key = `${name}@${version}`
   // 当版本修改是否要删除相同 name 下的其它版本缓存？
-  if (cacheFetch.has(key))
-    return cacheFetch.get(key)
 
   if (isCommonIntellisenseInProgress)
     return
 
-  let resolver!: () => void
-  let rejecter!: (msg?: string) => void
+  let resolver: () => void = () => { }
+  let rejecter: (msg?: string) => void = () => { }
   isCommonIntellisenseInProgress = true
-  createFakeProgress({
-    title: isZh ? `正在拉取远程的 ${tag}` : `Pulling remote ${tag}`,
-    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
-    callback: (resolve, reject) => {
-      resolver = resolve
-      rejecter = reject
-    },
-  })
+  if (!cacheFetch.has(key)) {
+    createFakeProgress({
+      title: isZh ? `正在拉取远程的 ${tag}` : `Pulling remote ${tag}`,
+      message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
+      callback: (resolve, reject) => {
+        resolver = resolve
+        rejecter = reject
+      },
+    })
+  }
+
   try {
     logger.info(`key: ${key}`)
-    const scriptContent = await Promise.any([
-      ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
-      ofetch(`https://unpkg.com/${key}/dist.index.cjs`, { responseType: 'text', retry, timeout }),
-    ])
-    logger.info(`scriptContent: ${scriptContent}`)
+
+    const scriptContent = cacheFetch.has(key)
+      ? cacheFetch.get(key)
+      : await Promise.any([
+        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+        ofetch(`https://unpkg.com/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+      ])
+    cacheFetch.set(key, scriptContent)
     const module: any = {}
     const runModule = new Function('module', scriptContent)
     runModule(module)
-    // const module = await import(`data:text/javascript,${encodeURIComponent(scriptContent)}`)
     const moduleExports = module.exports
     const result: any = {}
     const isZh = getLocale()!.includes('zh')
@@ -59,8 +80,6 @@ export async function fetchFromCommonIntellisense(tag: string) {
         result[key] = () => propsReducer(v())
       }
     }
-    logger.info(JSON.stringify(moduleExports))
-    cacheFetch.set(key, result)
     resolver()
     isCommonIntellisenseInProgress = false
     return result
@@ -78,20 +97,11 @@ export async function fetchFromCommonIntellisense(tag: string) {
 
 export async function fetchFromRemoteUrls() {
   // 读区 urls
-  let uris = getConfiguration('common-intellisense.remoteUris') as string[]
+  const uris = getConfiguration('common-intellisense.remoteUris') as string[]
   if (!uris.length)
     return
 
   const result = {}
-  uris = uris.filter((uri) => {
-    if (cacheFetch.has(uri)) {
-      Object.assign(result, cacheFetch.get(uri))
-      return false
-    }
-    return true
-  })
-  if (!uris.length)
-    return result
 
   if (isRemoteUrisInProgress)
     return
@@ -109,10 +119,11 @@ export async function fetchFromRemoteUrls() {
   })
 
   try {
-    const scriptContents = await Promise.all(uris.map(async uri => [uri, await ofetch(uri, { responseType: 'text', retry, timeout })]))
+    const scriptContents = await Promise.all(uris.map(async uri => [uri, cacheFetch.has(uri) ? cacheFetch.get(uri) : await ofetch(uri, { responseType: 'text', retry, timeout })]))
     scriptContents.forEach(([uri, scriptContent]) => {
       const module: any = {}
       const runModule = new Function('module', scriptContent)
+      cacheFetch.set(uri, scriptContent)
       runModule(module)
       const moduleExports = module.exports
       const temp: any = {}
@@ -126,9 +137,7 @@ export async function fetchFromRemoteUrls() {
           temp[key] = () => propsReducer(v())
         }
       }
-      logger.info(JSON.stringify(moduleExports))
       Object.assign(result, temp)
-      cacheFetch.set(uri, temp)
     })
     resolver()
   }
@@ -152,12 +161,8 @@ export async function fetchFromLocalUris() {
     // 如果是相对路径，转换为绝对路径，否则直接用
     if (uri.startsWith('./'))
       uri = path.resolve(getRootPath()!, uri)
-    if (cacheFetch.has(uri)) {
-      Object.assign(result, cacheFetch.get(uri))
-      return false
-    }
 
-    if (existsSync(uri)) {
+    if (cacheFetch.has(uri) || existsSync(uri)) {
       return uri
     }
     else {
@@ -184,8 +189,13 @@ export async function fetchFromLocalUris() {
   })
   try {
     await Promise.all(uris.map(async (uri) => {
+      if (cacheFetch.has(uri)) {
+        Object.assign(result, cacheFetch.get(uri))
+        return
+      }
       const module: any = {}
       const scriptContent = await fsp.readFile(uri, 'utf-8')
+      cacheFetch.set(uri, scriptContent)
       const runModule = new Function('module', scriptContent)
       runModule(module)
       const moduleExports = module.exports
@@ -201,7 +211,6 @@ export async function fetchFromLocalUris() {
         }
       }
       Object.assign(result, temp)
-      cacheFetch.set(uri, temp)
     }))
     resolver()
   }
