@@ -34,7 +34,7 @@ if (existsSync(localCacheUri)) {
 
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
-  const version = latestVersion(name)
+  const version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000 })
   const key = `${name}@${version}`
   // 当版本修改是否要删除相同 name 下的其它版本缓存？
 

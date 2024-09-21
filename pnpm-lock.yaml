@@ -18,8 +18,8 @@ importers:
         specifier: ^5.1.0
         version: 5.1.0(rollup@3.29.4)
       '@simon_he/latest-version':
-        specifier: ^0.0.1
-        version: 0.0.1
+        specifier: ^0.1.0
+        version: 0.1.0
       '@types/node':
         specifier: ^18.19.50
         version: 18.19.50
@@ -626,8 +626,8 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/latest-version@0.0.1':
-    resolution: {integrity: sha512-MhyBOBQTcYU1JERpuBq9dDRuSNlpMEo5gqiGSyEA0NjAKv1yaP5CZX6EXKjkxGiWbrEv+g8p3sNqkRRITPSjrQ==}
+  '@simon_he/latest-version@0.1.0':
+    resolution: {integrity: sha512-VoAD9uTYhIRgrj/NhRjr/Ey+cliy2W3DaYiDrwuVXCnow3o2n2uu2XV2HNhZVjmbAKSOxlPL29kTwT1F52Bq2g==}
     hasBin: true
 
   '@sindresorhus/is@4.6.0':
@@ -3907,7 +3907,7 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/latest-version@0.0.1': {}
+  '@simon_he/latest-version@0.1.0': {}
 
   '@sindresorhus/is@4.6.0': {}
 
