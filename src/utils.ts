@@ -20,7 +20,7 @@ const { parse: svelteParser } = require('svelte/compiler')
 // 引入vue-parser只在template中才处理一些逻辑
 let isInTemplate = false
 
-export function parser(code: string, position: vscode.Position & { active: string }) {
+export function parser(code: string, position: vscode.Position) {
   const entry = getCurrentFileUrl()
   if (!entry)
     return

@@ -284,7 +284,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(registerCompletionItemProvider(filter, async (document, position) => {
     const { lineText } = getSelection()!
-    const p: any = position
+    const p = position
     const activeTextEditor = getActiveTextEditor()
     if (!activeTextEditor)
       return
@@ -294,11 +294,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const preText = lineText.slice(0, activeTextEditor.selection.active.character)
     let completionsCallback: any = null
-    p.active = getEffectWord(preText)
+    const activeText = getEffectWord(preText)
     const result = parser(document.getText(), p)
     if (!result)
       return
-    if ((position as any).active === ':' && result.type === 'text')
+    if (activeText === ':' && result.type === 'text')
       return
 
     const lan = getActiveTextEditorLanguageId()
