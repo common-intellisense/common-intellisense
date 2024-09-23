@@ -17,20 +17,25 @@ let isLocalUrisInProgress = false
 const retry = 1
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
 const isZh = getLocale()?.includes('zh')
-if (existsSync(localCacheUri)) {
-  fsp.readFile(localCacheUri, 'utf-8').then((res) => {
-    logger.info(isZh ? `正在读取 ${localCacheUri} 中的数据` : `Reading data from ${localCacheUri}`)
-    try {
-      const oldMap = JSON.parse(res) as [string, string][]
-      oldMap.forEach(([key, value]) => {
-        cacheFetch.set(key, value)
-      })
-    }
-    catch (error) {
-      logger.error(String(error))
-    }
-  })
-}
+export const getLocalCache = new Promise((resolve) => {
+  if (existsSync(localCacheUri)) {
+    fsp.readFile(localCacheUri, 'utf-8').then((res) => {
+      logger.info(isZh ? `正在读取 ${localCacheUri} 中的数据` : `Reading data from ${localCacheUri}`)
+      try {
+        const oldMap = JSON.parse(res) as [string, string][]
+        oldMap.forEach(([key, value]) => {
+          cacheFetch.set(key, value)
+        })
+      }
+      catch (error) {
+        logger.error(String(error))
+      }
+      resolve('done reading')
+      // 列出已有的 key
+      logger.info(isZh ? `缓存读取完毕, 已缓存的 key: ${cacheFetch.keys()}` : `Cache read complete, cached keys: ${cacheFetch.keys()}`)
+    })
+  }
+})
 
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag

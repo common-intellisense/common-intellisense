@@ -10,7 +10,7 @@ import { alias, detectSlots, findPkgUI, findRefs, getReactRefsMap, parser, parse
 import { UINames as UINamesMap, nameMap } from './constants'
 import type { Directives } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
-import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteUrls, localCacheUri } from './fetch'
+import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
 // import {createWebviewPanel} from './webview/webview'
 
 const UI: Record<string, () => any> = {}
@@ -835,6 +835,8 @@ export function findUI() {
     else {
       preUis = uis
     }
+    // 读取本地缓存
+    await getLocalCache
     // 获取远程的 UI 库
     Object.assign(uis, await fetchFromRemoteUrls())
 
