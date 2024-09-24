@@ -404,6 +404,7 @@ export async function activate(context: vscode.ExtensionContext) {
               sortText: 'a',
               type: vscode.CompletionItemKind.Enum,
               snippet,
+              params: [uiName, item.name],
               preselect: true,
               documentation,
             })
