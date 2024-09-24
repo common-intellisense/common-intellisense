@@ -90,7 +90,8 @@
               "uview2",
               "@opentiny/vue3",
               "@tarojs/components3",
-              "@nutui/nutui4"
+              "@nutui/nutui4",
+              "@vant/weapp1"
             ]
           },
           "description": "%uiDescription%"
