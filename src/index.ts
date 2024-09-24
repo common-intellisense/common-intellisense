@@ -806,6 +806,9 @@ export function findUI() {
   completionsCallbacks.clear()
   currentPkgUiNames = null
   cacheMap.clear()
+  Object.entries(UI).forEach(([key]) => {
+    delete UI[key]
+  })
   preUis = null
   const selectedUIs = getConfiguration('common-intellisense.ui') as string[]
 

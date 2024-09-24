@@ -42,7 +42,20 @@ export const getLocalCache = new Promise((resolve) => {
 
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
-  const version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000 })
+  let version = ''
+  try {
+    version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000 })
+  }
+  catch (error: any) {
+    if (error.message.includes('404 Not Found')) {
+      // 说明这个版本还未支持, 可以通过 issue 提出
+      logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
+    }
+    else {
+      logger.error(String(error))
+    }
+    return
+  }
   const key = `${name}@${version}`
   // 当版本修改是否要删除相同 name 下的其它版本缓存？
 
