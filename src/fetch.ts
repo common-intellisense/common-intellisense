@@ -43,8 +43,10 @@ export const getLocalCache = new Promise((resolve) => {
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
   let version = ''
+
+  logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
   try {
-    version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000 })
+    version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000, concurrency: 3 })
   }
   catch (error: any) {
     if (error.message.includes('404 Not Found')) {
@@ -56,9 +58,10 @@ export async function fetchFromCommonIntellisense(tag: string) {
     }
     return
   }
+
+  logger.info(isZh ? `找到 ${name} 的最新版本: ${version}` : `Found the latest version of ${name}: ${version}`)
   const key = `${name}@${version}`
   // 当版本修改是否要删除相同 name 下的其它版本缓存？
-
   if (isCommonIntellisenseInProgress)
     return
 
@@ -78,10 +81,10 @@ export async function fetchFromCommonIntellisense(tag: string) {
 
   try {
     if (cacheFetch.has(key)) {
-      logger.info(`cachedKey: ${key}`)
+      logger.info(isZh ? `已缓存的 ${key}` : `cachedKey: ${key}`)
     }
     else {
-      logger.info(`ready fetchingKey: ${key}`)
+      logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
     }
 
     const scriptContent = cacheFetch.has(key)
@@ -100,7 +103,6 @@ export async function fetchFromCommonIntellisense(tag: string) {
     runModule(module)
     const moduleExports = module.exports
     const result: any = {}
-    const isZh = getLocale()!.includes('zh')
     for (const key in moduleExports) {
       const v = moduleExports[key]
       if (key.endsWith('Components')) {

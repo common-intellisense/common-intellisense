@@ -684,7 +684,7 @@ export async function activate(context: vscode.ExtensionContext) {
               const groupMd = createMarkdownString()
                 ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m: any, i: number) => {
                 let content = m.documentation.value
-                if (i !== 0) {
+                if (content && i !== 0) {
                   content = content.replace(/##[^\]\n]*[\]\n]/, '')
                 }
                 groupMd.appendMarkdown(content)
@@ -719,7 +719,7 @@ export async function activate(context: vscode.ExtensionContext) {
               const groupMd = createMarkdownString()
                 ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m: any, i: number) => {
                 let content = m.documentation.value
-                if (i !== 0) {
+                if (content && i !== 0) {
                   content = content.replace(/##[^\]\n]*[\]\n]/, '')
                 }
                 groupMd.appendMarkdown(content)
@@ -750,16 +750,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
           if (lineText.slice(range.start.character, range.end.character) === 'current') {
             // hover .value.区域 提示所有方法
-            const gorupMd = createMarkdownString()
+            const groupMd = createMarkdownString()
               ;[[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed]].forEach((m: any, i: number) => {
               let content = m.documentation.value
-              if (i !== 0) {
+              if (content && i !== 0) {
                 content = content.replace(/##[^\]\n]*[\]\n]/, '')
               }
-              gorupMd.appendMarkdown(content)
-              gorupMd.appendMarkdown('\n')
+              groupMd.appendMarkdown(content)
+              groupMd.appendMarkdown('\n')
             })
-            return createHover(gorupMd)
+            return createHover(groupMd)
           }
           const targetKey = word.slice(index + '.current.'.length)
           const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find((item: any) => item.label === targetKey)
