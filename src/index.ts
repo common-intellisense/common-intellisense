@@ -1,28 +1,18 @@
 import fsp from 'node:fs/promises'
-import path from 'node:path'
 import * as vscode from 'vscode'
 import { addEventListener, createCompletionItem, createHover, createLog, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import { CreateWebview } from '@vscode-use/createwebview'
-import { parse } from '@vue/compiler-sfc'
 import { createFilter } from '@rollup/pluginutils'
-import { alias, detectSlots, findPkgUI, findRefs, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
+import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
 // import UI from './ui'
 import { UINames as UINamesMap, nameMap } from './constants'
-import type { Directives } from './ui/utils'
+import type { Directives, SubCompletionItem } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
-import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
-// import {createWebviewPanel} from './webview/webview'
+import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions } from './ui-find'
+import { getIsShowSlots, getUiDeps } from './ui-utils'
+import { cacheFetch, localCacheUri } from './fetch'
 
-const UI: Record<string, () => any> = {}
-let UINames: any = []
 export const logger = createLog('common-intellisense')
-export let optionsComponents: any = null
-let UiCompletions: any = null
-const cacheMap: any = new Map()
-let eventCallbacks: any = new Map()
-let completionsCallbacks: any = new Map()
-let currentPkgUiNames: null | string[] = null
-const isShowSlots = getConfiguration('common-intellisense.showSlots')
 const defaultExclude = getConfiguration('common-intellisense.exclude')
 const filterId = createFilter(defaultExclude)
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
@@ -40,7 +30,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
 
   if (!isSkip())
-    findUI()
+    findUI(context, detectSlots)
 
   const provider = new CreateWebview(context, {
     viewColumn: vscode.ViewColumn.Beside,
@@ -50,7 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(registerCommand('common-intellisense.cleanCache', () => {
     fsp.rmdir(localCacheUri)
     cacheFetch.clear()
-    findUI()
+    findUI(context, detectSlots)
   }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
@@ -64,7 +54,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const visibleEditors = vscode.window.visibleTextEditors
     const currentEditor = visibleEditors.find(e => e === editor)
     if (currentEditor)
-      findUI()
+      findUI(context, detectSlots)
   }))
 
   context.subscriptions.push(registerCommand('intellisense.copyDemo', (demo) => {
@@ -73,6 +63,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.pickUI', () => {
+    const currentPkgUiNames = getCurrentPkgUiNames()
     if (currentPkgUiNames && currentPkgUiNames.length) {
       if (currentPkgUiNames.some(i => i.includes('bitsUi'))) {
         currentPkgUiNames.filter(i => i.startsWith('bitsUi')).map(i => i.replace('bitsUi', 'shadcnSvelte')).forEach((i) => {
@@ -80,8 +71,8 @@ export async function activate(context: vscode.ExtensionContext) {
             currentPkgUiNames!.push(i)
         })
       }
-      const currentSelect = getConfiguration('common-intellisense.ui')
-      let options: any[] = []
+      const currentSelect = getConfiguration('common-intellisense.ui') as (string[] | undefined)
+      let options: ({ label: string, picked?: boolean })[] = []
       if (currentSelect) {
         options = currentPkgUiNames.map((label) => {
           if (currentSelect.includes(label)) {
@@ -101,7 +92,7 @@ export async function activate(context: vscode.ExtensionContext) {
         canSelectMany: true,
         placeHolder: isZh ? '请指定你需要提示的 UI 库' : 'Please specify the UI library you need to prompt.',
         title: 'common intellisense',
-      }).then((data: any) => {
+      }).then((data: string[]) => {
         setConfiguration('common-intellisense.ui', data)
       })
     }
@@ -114,7 +105,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(addEventListener('config-change', (e) => {
     if (e.affectsConfiguration('common-intellisense.ui'))
-      findUI()
+      findUI(context, detectSlots)
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.import', (params, loc, _lineOffset) => {
@@ -204,14 +195,17 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   // 监听pkg变化
-  if (isShowSlots) {
+  if (getIsShowSlots()) {
     context.subscriptions.push(registerCommand('common-intellisense.slots', (child, name, offset) => {
+      const UiCompletions = getUiCompletions()
       const activeText = getActiveText()
       if (!activeText)
         return
       if (!child && UiCompletions) {
         const uiDeps = getUiDeps(activeText)
-        detectSlots(UiCompletions, uiDeps)
+        const optionsComponents = getOptionsComponents()
+        const componentsPrefix = optionsComponents.prefix
+        detectSlots(UiCompletions, uiDeps, componentsPrefix)
         return
       }
       if (!child.children)
@@ -273,19 +267,27 @@ export async function activate(context: vscode.ExtensionContext) {
     }))
 
     context.subscriptions.push(addEventListener('text-change', () => {
+      const UiCompletions = getUiCompletions()
+      const optionsComponents = getOptionsComponents()
+      const componentsPrefix = optionsComponents.prefix
       if (isSkip())
         return
       const activeText = getActiveText()
       if (UiCompletions && activeText) {
         const uiDeps = getUiDeps(activeText)
-        detectSlots(UiCompletions, uiDeps)
+        detectSlots(UiCompletions, uiDeps, componentsPrefix)
       }
     }))
   }
 
   context.subscriptions.push(registerCompletionItemProvider(filter, async (document, position) => {
+    const optionsComponents = getOptionsComponents()
+    const componentsPrefix = optionsComponents.prefix
+    const UiCompletions = getUiCompletions()
+    if (!UiCompletions)
+      return
     const { lineText } = getSelection()!
-    const p: any = position
+    const p = position
     const activeTextEditor = getActiveTextEditor()
     if (!activeTextEditor)
       return
@@ -294,12 +296,12 @@ export async function activate(context: vscode.ExtensionContext) {
       return
 
     const preText = lineText.slice(0, activeTextEditor.selection.active.character)
-    let completionsCallback: any = null
-    p.active = getEffectWord(preText)
+    let completionsCallback: SubCompletionItem[] | undefined
+    const activeText = getEffectWord(preText)
     const result = parser(document.getText(), p)
     if (!result)
       return
-    if ((position as any).active === ':' && result.type === 'text')
+    if (activeText === ':' && result.type === 'text')
       return
 
     const lan = getActiveTextEditorLanguageId()
@@ -347,9 +349,9 @@ export async function activate(context: vscode.ExtensionContext) {
         return UiCompletions.icons
 
       const propName = result.propName
-      let target = await findDynamicComponent(name, deps, uiDeps[name])
-      const importUiSource = uiDeps[name]
-      if (importUiSource && target.uiName !== importUiSource) {
+      let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, uiDeps?.[name])
+      const importUiSource = uiDeps?.[name]
+      if (importUiSource && (!target || target.uiName !== importUiSource)) {
         for (const p of optionsComponents.prefix.filter(Boolean)) {
           const realName = p[0].toUpperCase() + p.slice(1) + name
           const newTarget = UiCompletions[realName]
@@ -441,12 +443,12 @@ export async function activate(context: vscode.ExtensionContext) {
         }).filter(Boolean)
         : []
       if (propName === 'on') {
-        return eventCallbacks.get(key).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+        return (eventCallbacks.get(key) || []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
       }
       else if (propName) {
         const r: any[] = []
         if (isValue) {
-          completionsCallback.filter((item: any) => hasProps.find((prop: any) => item?.params?.[1] === prop))
+          (completionsCallback ?? []).filter((item: any) => hasProps.find((prop: any) => item?.params?.[1] === prop))
             .filter((item: any) => {
               const reg = propName === 'bind'
                 ? new RegExp('^:')
@@ -466,7 +468,7 @@ export async function activate(context: vscode.ExtensionContext) {
             })
         }
         else {
-          r.push(...completionsCallback.filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+          r.push(...(completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
             .map((item: any) => createCompletionItem(({
               content: item.content,
               snippet: item.snippet,
@@ -481,14 +483,14 @@ export async function activate(context: vscode.ExtensionContext) {
           ? []
           : isValue
             ? []
-            : eventCallbacks.get(key).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+            : (eventCallbacks.get(key) || []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
         if (propName === 'o')
           return [...events, ...r]
 
         return [...r, ...events]
       }
       else if (hasProps.length) {
-        return completionsCallback.filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+        return (completionsCallback ?? []).filter(item => !hasProps.find((prop: any) => item?.params?.[1] === prop))
       }
       else {
         return completionsCallback
@@ -500,30 +502,32 @@ export async function activate(context: vscode.ExtensionContext) {
     const prefix = lineText.trim().split(' ').slice(-1)[0]
     if (prefix.toLowerCase() === prefix ? optionsComponents.prefix.some((reg: string) => prefix.startsWith(reg) || reg.startsWith(prefix)) : true) {
       const parent = result.parent
-      const data = optionsComponents.data.map((c: any) => c()).flat()
+      const data = optionsComponents.data.map(c => c()).flat()
       if (parent) {
         const parentTag = parent.tag || parent.name
-        const suggestions = UiCompletions[toCamel(parentTag)[0].toUpperCase() + toCamel(parentTag).slice(1)]?.suggestions
-        if (suggestions && suggestions.length) {
-          data.forEach((child: any) => {
-            const label = child.label.split(' ')[0]
-            child.sortText = suggestions.includes(label) ? '1' : '2'
-            child.loc = result.loc
-          })
-        }
-        else {
-          data.forEach((child: any) => {
-            child.sortText = '2'
-            child.loc = result.loc
-          })
+        if (UiCompletions) {
+          const suggestions = UiCompletions[toCamel(parentTag)[0].toUpperCase() + toCamel(parentTag).slice(1)]?.suggestions
+          if (suggestions && suggestions.length) {
+            data.forEach((child) => {
+              const label = typeof child.label === 'string' ? child.label.split(' ')[0] : child.label.label.split(' ')[0]
+              child.sortText = suggestions.includes(label) ? '1' : '2';
+              (child as any).loc = result.loc
+            })
+          }
+          else {
+            data.forEach((child: any) => {
+              child.sortText = '2'
+              child.loc = result.loc
+            })
+          }
         }
       }
 
       return data
     }
-  }, (item: any) => {
+  }, (item: SubCompletionItem) => {
     if (!item.command) {
-      if (item.params[2]) {
+      if (item?.params?.[2]) {
         item.command = {
           title: 'common-intellisense-import',
           command: 'common-intellisense.import',
@@ -586,6 +590,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(vscode.languages.registerHoverProvider(LANS, {
     async provideHover(document, position) {
+      const optionsComponents = getOptionsComponents()
+      const componentsPrefix = optionsComponents.prefix
+      const UiCompletions = getUiCompletions()
       if (!optionsComponents || !UiCompletions)
         return
 
@@ -633,11 +640,11 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!result)
           return
         if (result.type === 'tag') {
-          const data = optionsComponents.data.map((c: any) => c()).flat()
+          const data = optionsComponents.data.map(c => c()).flat()
           if (!data?.length || !word)
             return createHover('')
           const tag = toCamel(result.tag)[0].toUpperCase() + toCamel(result.tag).slice(1)
-          const target = await findDynamicComponent(tag, {}, uiDeps[tag])
+          const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
           if (!target)
             return
 
@@ -654,7 +661,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
         const tag = toCamel(result.tag)[0].toUpperCase() + toCamel(result.tag).slice(1)
-        const r = UiCompletions[tag] || await findDynamicComponent(tag, {})
+        const r = UiCompletions[tag] || await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix)
         if (!r)
           return
         const completions = result.isEvent ? r.events[0]?.() : r.completions[0]?.()
@@ -682,8 +689,8 @@ export async function activate(context: vscode.ExtensionContext) {
             if (lineText.slice(range.start.character, range.end.character) === 'value') {
               // hover .value.区域 提示所有方法
               const groupMd = createMarkdownString()
-                ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m: any, i: number) => {
-                let content = m.documentation.value
+                ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
+                let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
                 if (i !== 0) {
                   content = content.replace(/##[^\]\n]*[\]\n]/, '')
                 }
@@ -694,7 +701,8 @@ export async function activate(context: vscode.ExtensionContext) {
               return createHover(groupMd)
             }
             const targetKey = word.slice(index + '.value.'.length)
-            const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find((item: any) => item.label === targetKey)
+            // FIXME: label可能是对象,string | vscode.CompletionItemLabel
+            const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find(item => item.label === targetKey)
 
             if (!target)
               return
@@ -751,8 +759,8 @@ export async function activate(context: vscode.ExtensionContext) {
           if (lineText.slice(range.start.character, range.end.character) === 'current') {
             // hover .value.区域 提示所有方法
             const gorupMd = createMarkdownString()
-              ;[[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed]].forEach((m: any, i: number) => {
-              let content = m.documentation.value
+              ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
+              let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
               if (i !== 0) {
                 content = content.replace(/##[^\]\n]*[\]\n]/, '')
               }
@@ -762,7 +770,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return createHover(gorupMd)
           }
           const targetKey = word.slice(index + '.current.'.length)
-          const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find((item: any) => item.label === targetKey)
+          const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find(item => item.label === targetKey)
 
           if (!target)
             return
@@ -770,11 +778,11 @@ export async function activate(context: vscode.ExtensionContext) {
           return target.hover
         }
       }
-      const data = optionsComponents.data.map((c: any) => c()).flat()
+      const data = optionsComponents.data.map(c => c()).flat()
       if (!data?.length || !word)
         return createHover('')
       word = toCamel(word)[0].toUpperCase() + toCamel(word).slice(1)
-      const target = await findDynamicComponent(word, {}, uiDeps[word])
+      const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix, uiDeps?.[word])
       if (!target)
         return
 
@@ -787,260 +795,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-  UINames = null
-  optionsComponents = null
-  UiCompletions = null
-  cacheMap.clear()
-  eventCallbacks = null
-  completionsCallbacks = null
-}
-
-// const filters = ['js', 'ts', 'jsx', 'tsx', 'vue', 'svelte']
-export const urlCache = new Map()
-let preUis: any = null
-export function findUI() {
-  UINames = []
-  optionsComponents = null
-  UiCompletions = null
-  eventCallbacks.clear()
-  completionsCallbacks.clear()
-  currentPkgUiNames = null
-  cacheMap.clear()
-  Object.entries(UI).forEach(([key]) => {
-    delete UI[key]
-  })
-  preUis = null
-  const selectedUIs = getConfiguration('common-intellisense.ui') as string[]
-
-  const cwd = getCurrentFileUrl()
-  if (!cwd || cwd === 'exthhost')
-    return
-
-  if (urlCache.has(cwd)) {
-    const uis = urlCache.get(cwd)
-    if (uis && uis.length)
-      updateCompletions(uis)
-    return
-  }
-
-  findPkgUI(cwd).then(({ uis }: any = {}) => {
-    urlCache.set(cwd, uis)
-    if (!uis || !uis.length)
-      return
-    updateCompletions(uis)
-  })
-
-  async function updateCompletions(uis: any) {
-    if (!preUis) {
-      preUis = uis
-    }
-    else if (UiCompletions && (preUis.join('') === uis.join(''))) {
-      return
-    }
-    else {
-      preUis = uis
-    }
-    // 读取本地缓存
-    await getLocalCache
-    // 获取远程的 UI 库
-    Object.assign(uis, await fetchFromRemoteUrls())
-
-    const uisName: string[] = []
-    const originUisName: string[] = []
-    uis.forEach(([uiName, version]: any) => {
-      let _version = version.match(/[^~]?(\d+)./)![1]
-      if (uiName in alias) {
-        const v = alias[uiName]
-        const m = v.match(/([^1-9^]+)\^?(\d)/)!
-        _version = m[2]
-        originUisName.push(`${uiName}${_version}`)
-        uiName = m[1]
-      }
-      else {
-        originUisName.push(`${uiName}${_version}`)
-      }
-      const name = uiName.replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
-      uisName.push(`${nameMap[name] ?? name}${_version}`)
-    })
-
-    if (selectedUIs && selectedUIs.length && !selectedUIs.includes('auto')) {
-      UINames = [...selectedUIs.filter(item => uisName.includes(item))]
-      if (!UINames.length)
-        setConfiguration('common-intellisense.ui', [])
-    }
-
-    if (!UINames.length)
-      UINames = uisName
-
-    currentPkgUiNames = uisName
-    optionsComponents = { prefix: [], data: [], directivesMap: {} }
-
-    await Promise.all(UINames.map(async (name: string) => {
-      let componentsNames
-      const key = `${name}Components`
-      if (cacheMap.has(key)) {
-        componentsNames = cacheMap.get(key)
-      }
-      else {
-        try {
-          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
-          componentsNames = UI[key]?.()
-          cacheMap.set(key, componentsNames)
-        }
-        catch (error) {
-          logger.error(`fetch fetchFromCommonIntellisense [${name}] error： ${String(error)}`)
-        }
-      }
-      if (componentsNames) {
-        for (const componentsName of componentsNames) {
-          const { prefix, data, directives, lib } = componentsName
-          if (!optionsComponents.prefix.includes(prefix))
-            optionsComponents.prefix.push(prefix)
-          optionsComponents.data.push(data)
-          const libWithVersion = originUisName.find(item => item.startsWith(lib))!
-          optionsComponents.directivesMap[libWithVersion] = directives
-        }
-      }
-      let completion
-      if (cacheMap.has(name)) {
-        completion = cacheMap.get(name)
-      }
-      else {
-        completion = UI[name]?.()
-        cacheMap.set(name, completion)
-      }
-      if (!UiCompletions)
-        UiCompletions = {}
-      Object.assign(UiCompletions, completion)
-    }))
-
-    try {
-      fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
-    }
-    catch (error) {
-      logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
-    }
-    if (isShowSlots) {
-      const activeText = getActiveText()
-      if (activeText)
-        detectSlots(UiCompletions, getUiDeps(activeText))
-    }
-  }
-}
-
-export function isSamePrefix(label: string, key: string) {
-  let labelName = label.split('=')[0]
-  if (labelName.indexOf(' ')) {
-    // 防止匹配到描述中的=
-    labelName = labelName.split(' ')[0]
-  }
-  return labelName === key
-}
-
-const IMPORT_REG = /import\s+(\S+)\s+from\s+['"]([^"']+.vue)['"]/g
-
-export function getImportDeps(text: string) {
-  text = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
-  const deps: Record<string, string> = {}
-  for (const match of text.matchAll(IMPORT_REG)) {
-    if (!match)
-      continue
-    const from = match[2]
-    if (!/^[./@]/.test(from))
-      continue
-    deps[match[1]] = from
-  }
-  return deps
-}
-
-const UIIMPORT_REG = /import\s+\{([^}]+)\}\s+from\s+['"]([^"']+)['"]/g
-
-export function getUiDeps(text: string) {
-  if (!text)
-    return
-  text = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
-  const deps: any = {}
-  for (const match of text.matchAll(UIIMPORT_REG)) {
-    if (!match)
-      continue
-    const from = match[2]
-    if (!UINamesMap.includes(from))
-      continue
-    const _deps = match[1].trim().replace(/\s+/g, ' ').split(' ')
-    _deps.forEach((d) => {
-      deps[d] = from
-    })
-  }
-  return deps
-}
-export function getAbsoluteUrl(url: string) {
-  return path.resolve(getCurrentFileUrl()!, '..', url)
-}
-
-async function getTemplateParentElementName(url: string) {
-  const code = await fsp.readFile(url, 'utf-8')
-  // 如果有defineProps或者props的忽律，交给 v-component-prompter 处理
-  const {
-    descriptor: { template, script, scriptSetup },
-  } = parse(code)
-
-  if (script?.content && /^\s*props:\s*\{/.test(script.content))
-    return
-  if (scriptSetup?.content && /defineProps\(/.test(scriptSetup.content))
-    return
-  if (!template?.ast?.children?.length)
-    return
-
-  let result = ''
-  for (const child of template.ast.children) {
-    const node = child as any
-    if (node.tag) {
-      if (result) // 说明 template 下不是唯一父节点
-        return
-      result = node.tag
-    }
-  }
-  return result
-}
-
-export async function findDynamicComponent(name: string, deps: Record<string, string>, from?: string) {
-  const prefix = optionsComponents.prefix
-  let target = findDynamic(name, prefix, from)
-  if (target)
-    return target
-
-  let dep
-  if (dep = deps[name]) {
-    // 只往下找一层
-    const tag = await getTemplateParentElementName(getAbsoluteUrl(dep))
-    if (!tag)
-      return
-    target = findDynamic(tag, prefix, from)
-  }
-  return target
-}
-
-function findDynamic(tag: string, prefix: string[], from?: string) {
-  let target = UiCompletions[tag]
-  if (target && from && target.lib !== from) {
-    target = null
-  }
-  if (!target) {
-    for (const p of prefix) {
-      if (!p)
-        continue
-      const t = UiCompletions[p[0].toUpperCase() + p.slice(1) + tag]
-      if (from && t && t.lib === from) {
-        target = t
-        break
-      }
-      else if (t) {
-        target = t
-        break
-      }
-    }
-  }
-  return target
+  deactivateUICache()
 }
 
 function getEffectWord(preText: string) {
