@@ -35,6 +35,7 @@ function isSkip() {
 export async function activate(context: vscode.ExtensionContext) {
   // todo: createWebviewPanel
   // createWebviewPanel(context)
+  logger.info('common-intellisense activate!')
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
 

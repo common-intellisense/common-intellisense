@@ -35,6 +35,9 @@ export const getLocalCache = new Promise((resolve) => {
       logger.info(isZh ? `缓存读取完毕, 已缓存的 key: ${cacheFetch.keys()}` : `Cache read complete, cached keys: ${Array.from(cacheFetch.keys()).join(' | ')}`)
     })
   }
+  else {
+    resolve('done reading')
+  }
 })
 
 export async function fetchFromCommonIntellisense(tag: string) {
@@ -61,7 +64,12 @@ export async function fetchFromCommonIntellisense(tag: string) {
   }
 
   try {
-    logger.info(`key: ${key}`)
+    if (cacheFetch.has(key)) {
+      logger.info(`cachedKey: ${key}`)
+    }
+    else {
+      logger.info(`ready fetchingKey: ${key}`)
+    }
 
     const scriptContent = cacheFetch.has(key)
       ? cacheFetch.get(key)
