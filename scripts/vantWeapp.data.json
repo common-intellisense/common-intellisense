@@ -1,0 +1,55 @@
+[
+  {
+    "name": "VanToast",
+    "link": "https://vant.pro/vant-weapp/#/toast",
+    "link_zh": "https://vant.pro/vant-weapp/#/toast",
+    "typeDetail": {},
+    "methods": [
+      {
+        "name": "loading",
+        "description": "options | message",
+        "description_zh": "options | message",
+        "params": ""
+      },
+      {
+        "name": "success",
+        "description": "options | message",
+        "description_zh": "options | message",
+        "params": ""
+      },
+      {
+        "name": "fail",
+        "description": "options | message",
+        "description_zh": "options | message",
+        "params": ""
+      },
+      {
+        "name": "clear",
+        "description": "clearAll",
+        "description_zh": "clearAll",
+        "params": ""
+      },
+      {
+        "name": "setDefaultOptions",
+        "description": "options",
+        "description_zh": "options",
+        "params": ""
+      },
+      {
+        "name": "resetDefaultOptions",
+        "description": "-",
+        "description_zh": "-",
+        "params": ""
+      }
+    ],
+    "slots": [
+      {
+        "name": "default",
+        "description": "自定义内容",
+        "description_zh": "自定义内容"
+      }
+    ],
+    "suggestions": [],
+    "filename": "Toast"
+  }
+]

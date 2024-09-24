@@ -32,7 +32,7 @@ export const getLocalCache = new Promise((resolve) => {
       }
       resolve('done reading')
       // 列出已有的 key
-      logger.info(isZh ? `缓存读取完毕, 已缓存的 key: ${cacheFetch.keys()}` : `Cache read complete, cached keys: ${cacheFetch.keys()}`)
+      logger.info(isZh ? `缓存读取完毕, 已缓存的 key: ${cacheFetch.keys()}` : `Cache read complete, cached keys: ${Array.from(cacheFetch.keys()).join(' | ')}`)
     })
   }
 })

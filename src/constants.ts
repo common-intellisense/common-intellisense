@@ -29,6 +29,8 @@ export const UINames = [
   '@opentiny/vue',
   '@nutui/nutui',
   'view-ui-plus',
+  '@vant/weapp',
+  'shadcn-svelte',
 ]
 
 export const nameMap: any = {
@@ -36,16 +38,16 @@ export const nameMap: any = {
   '@chakraUi/react': 'chakraUiReact',
   '@chakraUi/vue': 'chakraUiVue',
   '@skeletonlabs/skeleton': 'skeleton',
-  '@nextuiOrg/react': 'nextui',
-  '@nuxt/ui': 'nuxtui',
+  '@nextuiOrg/react': 'nextUi',
+  '@nuxt/ui': 'nuxtUi',
   '@arcoDesign/webReact': 'arcoDesign',
   '@arcoDesign/webVue': 'arcoDesignVue',
   'uviewUi': 'uview',
   '@tarojs/components': 'taro',
   '@nuxt/uiPro': 'nuxtUiPro',
-  'bits-ui': 'shadcnSvelte',
   '@mui/material': 'materialUi',
   '@opentiny/vue': 'tinyVue',
   '@nutui/nutui': 'nutUi',
   'view-ui-plus': 'viewUiPlus',
+  '@vant/weapp': 'vantWeapp',
 }
