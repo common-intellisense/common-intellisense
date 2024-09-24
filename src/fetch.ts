@@ -68,6 +68,10 @@ export async function fetchFromCommonIntellisense(tag: string) {
       : await Promise.any([
         ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
         ofetch(`https://unpkg.com/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+        ofetch(`https://registry.npmmirror.com/${key}/dist/index.cjs`, { responseType: 'text' }),
+        ofetch(`https://registry.npmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
+        ofetch(`https://r.cnpmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
+        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
       ])
     cacheFetch.set(key, scriptContent)
     const module: any = {}
