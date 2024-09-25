@@ -1,9 +1,9 @@
 import fsp from 'node:fs/promises'
 import { findUp } from 'find-up'
-import { createLog, getActiveText, getCurrentFileUrl, getLocale, setConfiguration, watchFiles } from '@vscode-use/utils'
+import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFiles } from '@vscode-use/utils'
 import type * as vscode from 'vscode'
 import { UINames as configUINames } from './constants'
-import { formatUIName, getAlias, getIntellisenseConfig, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
+import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
 import type { ComponentsConfig, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
 

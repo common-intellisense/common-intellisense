@@ -3,7 +3,7 @@ import * as vscode from 'vscode'
 import { parse } from '@vue/compiler-sfc'
 import type { SFCTemplateBlock } from '@vue/compiler-sfc'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
-import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider, watchFiles } from '@vscode-use/utils'
+import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 import { traverse } from '@babel/types'
 import type { VineCompilerHooks, VineDiagnostic, VineFileCtx } from '@vue-vine/compiler'
 import {

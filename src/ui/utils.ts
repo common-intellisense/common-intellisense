@@ -36,6 +36,8 @@ export interface PropsConfigItem {
   lib: string
 }
 
+export type FixParams = [Component, string, boolean, string, string, string]
+
 export type PropsConfig = Record<string, PropsConfigItem> & { icons?: Icons }
 
 export function proxyCreateCompletionItem(options: CompletionItemOptions & {
@@ -539,8 +541,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
 
           // FIXME: params要求string| string[]
-          const fixParams: any = [content, lib, String(isReact), prefix, dynamicLib || '', importWay || '']
-          return createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: 'a', params: fixParams, demo })
+          const fixParams: FixParams = [content as Component, lib, isReact, prefix, dynamicLib || '', importWay || '']
+          return createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: 'a', params: fixParams as any, demo })
         }),
       },
       {
@@ -690,7 +692,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
 
       // FIXME: params要求string| string[]
-      const fixParams: any = [content, lib, String(isReact), prefix, dynamicLib || '', importWay || '']
+      const fixParams: any = [content, lib, isReact, prefix, dynamicLib || '', importWay || '']
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: 'a', params: fixParams, demo })
       return completionItem
     }),
