@@ -3,24 +3,22 @@ import * as vscode from 'vscode'
 import { parse } from '@vue/compiler-sfc'
 import type { SFCTemplateBlock } from '@vue/compiler-sfc'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
-import { findUp } from 'find-up'
-import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider, watchFiles } from '@vscode-use/utils'
+import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 import { traverse } from '@babel/types'
 import type { VineCompilerHooks, VineDiagnostic, VineFileCtx } from '@vue-vine/compiler'
 import {
   compileVineTypeScriptFile,
   createCompilerCtx,
 } from '@vue-vine/compiler'
-import { UINames } from './constants'
 import { isVine, isVue, toCamel } from './ui/utils'
-import { findDynamicComponent, findUI, optionsComponents, urlCache } from '.'
+import type { PropsConfig, PropsConfigItem } from './ui/utils'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
 // 引入vue-parser只在template中才处理一些逻辑
 let isInTemplate = false
 
-export function parser(code: string, position: vscode.Position & { active: string }) {
+export function parser(code: string, position: vscode.Position) {
   const entry = getCurrentFileUrl()
   if (!entry)
     return
@@ -520,40 +518,40 @@ export function parserSvelte(code: string, position: vscode.Position) {
   }
 }
 
-let stop: any = null
-export const alias = getConfiguration('common-intellisense.alias') as Record<string, string>
-export async function findPkgUI(cwd?: string) {
-  if (!cwd)
-    return
-  const pkg = await findUp('package.json', { cwd })
-  if (!pkg)
-    return
-  if (stop)
-    stop()
-  stop = watchFiles(pkg, {
-    onChange() {
-      urlCache.clear()
-      findUI()
-    },
-  })
-  const p = JSON.parse(await fsp.readFile(pkg, 'utf-8'))
-  const { dependencies, devDependencies } = p
-  const result = []
-  const aliasUiNames = Object.keys(alias)
-  if (dependencies) {
-    for (const key in dependencies) {
-      if (UINames.includes(key) || aliasUiNames.includes(key))
-        result.push([key, dependencies[key]])
-    }
-  }
-  if (devDependencies) {
-    for (const key in devDependencies) {
-      if (UINames.includes(key) || aliasUiNames.includes(key))
-        result.push([key, devDependencies[key]])
-    }
-  }
-  return { pkg, uis: result }
-}
+// let stop: any = null
+// export const alias = getConfiguration('common-intellisense.alias') as Record<string, string>
+// export async function findPkgUI(cwd?: string) {
+//   if (!cwd)
+//     return
+//   const pkg = await findUp('package.json', { cwd })
+//   if (!pkg)
+//     return
+//   if (stop)
+//     stop()
+//   stop = watchFiles(pkg, {
+//     onChange() {
+//       urlCache.clear()
+//       findUI()
+//     },
+//   })
+//   const p = JSON.parse(await fsp.readFile(pkg, 'utf-8'))
+//   const { dependencies, devDependencies } = p
+//   const result = []
+//   const aliasUiNames = Object.keys(alias)
+//   if (dependencies) {
+//     for (const key in dependencies) {
+//       if (UINames.includes(key) || aliasUiNames.includes(key))
+//         result.push([key, dependencies[key]])
+//     }
+//   }
+//   if (devDependencies) {
+//     for (const key in devDependencies) {
+//       if (UINames.includes(key) || aliasUiNames.includes(key))
+//         result.push([key, devDependencies[key]])
+//     }
+//   }
+//   return { pkg, uis: result }
+// }
 
 export function transformTagName(name: string) {
   return name[0].toUpperCase() + name.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
@@ -638,8 +636,8 @@ const modules: any = {
   children: [],
   offset: 0,
 }
-export async function detectSlots(UiCompletions: any, uiDeps: any) {
-  const children = (await getTemplateAst(UiCompletions, uiDeps)).filter(item => item.children.length)
+export async function detectSlots(UiCompletions: any, uiDeps: any, prefix: string[]) {
+  const children = (await getTemplateAst(UiCompletions, uiDeps, prefix)).filter(item => item.children.length)
 
   if (!children.length) {
     modules.children = []
@@ -723,7 +721,7 @@ export function registerCodeLensProviderFn() {
   })
 }
 
-async function getTemplateAst(UiCompletions: any, uiDeps: any): Promise<[{ children: any, offset: number }] | []> {
+async function getTemplateAst(UiCompletions: any, uiDeps: any, prefix: string[]): Promise<[{ children: any, offset: number }] | []> {
   const code = getActiveText()!
 
   if (isVue()) {
@@ -735,14 +733,14 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any): Promise<[{ child
       if (_script?.lang === 'tsx') {
         const children = findAllJsxElements(_script.content)
         return [{
-          children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps),
+          children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
           offset: _script.loc.start.offset,
         }]
       }
       return []
     }
     return [{
-      children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps),
+      children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix),
       offset: 0,
     }]
   }
@@ -753,7 +751,7 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any): Promise<[{ child
 
     return await Promise.all(vineFileCtx.vineCompFns.map(async (item) => {
       const r = {
-        children: await findUiTag(item.templateAst?.children, UiCompletions, [], new Set(), uiDeps),
+        children: await findUiTag(item.templateAst?.children, UiCompletions, [], new Set(), uiDeps, prefix),
         offset: item.templateStringNode?.quasi.quasis[0].start || 0,
       }
       return r
@@ -762,7 +760,7 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any): Promise<[{ child
   else if (['javascriptreact', 'typescriptreact'].includes(getActiveTextEditorLanguageId()!)) {
     const children = findAllJsxElements(code)
     return [{
-      children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps),
+      children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
       offset: 0,
     }]
   }
@@ -770,7 +768,7 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any): Promise<[{ child
 }
 const originTag = ['div', 'span', 'ul', 'li', 'ol', 'p', 'main', 'header', 'footer', 'template', 'img', 'aside', 'body', 'a', 'video', 'table', 'th', 'tr', 'td', 'form', 'input', 'label', 'button', 'article', 'section']
 
-async function findUiTag(children: any, UiCompletions: any, result: any[] = [], cacheMap = new Set(), uiDeps: any) {
+async function findUiTag(children: any, UiCompletions: any, result: any[] = [], cacheMap = new Set(), uiDeps: any, prefix: string[]) {
   for (const child of children) {
     let tag: string = child.tag
     if (child.type === 'JSXElement')
@@ -781,7 +779,7 @@ async function findUiTag(children: any, UiCompletions: any, result: any[] = [], 
     const nextChildren = child.children
 
     if (nextChildren?.length)
-      await findUiTag(nextChildren, UiCompletions, result, cacheMap, uiDeps)
+      await findUiTag(nextChildren, UiCompletions, result, cacheMap, uiDeps, prefix)
     const range = child.range ?? child.loc
 
     if (cacheMap.has(range))
@@ -789,12 +787,12 @@ async function findUiTag(children: any, UiCompletions: any, result: any[] = [], 
     if (originTag.includes(tag))
       continue
     const tagName = toCamel(`-${tag}`)
-    let target = UiCompletions[tagName] || await findDynamicComponent(tagName, {})
+    let target = UiCompletions[tagName] || await findDynamicComponent(tagName, {}, UiCompletions, prefix)
     const importUiSource = uiDeps[tagName]
     if (!target)
       continue
     if (importUiSource && target.uiName !== importUiSource) {
-      for (const p of optionsComponents.prefix.filter(Boolean)) {
+      for (const p of prefix.filter(Boolean)) {
         const realName = p[0].toUpperCase() + p.slice(1) + tagName
         const newTarget = UiCompletions[realName]
         if (!newTarget)
@@ -839,16 +837,6 @@ function findAllJsxElements(code: string) {
     }
   })
   return results
-}
-
-/**
- * escapeRegExp
- * @description 对字符串中的特殊字符进行转义以在正则表达式中使用它
- * @param str string
- * @returns string
- */
-export function escapeRegExp(str: string) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export function parserVine(code: string, position: vscode.Position) {
@@ -896,4 +884,99 @@ export function createVineFileCtx(sourceFileName: string, source: string) {
     vineCompileErrs,
     vineCompileWarns,
   }
+}
+
+export function isSamePrefix(label: string, key: string) {
+  let labelName = label.split('=')[0]
+  if (labelName.indexOf(' ')) {
+    // 防止匹配到描述中的=
+    labelName = labelName.split(' ')[0]
+  }
+  return labelName === key
+}
+
+const IMPORT_REG = /import\s+(\S+)\s+from\s+['"]([^"']+.vue)['"]/g
+
+export function getImportDeps(text: string) {
+  text = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
+  const deps: Record<string, string> = {}
+  for (const match of text.matchAll(IMPORT_REG)) {
+    if (!match)
+      continue
+    const from = match[2]
+    if (!/^[./@]/.test(from))
+      continue
+    deps[match[1]] = from
+  }
+  return deps
+}
+
+export function getAbsoluteUrl(url: string) {
+  return path.resolve(getCurrentFileUrl()!, '..', url)
+}
+
+export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string) {
+  // const prefix = optionsComponents.prefix
+  let target = findDynamic(name, UiCompletions, prefix, from)
+  if (target)
+    return target
+
+  let dep
+  if (dep = deps[name]) {
+    // 只往下找一层
+    const tag = await getTemplateParentElementName(getAbsoluteUrl(dep))
+    if (!tag)
+      return
+    target = findDynamic(tag, UiCompletions, prefix, from)
+  }
+  return target
+}
+
+function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], from?: string) {
+  let target: PropsConfigItem | null = UiCompletions[tag]
+  if (target && from && target.lib !== from) {
+    target = null
+  }
+  if (!target) {
+    for (const p of prefix) {
+      if (!p)
+        continue
+      const t = UiCompletions[p[0].toUpperCase() + p.slice(1) + tag]
+      if (from && t && t.lib === from) {
+        target = t
+        break
+      }
+      else if (t) {
+        target = t
+        break
+      }
+    }
+  }
+  return target
+}
+
+async function getTemplateParentElementName(url: string) {
+  const code = await fsp.readFile(url, 'utf-8')
+  // 如果有defineProps或者props的忽律，交给v-component-prompter处理
+  const {
+    descriptor: { template, script, scriptSetup },
+  } = parse(code)
+
+  if (script?.content && /^\s*props:\s*\{/.test(script.content))
+    return
+  if (scriptSetup?.content && /defineProps\(/.test(scriptSetup.content))
+    return
+  if (!template?.ast?.children?.length)
+    return
+
+  let result = ''
+  for (const child of template.ast.children) {
+    const node = child as any
+    if (node.tag) {
+      if (result) // 说明template下不是唯一父节点
+        return
+      result = node.tag
+    }
+  }
+  return result
 }

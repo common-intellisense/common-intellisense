@@ -1,4 +1,8 @@
 {
   "commentTranslate.targetLanguage": "en",
-  "editor.inlineSuggest.showToolbar": "always"
+  "editor.inlineSuggest.showToolbar": "always",
+  "editor.codeActionsOnSave": { //  启用保存时自动修复,默认只支持.js文件
+    "source.fixAll.eslint": "explicit"
+  },
+  "editor.tabSize": 2
 }
