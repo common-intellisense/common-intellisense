@@ -111,7 +111,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(registerCommand('common-intellisense.import', (params, loc, _lineOffset) => {
     if (!params)
       return
-    const [data, lib, _, prefix, dynamicLib, importWay] = params
+    const { data, lib, prefix, dynamicLib, importWay } = params
     const name = data.name.split('.')[0]
     const fromName = data.from
     const from = fromName || dynamicLib ? dynamicLib.replace('${name}', name.toLowerCase()) : lib
@@ -490,7 +490,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return [...r, ...events]
       }
       else if (hasProps.length) {
-        return (completionsCallback ?? []).filter(item => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+        return (completionsCallback ?? []).filter(item => !hasProps.find((prop: any) => item.params?.lib === prop))
       }
       else {
         return completionsCallback
@@ -527,7 +527,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   }, (item: SubCompletionItem) => {
     if (!item.command) {
-      if (item?.params?.[2]) {
+      if (item.params?.isReact) {
         item.command = {
           title: 'common-intellisense-import',
           command: 'common-intellisense.import',
