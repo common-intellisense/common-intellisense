@@ -178,20 +178,13 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   if (onChange)
     stop = watchFiles(pkg, { onChange })
   const p = JSON.parse(await fsp.readFile(pkg, 'utf-8'))
-  const { dependencies, devDependencies } = p
+  const { dependencies = {}, devDependencies = {}, peerDependencies = {} } = p
   const result: Uis = []
   const aliasUiNames = Object.keys(alias)
-  if (dependencies) {
-    for (const key in dependencies) {
-      if (configUINames.includes(key) || aliasUiNames.includes(key))
-        result.push([key, dependencies[key]])
-    }
-  }
-  if (devDependencies) {
-    for (const key in devDependencies) {
-      if (configUINames.includes(key) || aliasUiNames.includes(key))
-        result.push([key, devDependencies[key]])
-    }
+  const deps = { ...dependencies, ...peerDependencies, ...devDependencies }
+  for (const key in deps) {
+    if (configUINames.includes(key) || aliasUiNames.includes(key))
+      result.push([key, deps[key]])
   }
   return { pkg, uis: result }
 }
