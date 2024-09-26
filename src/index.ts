@@ -1,6 +1,6 @@
 import fsp from 'node:fs/promises'
 import * as vscode from 'vscode'
-import { addEventListener, createCompletionItem, createHover, createLog, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import { CreateWebview } from '@vscode-use/createwebview'
 import { createFilter } from '@rollup/pluginutils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
@@ -8,11 +8,10 @@ import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRef
 import { UINames as UINamesMap } from './constants'
 import type { Directives, SubCompletionItem } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
-import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions } from './ui-find'
+import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getIsShowSlots, getUiDeps } from './ui-utils'
 import { cacheFetch, localCacheUri } from './fetch'
 
-export const logger = createLog('common-intellisense')
 const defaultExclude = getConfiguration('common-intellisense.exclude')
 const filterId = createFilter(defaultExclude)
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
