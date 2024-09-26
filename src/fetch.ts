@@ -5,7 +5,7 @@ import { createFakeProgress, getConfiguration, getLocale, getRootPath, message }
 import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
 import { componentsReducer, propsReducer } from './ui/utils'
-import { logger } from '.'
+import { logger } from './ui-find'
 
 const prefix = '@common-intellisense/'
 
