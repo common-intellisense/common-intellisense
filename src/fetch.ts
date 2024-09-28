@@ -183,6 +183,72 @@ export async function fetchFromRemoteUrls() {
   return result
 }
 
+export async function fetchFromRemoteNpmUrls() {
+  // 读区 urls
+  const uris = getConfiguration('common-intellisense.remoteNpmUris') as string[]
+  if (!uris.length)
+    return
+
+  const result = {}
+
+  if (isRemoteUrisInProgress)
+    return
+
+  let resolver!: () => void
+  let rejecter!: (msg?: string) => void
+  isRemoteUrisInProgress = true
+  createFakeProgress({
+    title: isZh ? `正在拉取远程 NPM 文件` : 'Pulling remote NPM files',
+    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
+    callback(resolve, reject) {
+      resolver = resolve
+      rejecter = reject
+    },
+  })
+
+  try {
+    const scriptContents = await Promise.all(uris.map(async (key) => {
+      if (cacheFetch.has(key))
+        return [key, cacheFetch.get(key)]
+      return [key, await Promise.any([
+        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+        ofetch(`https://unpkg.com/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+        ofetch(`https://registry.npmmirror.com/${key}/dist/index.cjs`, { responseType: 'text' }),
+        ofetch(`https://registry.npmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
+        ofetch(`https://r.cnpmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
+        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
+      ])]
+    }))
+    scriptContents.forEach(([uri, scriptContent]) => {
+      const module: any = {}
+      const runModule = new Function('module', scriptContent)
+      cacheFetch.set(uri, scriptContent)
+      runModule(module)
+      const moduleExports = module.exports
+      const temp: any = {}
+      const isZh = getLocale()!.includes('zh')
+      for (const key in moduleExports) {
+        const v = moduleExports[key]
+        if (key.endsWith('Components')) {
+          temp[key] = () => componentsReducer(v(isZh))
+        }
+        else {
+          temp[key] = () => propsReducer(v())
+        }
+      }
+      Object.assign(result, temp)
+    })
+    resolver()
+  }
+  catch (error) {
+    rejecter(String(error))
+    logger.error(String(error))
+  }
+  isRemoteUrisInProgress = false
+
+  return result
+}
+
 export async function fetchFromLocalUris() {
   let uris = getConfiguration('common-intellisense.localUris') as string[]
   if (!uris.length)

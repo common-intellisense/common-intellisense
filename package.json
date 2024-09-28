@@ -119,6 +119,11 @@
           "default": [],
           "description": "%remoteUris%"
         },
+        "common-intellisense.remoteNpmUris": {
+          "type": "array",
+          "default": [],
+          "description": "%remoteNpmUris%"
+        },
         "common-intellisense.localUris": {
           "type": "array",
           "default": [],

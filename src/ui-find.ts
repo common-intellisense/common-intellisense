@@ -5,7 +5,7 @@ import type * as vscode from 'vscode'
 import { UINames as configUINames } from './constants'
 import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
 import type { ComponentsConfig, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
-import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
+import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
 
 export interface OptionsComponents {
   prefix: string[]
@@ -82,7 +82,7 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
     // 读取本地缓存
     await getLocalCache
     // 获取远程的 UI 库
-    Object.assign(uis, await fetchFromRemoteUrls())
+    Object.assign(uis, await fetchFromRemoteUrls(), await fetchFromRemoteNpmUrls())
     const uisName: string[] = []
     const originUisName: string[] = []
     for await (let [uiName, version] of uis) {

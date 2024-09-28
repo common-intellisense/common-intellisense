@@ -96,7 +96,7 @@
 
 ## 如何支持私有库
 
-如果你的项目是私有库，你同样可以参考 [vuetify](https://github.com/common-intellisense/vuetify3), 提供一个导出的 uri，然后在 `package.json` 中配置 `common-intellisense.remoteUris`，配置这个链接，插件会去请求这个链接，获取对应的提示信息。
+如果你的项目是私有库，你同样可以参考 [vuetify](https://github.com/common-intellisense/vuetify3), 提供一个导出的 uri，如果你的 uri 是一个可访问的的打包后的 `dist/index.cjs` 的地址，在 vscode `common-intellisense.remoteUris`，配置这个链接，插件会去请求这个链接，获取对应的提示信息。你也可以直接配置一个 npm 包名(@xx/yy-ui)， 在 `common-intellisense.remoteNpmUris` 中配置，这样插件会去请求 npm 包产出的 `dist/index.cjs`，获取对应的提示信息。
 
 ## :coffee:
 

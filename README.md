@@ -90,13 +90,13 @@ Install the supported ui component library in your project and install the plug-
 }
 ```
 
-## 如何参与贡献
+## How to Contribute
 
 This repository is maintained by individuals, and needs to be updated with some UI libraries frequently. If you are interested in contributing, you can submit a PR to the corresponding version of the corresponding UI library under @common-intellisense or provide some new UI libraries or some new features. Submissions are welcome. [issue](https://github.com/common-intellisense/common-intellisense/issues/3)
 
-## 如何支持私有库
+## How to support private libraries
 
-If your project is a private library, you can also refer to [vuetify](https://github.com/common-intellisense/vuetify3), provide an exported uri, and then configure `common-intellisense.remoteUris` in `package.json`, configure this link, and the plug-in will request this link to obtain the corresponding prompt information.
+If your project is a private library, you can also refer to [vuetify](https://github.com/common-intellisense/vuetify3), provide an exported uri, if your uri is an accessible packaged `dist/index.cjs` address, in vscode `common-intellisense.remoteUris`, configure this link, the plug-in will request this link and get the corresponding prompt information. You can also directly configure an npm package name (@xx/yy-ui), configure it in `common-intellisense.remoteNpmUris`, so that the plug-in will request the `dist/index.cjs` produced by the npm package and get the corresponding prompt information.
 
 ## :coffee:
 

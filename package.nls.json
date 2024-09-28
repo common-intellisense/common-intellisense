@@ -8,6 +8,7 @@
   "excludeDescription": "Files or folders to exclude",
   "pickUITitle": "Select UI Framework",
   "remoteUris": "Remote URIs",
+  "remoteNpmUris": "Remote NPM URIs",
   "localUris": "Local URIs",
   "cleanLocalCache": "Clean Local UI Cache"
 }
