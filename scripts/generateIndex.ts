@@ -4,9 +4,9 @@ const fsp = require('node:fs/promises')
 const fg = require('fast-glob')
 
 export async function run() {
-  const folder = 'src/ui/tdesignReact'
-  const lib = 'tdesign-react'
-  const name = 'tdesignReact1'
+  const folder = 'src/ui/tdesignMiniprogram'
+  const lib = 'tdesign-miniprogram'
+  const name = 'tdesignMiniprogram1'
   const isReact = true
   const isHyphen = isReact || false /** 生成的模板中的使用是 true ? a-affix : AAfix */
   const url = path.resolve(root, `${folder}/${name}`)
@@ -16,7 +16,6 @@ export async function run() {
   const map = entry.map((_url: string) => {
     let tagName = `${_url.split('.')[0]}`
     if (isHyphen) {
-      tagName = hyphenate(tagName)
       // prefix = `'${tagName.split('-')[0]}'`
       return `[${_url.split('.')[0]}, ${_url.split('.')[0]}.name, \`<\${hyphenate(${tagName}.name)}></\${hyphenate(${tagName}.name)}>\`],`
 

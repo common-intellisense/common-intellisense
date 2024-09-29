@@ -96,7 +96,8 @@
               "@vant/weapp1",
               "tdesignReact1",
               "tdesignMobileVue1",
-              "tdesinVueNext1"
+              "tdesinVueNext1",
+              "tdesignMiniprogram1"
             ]
           },
           "description": "%uiDescription%"

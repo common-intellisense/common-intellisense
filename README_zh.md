@@ -40,6 +40,7 @@
 - tdesign-vue-next 1
 - tdesign-mobile-vue 1
 - tdesign-react 1
+- tdesign-miniprogram 1
 
 ### [antdv demo](assets/antdv.gif)
 

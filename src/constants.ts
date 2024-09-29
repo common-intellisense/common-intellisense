@@ -34,6 +34,7 @@ export const UINames = [
   'tdesign-react',
   'tdesign-mobile-vue',
   'tdesign-vue-next',
+  'tdesign-miniprogram',
 ]
 
 export const nameMap: any = {
