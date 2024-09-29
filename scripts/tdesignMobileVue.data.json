@@ -1,0 +1,232 @@
+[
+  {
+    "name": "TPopup",
+    "props": {
+      "attach": {
+        "description": "制定挂载节点。数据类型为 String 时，会被当作选择器处理，进行节点查询。示例：'body' 或 () => document.body。TS 类型：AttachNode。通用类型定义",
+        "description_zh": "制定挂载节点。数据类型为 String 时，会被当作选择器处理，进行节点查询。示例：'body' 或 () => document.body。TS 类型：AttachNode。通用类型定义",
+        "default": "'body'",
+        "value": "",
+        "type": "String / Function",
+        "required": false,
+        "version": ""
+      },
+      "content": {
+        "description": "浮层里面的内容。TS 类型：string | TNode。通用类型定义",
+        "description_zh": "浮层里面的内容。TS 类型：string | TNode。通用类型定义",
+        "default": "-",
+        "value": "",
+        "type": "String / Slot / Function",
+        "required": false,
+        "version": ""
+      },
+      "default": {
+        "description": "触发元素，同 triggerElement。TS 类型：string | TNode。通用类型定义",
+        "description_zh": "触发元素，同 triggerElement。TS 类型：string | TNode。通用类型定义",
+        "default": "-",
+        "value": "",
+        "type": "String / Slot / Function",
+        "required": false,
+        "version": ""
+      },
+      "delay": {
+        "description": "延时显示或隐藏浮层，[延迟显示的时间，延迟隐藏的时间]，单位：毫秒。如果只有一个时间，则表示显示和隐藏的延迟时间相同。示例 '300' 或者 [200, 200]。默认为：[250, 150]。TS 类型：number | Array<number>",
+        "description_zh": "延时显示或隐藏浮层，[延迟显示的时间，延迟隐藏的时间]，单位：毫秒。如果只有一个时间，则表示显示和隐藏的延迟时间相同。示例 '300' 或者 [200, 200]。默认为：[250, 150]。TS 类型：number | Array<number>",
+        "default": "-",
+        "value": "",
+        "type": "Number / Array",
+        "required": false,
+        "version": ""
+      },
+      "destroyOnClose": {
+        "description": "是否在关闭浮层时销毁浮层",
+        "description_zh": "是否在关闭浮层时销毁浮层",
+        "default": "false",
+        "value": "",
+        "type": "Boolean",
+        "required": false,
+        "version": ""
+      },
+      "disabled": {
+        "description": "是否禁用组件",
+        "description_zh": "是否禁用组件",
+        "default": "-",
+        "value": "",
+        "type": "Boolean",
+        "required": false,
+        "version": ""
+      },
+      "hideEmptyPopup": {
+        "description": "浮层是否隐藏空内容，默认不隐藏",
+        "description_zh": "浮层是否隐藏空内容，默认不隐藏",
+        "default": "false",
+        "value": "",
+        "type": "Boolean",
+        "required": false,
+        "version": ""
+      },
+      "overlayClassName": {
+        "description": "浮层类名，示例：'name1 name2 name3' 或 ['name1', 'name2'] 或 [{ 'name1': true }]。TS 类型：ClassName。通用类型定义",
+        "description_zh": "浮层类名，示例：'name1 name2 name3' 或 ['name1', 'name2'] 或 [{ 'name1': true }]。TS 类型：ClassName。通用类型定义",
+        "default": "-",
+        "value": "",
+        "type": "String / Object / Array",
+        "required": false,
+        "version": ""
+      },
+      "overlayInnerClassName": {
+        "description": "浮层内容部分类名，示例：'name1 name2 name3' 或 ['name1', 'name2'] 或 [{ 'name1': true }]。TS 类型：ClassName。通用类型定义",
+        "description_zh": "浮层内容部分类名，示例：'name1 name2 name3' 或 ['name1', 'name2'] 或 [{ 'name1': true }]。TS 类型：ClassName。通用类型定义",
+        "default": "-",
+        "value": "",
+        "type": "String / Object / Array",
+        "required": false,
+        "version": ""
+      },
+      "overlayInnerStyle": {
+        "description": "浮层内容部分样式，第一个参数 triggerElement 表示触发元素 DOM 节点，第二个参数 popupElement 表示浮层元素 DOM 节点。TS 类型：Styles | ((triggerElement: HTMLElement, popupElement: HTMLElement) => Styles)。通用类型定义",
+        "description_zh": "浮层内容部分样式，第一个参数 triggerElement 表示触发元素 DOM 节点，第二个参数 popupElement 表示浮层元素 DOM 节点。TS 类型：Styles | ((triggerElement: HTMLElement, popupElement: HTMLElement) => Styles)。通用类型定义",
+        "default": "-",
+        "value": "",
+        "type": "Boolean / Object / Function",
+        "required": false,
+        "version": ""
+      },
+      "overlayStyle": {
+        "description": "浮层样式，第一个参数 triggerElement 表示触发元素 DOM 节点，第二个参数 popupElement 表示浮层元素 DOM 节点。TS 类型：Styles | ((triggerElement: HTMLElement, popupElement: HTMLElement) => Styles)。通用类型定义",
+        "description_zh": "浮层样式，第一个参数 triggerElement 表示触发元素 DOM 节点，第二个参数 popupElement 表示浮层元素 DOM 节点。TS 类型：Styles | ((triggerElement: HTMLElement, popupElement: HTMLElement) => Styles)。通用类型定义",
+        "default": "-",
+        "value": "",
+        "type": "Boolean / Object / Function",
+        "required": false,
+        "version": ""
+      },
+      "placement": {
+        "description": "浮层出现位置。TS 类型：PopupPlacement type PopupPlacement = 'top'|'left'|'right'|'bottom'|'top-left'|'top-right'|'bottom-left'|'bottom-right'|'left-top'|'left-bottom'|'right-top'|'right-bottom'。详细类型定义",
+        "description_zh": "浮层出现位置。TS 类型：PopupPlacement type PopupPlacement = 'top'|'left'|'right'|'bottom'|'top-left'|'top-right'|'bottom-left'|'bottom-right'|'left-top'|'left-bottom'|'right-top'|'right-bottom'。详细类型定义",
+        "default": "top",
+        "value": "",
+        "type": "String",
+        "required": false,
+        "version": ""
+      },
+      "popperOptions": {
+        "description": "popper 初始化配置，详情参考 https://popper.js.org/docs/",
+        "description_zh": "popper 初始化配置，详情参考 https://popper.js.org/docs/",
+        "default": "-",
+        "value": "",
+        "type": "Object",
+        "required": false,
+        "version": ""
+      },
+      "showArrow": {
+        "description": "是否显示浮层箭头",
+        "description_zh": "是否显示浮层箭头",
+        "default": "false",
+        "value": "",
+        "type": "Boolean",
+        "required": false,
+        "version": ""
+      },
+      "trigger": {
+        "description": "触发浮层出现的方式。可选项：hover/click/focus/mousedown/context-menu",
+        "description_zh": "触发浮层出现的方式。可选项：hover/click/focus/mousedown/context-menu",
+        "default": "hover",
+        "value": "",
+        "type": "String",
+        "required": false,
+        "version": ""
+      },
+      "triggerElement": {
+        "description": "触发元素。值类型为字符串表示元素选择器。TS 类型：string | TNode。通用类型定义",
+        "description_zh": "触发元素。值类型为字符串表示元素选择器。TS 类型：string | TNode。通用类型定义",
+        "default": "-",
+        "value": "",
+        "type": "String / Slot / Function",
+        "required": false,
+        "version": ""
+      },
+      "visible": {
+        "description": "是否显示浮层。支持语法糖 v-model。TS 类型：boolean",
+        "description_zh": "是否显示浮层。支持语法糖 v-model。TS 类型：boolean",
+        "default": "-",
+        "value": "",
+        "type": "Boolean",
+        "required": false,
+        "version": ""
+      },
+      "defaultVisible": {
+        "description": "是否显示浮层。非受控属性。TS 类型：boolean",
+        "description_zh": "是否显示浮层。非受控属性。TS 类型：boolean",
+        "default": "-",
+        "value": "",
+        "type": "Boolean",
+        "required": false,
+        "version": ""
+      },
+      "zIndex": {
+        "description": "组件层级，Web 侧样式默认为 5500，移动端和小程序样式默认为 1500",
+        "description_zh": "组件层级，Web 侧样式默认为 5500，移动端和小程序样式默认为 1500",
+        "default": "-",
+        "value": "",
+        "type": "Number",
+        "required": false,
+        "version": ""
+      },
+      "onScroll": {
+        "description": "TS 类型：(context: { e: WheelEvent }) => void下拉选项滚动事件",
+        "description_zh": "TS 类型：(context: { e: WheelEvent }) => void下拉选项滚动事件",
+        "default": "",
+        "value": "",
+        "type": "Function",
+        "required": false,
+        "version": ""
+      },
+      "onScrollToBottom": {
+        "description": "TS 类型：(context: { e: WheelEvent }) => void下拉滚动触底事件，常用于滚动到底执行具体业务逻辑",
+        "description_zh": "TS 类型：(context: { e: WheelEvent }) => void下拉滚动触底事件，常用于滚动到底执行具体业务逻辑",
+        "default": "",
+        "value": "",
+        "type": "Function",
+        "required": false,
+        "version": ""
+      },
+      "onVisibleChange": {
+        "description": "TS 类型：(visible: boolean, context: PopupVisibleChangeContext) => void当浮层隐藏或显示时触发，trigger=document 表示点击非浮层元素触发；trigger=context-menu 表示右击触发。详细类型定义。interface PopupVisibleChangeContext { e?: PopupTriggerEvent; trigger?: PopupTriggerSource }type PopupTriggerEvent = MouseEvent | FocusEvent | KeyboardEventtype PopupTriggerSource = 'document' | 'trigger-element-click' | 'trigger-element-hover' | 'trigger-element-blur' | 'trigger-element-focus' | 'trigger-element-mousedown' | 'context-menu' | 'keydown-esc'",
+        "description_zh": "TS 类型：(visible: boolean, context: PopupVisibleChangeContext) => void当浮层隐藏或显示时触发，trigger=document 表示点击非浮层元素触发；trigger=context-menu 表示右击触发。详细类型定义。interface PopupVisibleChangeContext { e?: PopupTriggerEvent; trigger?: PopupTriggerSource }type PopupTriggerEvent = MouseEvent | FocusEvent | KeyboardEventtype PopupTriggerSource = 'document' | 'trigger-element-click' | 'trigger-element-hover' | 'trigger-element-blur' | 'trigger-element-focus' | 'trigger-element-mousedown' | 'context-menu' | 'keydown-esc'",
+        "default": "",
+        "value": "",
+        "type": "Function",
+        "required": false,
+        "version": ""
+      }
+    },
+    "link": "https://tdesign.tencent.com/vue/components/popup",
+    "link_zh": "https://tdesign.tencent.com/vue/components/popup",
+    "typeDetail": {},
+    "events": [
+      {
+        "name": "scroll",
+        "description": "下拉选项滚动事件",
+        "params": "(context: { e: WheelEvent })",
+        "description_zh": "下拉选项滚动事件"
+      },
+      {
+        "name": "scroll-to-bottom",
+        "description": "下拉滚动触底事件，常用于滚动到底执行具体业务逻辑",
+        "params": "(context: { e: WheelEvent })",
+        "description_zh": "下拉滚动触底事件，常用于滚动到底执行具体业务逻辑"
+      },
+      {
+        "name": "visible-change",
+        "description": "当浮层隐藏或显示时触发，trigger=document 表示点击非浮层元素触发；trigger=context-menu 表示右击触发。详细类型定义。interface PopupVisibleChangeContext { e?: PopupTriggerEvent; trigger?: PopupTriggerSource }type PopupTriggerEvent = MouseEvent | FocusEvent | KeyboardEventtype PopupTriggerSource = 'document' | 'trigger-element-click' | 'trigger-element-hover' | 'trigger-element-blur' | 'trigger-element-focus' | 'trigger-element-mousedown' | 'context-menu' | 'keydown-esc'",
+        "params": "(visible: boolean, context: PopupVisibleChangeContext)",
+        "description_zh": "当浮层隐藏或显示时触发，trigger=document 表示点击非浮层元素触发；trigger=context-menu 表示右击触发。详细类型定义。interface PopupVisibleChangeContext { e?: PopupTriggerEvent; trigger?: PopupTriggerSource }type PopupTriggerEvent = MouseEvent | FocusEvent | KeyboardEventtype PopupTriggerSource = 'document' | 'trigger-element-click' | 'trigger-element-hover' | 'trigger-element-blur' | 'trigger-element-focus' | 'trigger-element-mousedown' | 'context-menu' | 'keydown-esc'"
+      }
+    ],
+    "methods": [],
+    "slots": [],
+    "suggestions": [],
+    "filename": "Popup"
+  }
+]

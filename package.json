@@ -83,6 +83,8 @@
               "nextui2",
               "nuxtui2",
               "shadcnVue0",
+              "shadcnSvelte0",
+              "bitsUi0",
               "radixVue1",
               "arcoDesign2",
               "arcoDesignVue2",
@@ -91,7 +93,10 @@
               "@opentiny/vue3",
               "@tarojs/components3",
               "@nutui/nutui4",
-              "@vant/weapp1"
+              "@vant/weapp1",
+              "tdesignReact1",
+              "tdesignMobileVue1",
+              "tdesinVueNext1"
             ]
           },
           "description": "%uiDescription%"

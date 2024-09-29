@@ -61,8 +61,9 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
     urlCache.set(cwd, uis)
     if (!uis || !uis.length)
       return
+
     return updateCompletions(uis).then(() => {
-      logger.info(`findUI: ${uis}`)
+      logger.info(`findUI: ${uis.map(ui => ui.join('@')).join(' | ')}`)
     }).catch((error) => {
       logger.info(`updateCompletions获取失败${error?.message || error}`)
     })
@@ -82,7 +83,6 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
     // 读取本地缓存
     await getLocalCache
     // 获取远程的 UI 库
-    Object.assign(uis, await fetchFromRemoteUrls(), await fetchFromRemoteNpmUrls())
     const uisName: string[] = []
     const originUisName: string[] = []
     for await (let [uiName, version] of uis) {
@@ -120,7 +120,7 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
       }
       else {
         try {
-          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
+          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()), await fetchFromRemoteUrls(), await fetchFromRemoteNpmUrls())
           componentsNames = UI[key]?.()
           cacheMap.set(key, componentsNames)
         }

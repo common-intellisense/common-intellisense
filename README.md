@@ -37,6 +37,9 @@ Install the supported ui component library in your project and install the plug-
 - tiny-vue 3
 - nutui 4
 - uview-plus 1
+- tdesign-vue-next 1
+- tdesign-mobile-vue 1
+- tdesign-react 1
 
 ### [antdv demo](assets/antdv.gif)
 

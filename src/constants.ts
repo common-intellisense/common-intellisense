@@ -31,6 +31,9 @@ export const UINames = [
   'view-ui-plus',
   '@vant/weapp',
   'shadcn-svelte',
+  'tdesign-react',
+  'tdesign-mobile-vue',
+  'tdesign-vue-next',
 ]
 
 export const nameMap: any = {

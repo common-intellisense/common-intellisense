@@ -150,9 +150,12 @@ export async function fetchFromRemoteUrls() {
       rejecter = reject
     },
   })
-
+  logger.info(isZh ? '从 remoteUris 中拉取数据...' : 'Fetching data from remoteUris...')
   try {
-    const scriptContents = await Promise.all(uris.map(async uri => [uri, cacheFetch.has(uri) ? cacheFetch.get(uri) : await ofetch(uri, { responseType: 'text', retry, timeout })]))
+    const scriptContents = await Promise.all(uris.map(async (uri) => {
+      logger.info(isZh ? `正在加载 ${uri}` : `Loading ${uri}`)
+      return [uri, cacheFetch.has(uri) ? cacheFetch.get(uri) : await ofetch(uri, { responseType: 'text', retry, timeout })]
+    }))
     scriptContents.forEach(([uri, scriptContent]) => {
       const module: any = {}
       const runModule = new Function('module', scriptContent)
@@ -205,19 +208,22 @@ export async function fetchFromRemoteNpmUrls() {
       rejecter = reject
     },
   })
+  logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
 
   try {
     const scriptContents = await Promise.all(uris.map(async (key) => {
-      if (cacheFetch.has(key))
-        return [key, cacheFetch.get(key)]
-      return [key, await Promise.any([
-        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
-        ofetch(`https://unpkg.com/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
-        ofetch(`https://registry.npmmirror.com/${key}/dist/index.cjs`, { responseType: 'text' }),
-        ofetch(`https://registry.npmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
-        ofetch(`https://r.cnpmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
-        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
-      ])]
+      logger.info(isZh ? `正在加载 ${key}` : `Loading ${key}`)
+
+      return [key, cacheFetch.has(key)
+        ? cacheFetch.get(key)
+        : await Promise.any([
+          ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+          ofetch(`https://unpkg.com/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
+          ofetch(`https://registry.npmmirror.com/${key}/dist/index.cjs`, { responseType: 'text' }),
+          ofetch(`https://registry.npmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
+          ofetch(`https://r.cnpmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
+          ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
+        ])]
     }))
     scriptContents.forEach(([uri, scriptContent]) => {
       const module: any = {}
