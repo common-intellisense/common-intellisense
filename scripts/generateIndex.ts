@@ -4,10 +4,10 @@ const fsp = require('node:fs/promises')
 const fg = require('fast-glob')
 
 export async function run() {
-  const folder = 'src/ui/tdesignMiniprogram'
-  const lib = 'tdesign-miniprogram'
-  const name = 'tdesignMiniprogram1'
-  const isReact = true
+  const folder = 'src/ui/primevue'
+  const lib = 'primevue'
+  const name = 'primevue4'
+  const isReact = false
   const isHyphen = isReact || false /** 生成的模板中的使用是 true ? a-affix : AAfix */
   const url = path.resolve(root, `${folder}/${name}`)
   const entry = await fg(['**/*.json'], { dot: true, cwd: url })

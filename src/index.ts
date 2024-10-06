@@ -265,7 +265,9 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }))
 
-    context.subscriptions.push(addEventListener('text-change', () => {
+    context.subscriptions.push(addEventListener('text-change', ({ contentChanges, document }) => {
+      if (contentChanges.length === 0 || document.languageId === 'Log')
+        return
       const UiCompletions = getUiCompletions()
       const optionsComponents = getOptionsComponents()
       const componentsPrefix = optionsComponents.prefix
@@ -489,7 +491,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return [...r, ...events]
       }
       else if (hasProps.length) {
-        return (completionsCallback ?? []).filter(item => !hasProps.find((prop: any) => item.params?.lib === prop))
+        return (completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item.params?.[1] === prop))
       }
       else {
         return completionsCallback

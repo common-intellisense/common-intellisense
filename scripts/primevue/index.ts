@@ -6,15 +6,19 @@ function transform(componentName: string) {
     const obj = data[componentName.toLowerCase()].interfaces.values
     const _props = obj[`${componentName}Props`]?.props || []
     const _events = obj[`${componentName}Emits`]?.methods || []
+    const _slots = obj[`${componentName}Slots`]?.methods || []
     const props: any = {}
     const events: any = []
+    const slots: any[] = []
     _props.forEach((p: any) => {
       const { name, type, default: _default, description } = p
       props[name] = {
         default: _default,
         description,
+        description_zh: description,
         type,
         value: '',
+        required: false,
       }
     })
     _events.forEach((e: any) => {
@@ -22,6 +26,7 @@ function transform(componentName: string) {
       events.push({
         name,
         description,
+        description_zh: description,
         params: parameters.length
           ? `(${parameters.map((item) => {
             return `${item.name}${item.optional ? '?' : ''}: ${item.type}`
@@ -29,10 +34,20 @@ function transform(componentName: string) {
           : `() => ${returnType}`,
       })
     })
+    _slots.forEach((s: any) => {
+      const { name, description, parameters } = s
+      slots.push({
+        name,
+        params: parameters.map((item: any) => item.type).join('\n'),
+        description,
+      })
+    })
     return {
       name: componentName,
       props,
       events,
+      slots,
+      suggestions: [],
       link: `https://primevue.org/${componentName.toLowerCase()}/`,
     }
   }
@@ -41,89 +56,25 @@ function transform(componentName: string) {
   }
 }
 
-const list = [
-  'AutoComplete',
-  'Calendar',
-  'CascadeSelect',
-  'Checkbox',
-  'Chips',
-  'ColorPicker',
-  'Dropdown',
-  'Editor',
-  'InputMask',
-  'InputNumber',
-  'InputSwitch',
-  'InputText',
-  'Knob',
-  'Listbox',
-  'MultiSelect',
-  'Password',
-  'RadioButton',
-  'Rating',
-  'SelectButton',
-  'Slider',
-  'Textarea',
-  'ToggleButton',
-  'TreeSelect',
-  'TriStateCheckbox',
-  'Button',
-  'SpeedDial',
-  'SplitButton',
-  'DataTable',
-  'DataView',
-  'OrderList',
-  'OrganizationChart',
-  'Paginator',
-  'PickList',
-  'Tree',
-  'TreeTable',
-  'Timeline',
-  'VirtualScroller',
-  'Accordion',
-  'Card',
-  'Divider',
-  'Fieldset',
-  'Panel',
-  'ScrollPanel',
-  'Splitter',
-  'TabView',
-  'Toolbar',
-  'ConfirmDialog',
-  'ConfirmPopup',
-  'Dialog',
-  'DynamicDialog',
-  'OverlayPanel',
-  'Sidebar',
-  'FileUpload',
-  'Breadcrumb',
-  'ContextMenu',
-  'Dock',
-  'Menu',
-  'Menubar',
-  'MegaMenu',
-  'PanelMenu',
-  'Steps',
-  'TabMenu',
-  'TieredMenu',
-  'Chart',
-  'Message',
-  'InlineMessage',
-  'Toast',
-  'Carousel',
-  'Galleria',
-  'Image',
-  'Avatar',
-  'Badge',
-  'BlockUI',
-  'Chip',
-  'Inplace',
-  'ScrollTop',
-  'Skeleton',
-  'ProgressBar',
-  'ProgressSpinner',
-  'Tag',
-  'Terminal',
-]
+const list: string[] = []
+for (const key in data) {
+  const value = data[key]
+  if (value.components) {
+    let name = value.components.default.description.split(' ')[0]
+    if (name.toLowerCase() !== key) {
+      if (value?.interfaces.values) {
+        for (const k in value.interfaces.values) {
+          if (k.toLowerCase() === `${key}props`) {
+            name = k.split('Props')[0]
+            break
+          }
+        }
+      } else
+        name = key[0].toLocaleUpperCase() + key.slice(1)
+    }
+    list.push(name)
+  }
+}
 
 const base = process.cwd()
 const primevue3ComponentsMap: string[][] = []
@@ -131,13 +82,13 @@ const primevue3Map: string[] = []
 const primevue3Importers: string[] = []
 
 function run() {
-  list.forEach((name: string) => fsp.writeFile(`${base}/src/ui/primevue/primevue3/${name}.json`, JSON.stringify(transform(name), null, 2)))
+  list.forEach((name: string) => fsp.writeFile(`${base}/src/ui/primevue/primevue4/${name}.json`, JSON.stringify(transform(name), null, 2)))
   list.forEach((name) => {
     primevue3Importers.push(`import ${name} from './${name}.json'`)
     primevue3Map.push(name)
     primevue3ComponentsMap.push([name, name, `<${name}></${name}>`])
   })
-  generateIndex()
+  // generateIndex()
   console.log('primevue generate done!')
 }
 
@@ -159,4 +110,6 @@ export function primevue3Components() {
   fsp.writeFile(`${base}/src/ui/primevue/primevue3/index.ts`, indexTemplate)
 }
 
-export default run
+run()
+
+// export default run
