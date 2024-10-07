@@ -214,3 +214,7 @@ export function getOptionsComponents() {
 export function getUiCompletions() {
   return UiCompletions
 }
+
+export function getCacheMap() {
+  return cacheMap
+}

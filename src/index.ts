@@ -4,11 +4,10 @@ import { addEventListener, createCompletionItem, createHover, createMarkdownStri
 import { CreateWebview } from '@vscode-use/createwebview'
 import { createFilter } from '@rollup/pluginutils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
-// import UI from './ui'
 import { UINames as UINamesMap } from './constants'
-import type { Directives, SubCompletionItem } from './ui/utils'
+import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
-import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
+import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getIsShowSlots, getUiDeps } from './ui-utils'
 import { cacheFetch, localCacheUri } from './fetch'
 
@@ -284,7 +283,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(registerCompletionItemProvider(filter, async (document, position) => {
     const optionsComponents = getOptionsComponents()
     const componentsPrefix = optionsComponents.prefix
-    const UiCompletions = getUiCompletions()
+    let UiCompletions = getUiCompletions()
     if (!UiCompletions)
       return
     const { lineText } = getSelection()!
@@ -350,7 +349,17 @@ export async function activate(context: vscode.ExtensionContext) {
         return UiCompletions.icons
 
       const propName = result.propName
-      let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, uiDeps?.[name])
+      const from = uiDeps?.[name]
+      const cacheMap = getCacheMap()
+      if (from && cacheMap.size > 2) {
+        // 存在多个 UI 库
+        const nameReg = new RegExp(`${toCamel(from)}\\d+$`)
+        const keys = Array.from(cacheMap.keys())
+        const targetKey = keys.find(k => nameReg.test(k))!
+        const targetValue = cacheMap.get(targetKey)! as PropsConfig
+        UiCompletions = targetValue
+      }
+      let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, from)
       const importUiSource = uiDeps?.[name]
       if (importUiSource && (!target || target.uiName !== importUiSource)) {
         for (const p of optionsComponents.prefix.filter(Boolean)) {
