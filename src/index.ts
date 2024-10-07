@@ -602,7 +602,7 @@ export async function activate(context: vscode.ExtensionContext) {
     async provideHover(document, position) {
       const optionsComponents = getOptionsComponents()
       const componentsPrefix = optionsComponents.prefix
-      const UiCompletions = getUiCompletions()
+      let UiCompletions = getUiCompletions()
       if (!optionsComponents || !UiCompletions)
         return
 
@@ -792,6 +792,16 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!data?.length || !word)
         return createHover('')
       word = toCamel(word)[0].toUpperCase() + toCamel(word).slice(1)
+      const from = uiDeps?.[word]
+      const cacheMap = getCacheMap()
+      if (from && cacheMap.size > 2) {
+        // 存在多个 UI 库
+        const nameReg = new RegExp(`${toCamel(from)}\\d+$`)
+        const keys = Array.from(cacheMap.keys())
+        const targetKey = keys.find(k => nameReg.test(k))!
+        const targetValue = cacheMap.get(targetKey)! as PropsConfig
+        UiCompletions = targetValue
+      }
       const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix, uiDeps?.[word])
       if (!target)
         return

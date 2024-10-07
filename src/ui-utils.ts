@@ -39,7 +39,7 @@ export function getUiDeps(text: string) {
     const from = match[2]
     if (!UINamesMap.includes(from))
       continue
-    const _deps = match[1].trim().replace(/\s+/g, ' ').split(' ')
+    const _deps = match[1].trim().replace(/\s+/g, ' ').split(/,\s*/)
     _deps.forEach((d) => {
       deps[d] = from
     })
