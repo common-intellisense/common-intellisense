@@ -37,6 +37,7 @@ export const UINames = [
   'tdesign-miniprogram',
   '@headlessui/react',
   '@headlessui/vue',
+  '@chakraUi/react',
 ]
 
 export const nameMap: any = {
