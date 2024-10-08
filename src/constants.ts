@@ -35,6 +35,8 @@ export const UINames = [
   'tdesign-mobile-vue',
   'tdesign-vue-next',
   'tdesign-miniprogram',
+  '@headlessui/react',
+  '@headlessui/vue',
 ]
 
 export const nameMap: any = {
@@ -54,4 +56,6 @@ export const nameMap: any = {
   '@nutui/nutui': 'nutUi',
   'view-ui-plus': 'viewUiPlus',
   '@vant/weapp': 'vantWeapp',
+  '@headlessui/react': 'headlessuiReact',
+  '@headlessui/vue': 'headlessuiVue',
 }

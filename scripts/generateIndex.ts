@@ -4,11 +4,11 @@ const fsp = require('node:fs/promises')
 const fg = require('fast-glob')
 
 export async function run() {
-  const folder = 'src/ui/primevue'
-  const lib = 'primevue'
-  const name = 'primevue4'
-  const isReact = false
-  const isHyphen = isReact || false /** 生成的模板中的使用是 true ? a-affix : AAfix */
+  const folder = 'src/ui'
+  const lib = '@chakra-ui/react'
+  const name = 'chakraUiReact2'
+  const isReact = true
+  const isHyphen = !isReact  /** 生成的模板中的使用是 true ? a-affix : AAfix */
   const url = path.resolve(root, `${folder}/${name}`)
   const entry = await fg(['**/*.json'], { dot: true, cwd: url })
   const imports = entry.map((_url: string) => `import ${_url.split('.')[0]} from './${_url}'`)

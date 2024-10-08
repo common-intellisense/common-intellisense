@@ -98,7 +98,10 @@
               "tdesignReact1",
               "tdesignMobileVue1",
               "tdesinVueNext1",
-              "tdesignMiniprogram1"
+              "tdesignMiniprogram1",
+              "@headlessui/react2",
+              "@headlessui/vue1",
+              "@chakraUi/react2"
             ]
           },
           "description": "%uiDescription%"

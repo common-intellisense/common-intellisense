@@ -41,6 +41,9 @@
 - tdesign-mobile-vue 1
 - tdesign-react 1
 - tdesign-miniprogram 1
+- @headlessui/vue 1
+- @headlessui/react 2
+- @chakraUi/react 2
 
 ### [antdv demo](assets/antdv.gif)
 

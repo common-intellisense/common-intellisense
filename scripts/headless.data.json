@@ -1,0 +1,225 @@
+[
+    {
+      "name": "TransitionRoot",
+      "props": {
+        "show": {
+          "default": "—",
+          "value": "",
+          "type": "Boolean",
+          "description": "Whether the children should be shown or hidden.",
+          "description_zh": "Whether the children should be shown or hidden."
+        },
+        "as": {
+          "default": "div",
+          "value": "",
+          "type": "String | Component",
+          "description": "The element or component to render in place of the Transition itself.",
+          "description_zh": "The element or component to render in place of the Transition itself."
+        },
+        "appear": {
+          "default": "false",
+          "value": "",
+          "type": "Boolean",
+          "description": "Whether the transition should run on initial mount.",
+          "description_zh": "Whether the transition should run on initial mount."
+        },
+        "unmount": {
+          "default": "true",
+          "value": "",
+          "type": "Boolean",
+          "description": "Whether the element should be unmounted or hidden based on the show state.",
+          "description_zh": "Whether the element should be unmounted or hidden based on the show state."
+        },
+        "enter": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element during the entire enter phase.",
+          "description_zh": "Classes to add to the transitioning element during the entire enter phase."
+        },
+        "enter-from": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element before the enter phase starts.",
+          "description_zh": "Classes to add to the transitioning element before the enter phase starts."
+        },
+        "enter-to": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element immediately after the enter\nphase starts.",
+          "description_zh": "Classes to add to the transitioning element immediately after the enter\nphase starts."
+        },
+        "entered": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element once the transition is done.\nThese classes will persist after that, until it's time to leave.",
+          "description_zh": "Classes to add to the transitioning element once the transition is done.\nThese classes will persist after that, until it's time to leave."
+        },
+        "leave": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element during the entire leave phase.",
+          "description_zh": "Classes to add to the transitioning element during the entire leave phase."
+        },
+        "leave-from": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element before the leave phase starts.",
+          "description_zh": "Classes to add to the transitioning element before the leave phase starts."
+        },
+        "leave-to": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element immediately after the leave\nphase starts.",
+          "description_zh": "Classes to add to the transitioning element immediately after the leave\nphase starts."
+        }
+      },
+      "link": "https://headlessui.com/v1/vue/transition",
+      "link_zh": "https://headlessui.com/v1/vue/transition",
+      "typeDetail": {},
+      "events": [
+        {
+          "name": "before-enter",
+          "description": "Emitted before the enter transition starts.",
+          "description_zh": "Emitted before the enter transition starts.",
+          "params": ""
+        },
+        {
+          "name": "after-enter",
+          "description": "Emitted after the enter transition finishes.",
+          "description_zh": "Emitted after the enter transition finishes.",
+          "params": ""
+        },
+        {
+          "name": "before-leave",
+          "description": "Emitted before the leave transition starts.",
+          "description_zh": "Emitted before the leave transition starts.",
+          "params": ""
+        },
+        {
+          "name": "after-leave",
+          "description": "Emitted after the leave transition finishes.",
+          "description_zh": "Emitted after the leave transition finishes.",
+          "params": ""
+        }
+      ],
+      "methods": [],
+      "slots": [],
+      "suggestions": [],
+      "filename": "TransitionRoot"
+    },
+    {
+      "name": "TransitionChild",
+      "props": {
+        "as": {
+          "default": "div",
+          "value": "",
+          "type": "String | Component",
+          "description": "The element or component to render in place of the Transition itself.",
+          "description_zh": "The element or component to render in place of the Transition itself."
+        },
+        "appear": {
+          "default": "false",
+          "value": "",
+          "type": "Boolean",
+          "description": "Whether the transition should run on initial mount.",
+          "description_zh": "Whether the transition should run on initial mount."
+        },
+        "unmount": {
+          "default": "true",
+          "value": "",
+          "type": "Boolean",
+          "description": "Whether the element should be unmounted or hidden based on the show state.",
+          "description_zh": "Whether the element should be unmounted or hidden based on the show state."
+        },
+        "enter": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element during the entire enter phase.",
+          "description_zh": "Classes to add to the transitioning element during the entire enter phase."
+        },
+        "enter-from": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element before the enter phase starts.",
+          "description_zh": "Classes to add to the transitioning element before the enter phase starts."
+        },
+        "enter-to": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element immediately after the enter\nphase starts.",
+          "description_zh": "Classes to add to the transitioning element immediately after the enter\nphase starts."
+        },
+        "entered": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element once the transition is done.\nThese classes will persist after that, until it's time to leave.",
+          "description_zh": "Classes to add to the transitioning element once the transition is done.\nThese classes will persist after that, until it's time to leave."
+        },
+        "leave": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element during the entire leave phase.",
+          "description_zh": "Classes to add to the transitioning element during the entire leave phase."
+        },
+        "leave-from": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element before the leave phase starts.",
+          "description_zh": "Classes to add to the transitioning element before the leave phase starts."
+        },
+        "leave-to": {
+          "default": "—",
+          "value": "",
+          "type": "String",
+          "description": "Classes to add to the transitioning element immediately after the leave\nphase starts.",
+          "description_zh": "Classes to add to the transitioning element immediately after the leave\nphase starts."
+        }
+      },
+      "link": "https://headlessui.com/v1/vue/transition",
+      "link_zh": "https://headlessui.com/v1/vue/transition",
+      "typeDetail": {},
+      "events": [
+        {
+          "name": "before-enter",
+          "description": "Emitted before the enter transition starts.",
+          "description_zh": "Emitted before the enter transition starts.",
+          "params": ""
+        },
+        {
+          "name": "after-enter",
+          "description": "Emitted after the enter transition finishes.",
+          "description_zh": "Emitted after the enter transition finishes.",
+          "params": ""
+        },
+        {
+          "name": "before-leave",
+          "description": "Emitted before the leave transition starts.",
+          "description_zh": "Emitted before the leave transition starts.",
+          "params": ""
+        },
+        {
+          "name": "after-leave",
+          "description": "Emitted after the leave transition finishes.",
+          "description_zh": "Emitted after the leave transition finishes.",
+          "params": ""
+        }
+      ],
+      "methods": [],
+      "slots": [],
+      "suggestions": [],
+      "filename": "TransitionChild"
+    }
+  ]

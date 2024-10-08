@@ -4,7 +4,7 @@ const root = process.cwd()
 const fsp = require('node:fs/promises')
 
 export async function run() {
-  const folder = 'src/ui/primevue'
+  const folder = 'src/ui/chakraUiReact2'
   const url = path.resolve(root, folder)
   const entry = await fg(['**/*.json'], { dot: true, cwd: url, absolute: true })
 
