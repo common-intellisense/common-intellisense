@@ -142,7 +142,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const str = importWay === 'as default'
         ? `import * as ${deps.join(', ')} from '${from}'`
-        : `import { ${deps.join(', ')} } from '${from}'`
+        : importWay === 'default'
+          ? `import ${deps.join(', ')} from '${from}'`
+          : `import { ${deps.join(', ')} } from '${from}'`
       updateText((edit) => {
         edit.replace(createRange(posStart, posEnd), str)
       })
@@ -151,7 +153,9 @@ export async function activate(context: vscode.ExtensionContext) {
       // 顶部导入
       let str = importWay === 'as default'
         ? `import * as ${deps.join(', ')} from '${from}'`
-        : `import { ${deps.join(', ')} } from '${from}'`
+        : importWay === 'default'
+          ? `import ${deps.join(', ')} from '${from}'`
+          : `import { ${deps.join(', ')} } from '${from}'`
       let pos: any = null
       if (isVue()) {
         if (loc) {

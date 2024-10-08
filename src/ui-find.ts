@@ -5,7 +5,7 @@ import type * as vscode from 'vscode'
 import { UINames as configUINames } from './constants'
 import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
 import type { ComponentsConfig, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
-import { cacheFetch, fetchFromCommonIntellisense, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
+import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
 
 export interface OptionsComponents {
   prefix: string[]
@@ -48,17 +48,19 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
 
   if (urlCache.has(cwd)) {
     const uis = urlCache.get(cwd)
+    getOthers()
     if (uis && uis.length)
       updateCompletions(uis)
     return
   }
   const OnChange = () => findUI(extensionContext, detectSlots)
 
-  findPkgUI(cwd, OnChange).then((res) => {
+  findPkgUI(cwd, OnChange).then(async (res) => {
     if (!res)
       return
     const { uis } = res
     urlCache.set(cwd, uis)
+    getOthers()
     if (!uis || !uis.length)
       return
 
@@ -112,6 +114,7 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
 
     currentPkgUiNames = uisName
     optionsComponents = { prefix: [], data: [], directivesMap: {} }
+
     await Promise.all(UINames.map(async (name: string) => {
       let componentsNames
       const key = `${name}Components`
@@ -120,7 +123,7 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
       }
       else {
         try {
-          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()), await fetchFromRemoteUrls(), await fetchFromRemoteNpmUrls())
+          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
           componentsNames = UI[key]?.()
           cacheMap.set(key, componentsNames)
         }
@@ -217,4 +220,41 @@ export function getUiCompletions() {
 
 export function getCacheMap() {
   return cacheMap
+}
+
+async function getOthers() {
+  try {
+    const others = Object.assign({}, ...await Promise.all([fetchFromLocalUris(), fetchFromRemoteUrls(), fetchFromRemoteNpmUrls()]))
+    if (Object.keys(others).length) {
+      for (const key in others) {
+        if (key.endsWith('Components')) {
+          const componentsNames = others[key]?.()
+          if (!componentsNames)
+            continue
+          for (const componentsName of componentsNames) {
+            const { prefix, data, directives } = componentsName
+            if (!optionsComponents.prefix.includes(prefix))
+              optionsComponents.prefix.push(prefix)
+            optionsComponents.data.push(data)
+            const libWithVersion = key.slice(0, -'Components'.length)
+            optionsComponents.directivesMap[libWithVersion] = directives
+            cacheMap.set(key, componentsName)
+          }
+        }
+        else {
+          const completion = others[key]?.()
+          if (!completion)
+            continue
+          if (!UiCompletions)
+            UiCompletions = {}
+          cacheMap.set(key, completion)
+          Object.assign(UiCompletions, completion)
+        }
+      }
+    }
+    Object.assign(UI, others)
+  }
+  catch (error) {
+    logger.error(`fetch error： ${String(error)}`)
+  }
 }

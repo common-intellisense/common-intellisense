@@ -41,6 +41,7 @@ export const getLocalCache = new Promise((resolve) => {
   }
 })
 
+// todo: add result type replace any
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
   let version = ''
@@ -134,7 +135,7 @@ export async function fetchFromRemoteUrls() {
   if (!uris.length)
     return
 
-  const result = {}
+  const result: any = {}
 
   if (isRemoteUrisInProgress)
     return
@@ -192,7 +193,7 @@ export async function fetchFromRemoteNpmUrls() {
   if (!uris.length)
     return
 
-  const result = {}
+  const result: any = {}
 
   if (isRemoteUrisInProgress)
     return
@@ -261,7 +262,6 @@ export async function fetchFromLocalUris() {
     return
   logger.info(`localUris: ${uris}`)
   // 查找本地文件 是否存在
-  const result = {}
   uris = uris.map((uri) => {
     // 如果是相对路径，转换为绝对路径，否则直接用
     if (uri.startsWith('./'))
@@ -277,8 +277,9 @@ export async function fetchFromLocalUris() {
   }).filter(Boolean) as string[]
 
   if (!uris.length)
-    return result
+    return
 
+  const result: any = {}
   if (isLocalUrisInProgress)
     return
   let resolver!: () => void

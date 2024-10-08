@@ -457,7 +457,7 @@ export interface ComponentOptions {
   lib: string
   isReact?: boolean
   dynamicLib?: string
-  importWay?: 'as default' | 'default'
+  importWay?: 'as default' | 'default' | 'specifier'
   directives?: Directives
 }
 
@@ -468,12 +468,12 @@ export interface ComponentsConfigItem {
   data: () => CompletionItem[]
   isReact?: boolean
   dynamicLib?: string
-  importWay?: 'as default' | 'default'
+  importWay?: 'as default' | 'default' | 'specifier'
 }
 
 export type ComponentsConfig = ComponentsConfigItem[]
 export function componentsReducer(options: ComponentOptions): ComponentsConfig {
-  const { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay, directives } = options
+  const { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
   const isZh = getLocale().includes('zh')
   if (!isReact && prefix) {
     return [
