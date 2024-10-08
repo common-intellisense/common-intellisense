@@ -17,7 +17,7 @@ Install the supported ui component library in your project and install the plug-
 - antd-mobile 5
 - varlet 2、3
 - naive 2
-- primevue 3
+- primevue 3、4
 - quasar 2
 - @nextui-org/react 2
 - @nuxt/ui 2
