@@ -4,7 +4,7 @@ import { addEventListener, createCompletionItem, createHover, createMarkdownStri
 import { CreateWebview } from '@vscode-use/createwebview'
 import { createFilter } from '@rollup/pluginutils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
-import { UINames as UINamesMap } from './constants'
+import { UINames as UINamesMap, nameMap } from './constants'
 import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
 import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
@@ -357,7 +357,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const cacheMap = getCacheMap()
       if (from && cacheMap.size > 2) {
         // 存在多个 UI 库
-        const nameReg = new RegExp(`${toCamel(from)}\\d+$`)
+        const nameReg = new RegExp(`${toCamel(nameMap[from] || from)}\\d+$`)
         const keys = Array.from(cacheMap.keys())
         const targetKey = keys.find(k => nameReg.test(k))!
         const targetValue = cacheMap.get(targetKey)! as PropsConfig
@@ -800,7 +800,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const cacheMap = getCacheMap()
       if (from && cacheMap.size > 2) {
         // 存在多个 UI 库
-        const nameReg = new RegExp(`${toCamel(from)}\\d+$`)
+        const nameReg = new RegExp(`${toCamel(nameMap[from] || from)}\\d+$`)
         const keys = Array.from(cacheMap.keys())
         const targetKey = keys.find(k => nameReg.test(k))!
         const targetValue = cacheMap.get(targetKey)! as PropsConfig
