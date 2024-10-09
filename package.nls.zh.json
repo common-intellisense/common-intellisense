@@ -1,6 +1,6 @@
 {
   "displayName": "通用UI组件提示 (Common Intellisense)",
-  "description": "通用UI组件提示插件 (Common UI component intellisense plugin)",
+  "description": "适用于任何框架的通用组件智能感知",
   "configurationTitle": "通用UI组件提示配置 (Common Intellisense Configuration)",
   "uiDescription": "选择UI框架 (Select the UI framework)",
   "showSlotsDescription": "显示插槽 (Show slots)",

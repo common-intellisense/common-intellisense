@@ -1,6 +1,6 @@
 {
   "displayName": "Common Intellisense",
-  "description": "Common Intellisense Plugin",
+  "description": "Universal Component Intellisense for Any Frameworks",
   "configurationTitle": "Common Intellisense Configuration",
   "uiDescription": "Select the UI framework to use",
   "showSlotsDescription": "Whether to show slots",
