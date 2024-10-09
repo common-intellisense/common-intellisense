@@ -79,23 +79,40 @@ Install the supported ui component library in your project and install the plug-
 
 ## configuration
 
-```
-"common-intellisense.showSlots": {
-          "type": "boolean",
-          "default": true,
-          "description": "Whether to show the slots on template completion."
-},
-"common-intellisense.alias": {
-          "type": "object",
-          "default": {},
-          "description": "If you need to integrate the supported ui library, the secondary encapsulated library, and the prompt to integrate a certain version of the original ui, you can use the alias { \"@xxx/element\": \"elementUi2\" }"
-},
-"common-intellisense.remoteUris": {
-  "type": "array",
-  "default": [],
-  "description": "Remote URIs"
+```json
+{
+  "common-intellisense.showSlots": {
+    "type": "boolean",
+    "default": true,
+    "description": "Whether to show the slots on template completion."
+  },
+  "common-intellisense.alias": {
+    "type": "object",
+    "default": {},
+    "description": "If you need to integrate the supported ui library, the secondary encapsulated library, and the prompt to integrate a certain version of the original ui, you can use the alias { \"@xxx/element\": \"elementUi2\" }"
+  },
+  "common-intellisense.remoteUris": {
+    "type": "array",
+    "default": [],
+    "description": "Remote URIs"
+  },
+  "common-intellisense.remoteNpmUris": {
+    "type": "array",
+    "default": [],
+    "description": "Remote NPM URIs"
+  },
+  "common-intellisense.localUris": {
+    "type": "array",
+    "default": [],
+    "description": "Local URIs"
+  }
 }
 ```
+
+## Explain Configuration
+- remoteUris: When you deploy the index.cjs configuration file to an online address
+- remoteNpmUris：When you deploy the index.cjs configuration file to npm, you only need to provide the package name instead of the full URL.
+- localUris：When you want to test your configuration, you can read the generated index.cjs locally
 
 ## How to Contribute
 
@@ -104,6 +121,56 @@ This repository is maintained by individuals, and needs to be updated with some 
 ## How to support private libraries
 
 If your project is a private library, you can also refer to [vuetify](https://github.com/common-intellisense/vuetify3), provide an exported uri, if your uri is an accessible packaged `dist/index.cjs` address, in vscode `common-intellisense.remoteUris`, configure this link, the plug-in will request this link and get the corresponding prompt information. You can also directly configure an npm package name (@xx/yy-ui), configure it in `common-intellisense.remoteNpmUris`, so that the plug-in will request the `dist/index.cjs` produced by the npm package and get the corresponding prompt information.
+
+## How to configure the component's JSON
+```json
+{
+  "name": "componentName like Button.Grop or VButton(Big CamelCase Format)",
+  "props": {
+    "attributeName": {
+      "default": "defaultValue",
+      "value": "if have will generate attribute with=\"value\"",
+      "type": "if you use -> boolean / top / end / bottom / start will have option when create attribute",
+      "description": "en description",
+      "description_zh": "zh description",
+      "required": true, // if with true when select component will auto has this attribute
+      "foreach": false // it only work with vue, when you want generate with v-for
+    }
+  },
+  "link": "en link to document",
+  "link_zh": "zh link to document",
+  "typeDetail": { // Used to supplement other types of descriptions in the attribute dependencies
+    "AnchorItem": [ // if name startsWith '$' like "$AnchorItem", will be type AnchorItem = 'x' | 'y'
+      {
+        "name": "key",
+        "description": "Unique ID",
+        "type": "string | number"
+      }
+    ]
+  },
+  "events": [
+    {
+      "name": "close",
+      "description": "Emitted when close icon is clicked.",
+      "description_zh": "单击关闭图标时发出。",
+      "params": "[MouseEvent]"
+    }
+  ],
+  "exposed": [ // when use ref get vm, vm.value or vm.current will get this hints
+    {
+      "name": "[string]",
+      "description": "MISSING DESCRIPTION (edit in github)",
+      "description_zh": "MISSING DESCRIPTION (edit in github)",
+      "detail": "any"
+    }
+  ],
+  "suggestions": [ // Some components are combined，when use button-group, inner tip will this `button` reminder will be brought forward, if this components with only one suggestions, it will select button-group auto create button
+    "v-alert-title"
+  ]
+}
+```
+
+## How to configure custom [instructions](https://github.com/common-intellisense/vuetify/blob/main/src/directives.json)
 
 ## :coffee:
 

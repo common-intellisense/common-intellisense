@@ -5,8 +5,8 @@ const fg = require('fast-glob')
 
 export async function run() {
   const folder = 'src/ui'
-  const lib = '@chakra-ui/react'
-  const name = 'chakraUiReact2'
+  const lib = '@mantine/charts'
+  const name = 'mantineCharts7'
   const isReact = true
   const isHyphen = !isReact  /** 生成的模板中的使用是 true ? a-affix : AAfix */
   const url = path.resolve(root, `${folder}/${name}`)

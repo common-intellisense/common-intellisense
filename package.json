@@ -40,12 +40,14 @@
     "Taro",
     "NutUI",
     "Vant",
+    "@mui/material",
     "Naive UI",
     "Varlet",
     "Bits UI",
     "Opentiny",
     "TDesign",
-    "HeadlessUI"
+    "HeadlessUI",
+    "MantineUI"
   ],
   "categories": [
     "Other"
@@ -108,7 +110,11 @@
               "tdesignMiniprogram1",
               "@headlessui/react2",
               "@headlessui/vue1",
-              "@chakraUi/react2"
+              "@mui/material5",
+              "@chakraUi/react2",
+              "@mantine/core7",
+              "@mantine/dates7",
+              "@mantine/charts7"
             ]
           },
           "description": "%uiDescription%"

@@ -1,0 +1,87 @@
+[
+  {
+    "name": "Sparkline",
+    "props": {
+      "areaProps": {
+        "default": "",
+        "value": "",
+        "type": "Omit<Props, \"ref\" | \"data\" | \"dataKey\">",
+        "description": "Props passed down to the underlying recharts Area component",
+        "required": false,
+        "description_zh": "Props passed down to the underlying recharts Area component"
+      },
+      "color": {
+        "default": "",
+        "value": "",
+        "type": "MantineColor",
+        "description": "Key of theme.colors or any valid CSS color, theme.primaryColor by default",
+        "required": false,
+        "description_zh": "Key of theme.colors or any valid CSS color, theme.primaryColor by default"
+      },
+      "connectNulls": {
+        "default": "",
+        "value": "",
+        "type": "boolean",
+        "description": "Determines whether null values should be connected with other values, true by default",
+        "required": false,
+        "description_zh": "Determines whether null values should be connected with other values, true by default"
+      },
+      "curveType": {
+        "default": "",
+        "value": "",
+        "type": "AreaChartCurveType",
+        "description": "Type of the curve, 'linear' by default",
+        "required": false,
+        "description_zh": "Type of the curve, 'linear' by default"
+      },
+      "data *": {
+        "default": "",
+        "value": "",
+        "type": "(number | null)[]",
+        "description": "Data used to render the chart",
+        "required": false,
+        "description_zh": "Data used to render the chart"
+      },
+      "fillOpacity": {
+        "default": "",
+        "value": "",
+        "type": "number",
+        "description": "Controls fill opacity of the area, 0.6 by default",
+        "required": false,
+        "description_zh": "Controls fill opacity of the area, 0.6 by default"
+      },
+      "strokeWidth": {
+        "default": "",
+        "value": "",
+        "type": "number",
+        "description": "Area stroke width, 2 by default",
+        "required": false,
+        "description_zh": "Area stroke width, 2 by default"
+      },
+      "trendColors": {
+        "default": "",
+        "value": "",
+        "type": "SparklineTrendColors",
+        "description": "If set, color prop is ignored and chart color is determined by the difference between first and last value.",
+        "required": false,
+        "description_zh": "If set, color prop is ignored and chart color is determined by the difference between first and last value."
+      },
+      "withGradient": {
+        "default": "",
+        "value": "",
+        "type": "boolean",
+        "description": "Determines whether the chart fill should be a gradient, true by default",
+        "required": false,
+        "description_zh": "Determines whether the chart fill should be a gradient, true by default"
+      }
+    },
+    "link": "https://mantine.dev/charts/sparkline/?t=props",
+    "link_zh": "https://mantine.dev/charts/sparkline/?t=props",
+    "typeDetail": {},
+    "events": [],
+    "methods": [],
+    "slots": [],
+    "suggestions": [],
+    "filename": "Sparkline"
+  }
+]

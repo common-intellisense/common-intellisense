@@ -91,10 +91,20 @@
           "description": "如果你需要将基于支持的 ui 库，二次封装的库，集成原本 ui 某一个版本的提示，可以使用别名 { \"@xxx/element\": \"elementUi2\" }"
 },
 "common-intellisense.remoteUris": {
-  "type": "array",
-  "default": [],
-  "description": "远程URI (Remote URIs)"
-}
+    "type": "array",
+    "default": [],
+    "description": "远程URI (Remote URIs)"
+  },
+  "common-intellisense.remoteNpmUris": {
+    "type": "array",
+    "default": [],
+    "description": "远程NPM URI (Remote NPM URIs)"
+  },
+  "common-intellisense.localUris": {
+    "type": "array",
+    "default": [],
+    "description": "本地URI (Local URIs)"
+  }
 ```
 
 ## 如何参与贡献
@@ -104,6 +114,56 @@
 ## 如何支持私有库
 
 如果你的项目是私有库，你同样可以参考 [vuetify](https://github.com/common-intellisense/vuetify3), 提供一个导出的 uri，如果你的 uri 是一个可访问的的打包后的 `dist/index.cjs` 的地址，在 vscode `common-intellisense.remoteUris`，配置这个链接，插件会去请求这个链接，获取对应的提示信息。你也可以直接配置一个 npm 包名(@xx/yy-ui)， 在 `common-intellisense.remoteNpmUris` 中配置，这样插件会去请求 npm 包产出的 `dist/index.cjs`，获取对应的提示信息。
+
+## 如何配置组件的json
+```json
+{
+  "name": "组件名称如 Button.Grop 或 VButton(大驼峰命名格式)",
+  "props": {
+    "attributeName": {
+      "default": "默认值",
+      "value": "如果有将生成属性 with=\"value\"",
+      "type": "如果你使用 -> boolean / top / end /bottom / start 在创建属性时会有选项",
+      "description": "en 描述",
+      "description_zh": "zh 说明",
+      "required": true, // 如果为true时select组件会自动有这个属性
+      "foreach": false // 它只适用于 vue，当你想使用 v-for 生成时
+    }
+  },
+  "link": "en 指向文档的链接",
+  "link_zh": "zh 链接到文档",
+  "typeDetail": { // 用于补充属性依赖中的其他类型描述
+    "AnchorItem": [ // 如果名称像 "$AnchorItem" 一样以 '$' 开头，则将被键入锚点项 = 'x' | 'y'
+      {
+        "name": "key",
+        "description": "唯一ID",
+        "type": "string | number"
+      }
+    ]
+  },
+  "events": [
+    {
+      "name": "close",
+      "description": "单击关闭图标时发出。",
+      "description_zh": "单击关闭图标时发出。",
+      "params": "[MouseEvent]"
+    }
+  ],
+  "exposed": [ // 使用 ref get vm, vm.value 或 vm.current 时会得到此提示
+    {
+      "name": "[string]",
+      "description": "MISSING Description (edit in github)",
+      "description_zh": "MISSING Description (edit in github)",
+      "detail": "any"
+    }
+  ],
+  "suggestions": [ // 一些组件是组合在一起的，当使用 button-group 时，内部提示会将此 `button` 提醒带上，如果此组件只有一个建议，则会选择button-group 自动创建按钮
+    "v-alert-title"
+  ]
+}
+```
+
+## 如何配置自定义 [指令](https://github.com/common-intellisense/vuetify/blob/main/src/directives.json)
 
 ## :coffee:
 

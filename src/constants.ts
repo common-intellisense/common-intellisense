@@ -38,6 +38,9 @@ export const UINames = [
   '@headlessui/react',
   '@headlessui/vue',
   '@chakraUi/react',
+  '@mantine/core',
+  '@mantine/dates',
+  '@mantine/charts',
 ]
 
 export const nameMap: any = {
@@ -59,4 +62,7 @@ export const nameMap: any = {
   '@vant/weapp': 'vantWeapp',
   '@headlessui/react': 'headlessuiReact',
   '@headlessui/vue': 'headlessuiVue',
+  '@mantine/core': 'mantineCore',
+  '@mantine/dates': 'mantineDates',
+  '@mantine/charts': 'mantineCharts',
 }
