@@ -4,7 +4,7 @@ const root = process.cwd()
 const fsp = require('node:fs/promises')
 
 export async function run() {
-  const folder = 'src/ui/mantineCharts7'
+  const folder = 'src/ui/primevue4'
   const url = path.resolve(root, folder)
   const entry = await fg(['**/*.json'], { dot: true, cwd: url, absolute: true })
 

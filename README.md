@@ -172,6 +172,9 @@ If your project is a private library, you can also refer to [vuetify](https://gi
 
 ## How to configure custom [instructions](https://github.com/common-intellisense/vuetify/blob/main/src/directives.json)
 
+## Frequently asked questions
+- If you find that the code prompts are repeated, it may be because the plug-in has been upgraded, but the old version of the plug-in is still in effect. Try to enter the vscode plug-in directory `code ~/.vscode/extensions`, then delete the low version `simonhe.common-intellisense-low-version`, and restart vscode.
+
 ## :coffee:
 
 [buy me a cup of coffee](https://github.com/Simon-He95/sponsor)

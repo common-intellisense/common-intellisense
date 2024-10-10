@@ -165,6 +165,9 @@
 
 ## 如何配置自定义 [指令](https://github.com/common-intellisense/vuetify/blob/main/src/directives.json)
 
+## 常见问题
+- 如果你发现代码提示重复了，可能是因为插件升级了，但是老版本的插件仍然在生效, 尝试进入到 vscode 插件目录 `code ~/.vscode/extensions`, 然后删除低版本的 `simonhe.common-intellisense-low-version`，重启 vscode 即可
+
 ## :coffee:
 
 [请我喝一杯咖啡](https://github.com/Simon-He95/sponsor)
