@@ -11,13 +11,14 @@ export interface OptionsComponents {
   prefix: string[]
   data: (() => vscode.CompletionItem[])[]
   directivesMap: Record<string, Directives | undefined>
+  libs: string[]
 }
 export type Uis = [string, string][]
 
 export const logger = createLog('common-intellisense')
 const UI: Record<string, () => any> = {}
 const UINames: string[] = []
-let optionsComponents: OptionsComponents = { prefix: [], data: [], directivesMap: {} }
+let optionsComponents: OptionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
 let UiCompletions: PropsConfig | null = null
 const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
 const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
@@ -31,7 +32,7 @@ let preUis: Uis | null = null
 
 export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: any) {
   UINames.length = 0
-  optionsComponents = { prefix: [], data: [], directivesMap: {} }
+  optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
   UiCompletions = null
   eventCallbacks.clear()
   completionsCallbacks.clear()
@@ -113,7 +114,7 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
       UINames.push(...uisName)
 
     currentPkgUiNames = uisName
-    optionsComponents = { prefix: [], data: [], directivesMap: {} }
+    optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
 
     await Promise.all(UINames.map(async (name: string) => {
       let componentsNames
@@ -134,6 +135,9 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
       if (componentsNames) {
         for (const componentsName of componentsNames) {
           const { prefix, data, directives, lib } = componentsName
+          if (optionsComponents.libs.includes(lib))
+            continue
+          optionsComponents.libs.push(lib)
           if (!optionsComponents.prefix.includes(prefix))
             optionsComponents.prefix.push(prefix)
           optionsComponents.data.push(data)
@@ -194,7 +198,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
 
 export function deactivateUICache() {
   UINames.length = 0
-  optionsComponents = { prefix: [], data: [], directivesMap: {} }
+  optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
   UiCompletions = null
   cacheMap.clear()
   pkgUIConfigMap.clear()
@@ -232,7 +236,10 @@ async function getOthers() {
           if (!componentsNames)
             continue
           for (const componentsName of componentsNames) {
-            const { prefix, data, directives } = componentsName
+            const { prefix, data, directives, lib } = componentsName
+            if (optionsComponents.libs.includes(lib))
+              continue
+            optionsComponents.libs.push(lib)
             if (!optionsComponents.prefix.includes(prefix))
               optionsComponents.prefix.push(prefix)
             optionsComponents.data.push(data)
