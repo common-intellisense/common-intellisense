@@ -4,6 +4,7 @@ import path from 'node:path'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
+import { fetchFromCjs } from '@simon_he/fetch-npm-cjs'
 import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from './ui-find'
 
@@ -17,6 +18,7 @@ let isLocalUrisInProgress = false
 const retry = 1
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
 const isZh = getLocale()?.includes('zh')
+const { fetch } = fetchFromCjs(cacheFetch)
 export const getLocalCache = new Promise((resolve) => {
   if (existsSync(localCacheUri)) {
     fsp.readFile(localCacheUri, 'utf-8').then((res) => {
@@ -45,7 +47,6 @@ export const getLocalCache = new Promise((resolve) => {
 export async function fetchFromCommonIntellisense(tag: string) {
   const name = prefix + tag
   let version = ''
-
   logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
   try {
     version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000, concurrency: 3 })
@@ -89,21 +90,13 @@ export async function fetchFromCommonIntellisense(tag: string) {
       logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
     }
 
-    const scriptContent = cacheFetch.has(key)
-      ? cacheFetch.get(key)
-      : await Promise.any([
-        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
-        ofetch(`https://unpkg.com/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
-        ofetch(`https://registry.npmmirror.com/${key}/dist/index.cjs`, { responseType: 'text' }),
-        ofetch(`https://registry.npmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
-        ofetch(`https://r.cnpmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
-        ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
-      ])
-    cacheFetch.set(key, scriptContent)
-    const module: any = {}
-    const runModule = new Function('module', scriptContent)
-    runModule(module)
-    const moduleExports = module.exports
+    const moduleExports = await fetch({
+      name,
+      retry,
+      timeout,
+      version,
+    })
+
     const result: any = {}
     for (const key in moduleExports) {
       const v = moduleExports[key]
@@ -212,26 +205,7 @@ export async function fetchFromRemoteNpmUrls() {
   logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
 
   try {
-    const scriptContents = await Promise.all(uris.map(async (key) => {
-      logger.info(isZh ? `正在加载 ${key}` : `Loading ${key}`)
-
-      return [key, cacheFetch.has(key)
-        ? cacheFetch.get(key)
-        : await Promise.any([
-          ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
-          ofetch(`https://unpkg.com/${key}/dist/index.cjs`, { responseType: 'text', retry, timeout }),
-          ofetch(`https://registry.npmmirror.com/${key}/dist/index.cjs`, { responseType: 'text' }),
-          ofetch(`https://registry.npmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
-          ofetch(`https://r.cnpmjs.org/${key}/dist/index.cjs`, { responseType: 'text' }),
-          ofetch(`https://cdn.jsdelivr.net/npm/${key}/dist/index.cjs`, { responseType: 'text' }),
-        ])]
-    }))
-    scriptContents.forEach(([uri, scriptContent]) => {
-      const module: any = {}
-      const runModule = new Function('module', scriptContent)
-      cacheFetch.set(uri, scriptContent)
-      runModule(module)
-      const moduleExports = module.exports
+    (await Promise.all(uris.map(name => fetch({ name })))).forEach((moduleExports) => {
       const temp: any = {}
       const isZh = getLocale()!.includes('zh')
       for (const key in moduleExports) {
