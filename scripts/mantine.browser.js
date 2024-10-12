@@ -6,7 +6,7 @@ const data = require('./mantine.data.json')
 function run() {
   const link = location.href
   const results = []
-  Array.from(document.querySelectorAll('h2')).filter(item => item.textContent.toLowerCase().endsWith('component props')).map(item => {
+  Array.from(document.querySelectorAll('h2')).filter(item => /(events|attributes)/.test(item.textContent.toLowerCase())).map(item => {
     const name = item.textContent.split(' ')[0]
     const type = item.textContent.split(' ').slice(-1)[0].toLowerCase()
     let propsTable = []

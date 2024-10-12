@@ -4,7 +4,7 @@ import { addEventListener, createCompletionItem, createHover, createMarkdownStri
 import { CreateWebview } from '@vscode-use/createwebview'
 import { createFilter } from '@rollup/pluginutils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
-import { UINames as UINamesMap, nameMap } from './constants'
+import { nameMap } from './constants'
 import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import { isVine, isVue, toCamel } from './ui/utils'
 import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
@@ -849,11 +849,9 @@ function getImportUiComponents(text: string) {
     if (!match)
       continue
     const from = match[2]
-    if (UINamesMap.includes(from)) {
-      deps[from] = {
-        match,
-        components: match[1].split(',').map(i => i.trim()),
-      }
+    deps[from] = {
+      match,
+      components: match[1].split(',').map(i => i.trim()),
     }
   }
   return deps
