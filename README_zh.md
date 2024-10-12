@@ -3,10 +3,10 @@
 </p>
 <p align="center"> <a href="https://github.com/Simon-He95/vscode-common-intellisense/blob/main/README.md">English</a> | 简体中文</p>
 
-此插件能够提供超级强大的智能提示功能，包含属性、事件、插槽以及对应的注释和类型，实例上的方法等等，支持多个UI库，让你的开发效率更上一层楼。
+此插件能够提供超级强大的智能提示功能，包含属性、事件、插槽以及对应的注释和类型，实例上的方法等等，支持多个 UI 库，让你的开发效率更上一层楼。
 
 ### 🛠️️ 如何使用
-在你的项目中安装已支持的ui组件库并安装此插件即可。如果插件不能生效，可以重启 vscode，如遇到问题可以打开一个 issue
+在你的项目中安装已支持的 ui 组件库并安装此插件即可。如果插件不能生效，可以重启 vscode，如遇到问题可以打开一个 issue
 
 ### 🍬 目前支持
 - vant 4
@@ -166,11 +166,13 @@
 ## 如何配置自定义 [指令](https://github.com/common-intellisense/vuetify/blob/main/src/directives.json)
 
 ## 常见问题
+
 - 如果你发现代码提示重复了，可能是因为插件升级了，但是老版本的插件仍然在生效, 尝试进入到 vscode 插件目录 `code ~/.vscode/extensions`, 然后删除低版本的 `simonhe.common-intellisense-low-version`，重启 vscode 即可
+- 如果发现遇到 [All promises were rejected], 可以尝试卸载重新安装插件，或者检车本地网络代理，因为插件会多渠道请求不同源的 NPM 包，如果你的网络代理不通，可能会导致这个问题
 
 ## :coffee:
 
-[请我喝一杯咖啡](https://github.com/Simon-He95/sponsor)
+[赞助 Common Intellisense](https://github.com/Simon-He95/sponsor)
 
 ## License
 

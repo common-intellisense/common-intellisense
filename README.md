@@ -174,10 +174,11 @@ If your project is a private library, you can also refer to [vuetify](https://gi
 
 ## Frequently asked questions
 - If you find that the code prompts are repeated, it may be because the plug-in has been upgraded, but the old version of the plug-in is still in effect. Try to enter the vscode plug-in directory `code ~/.vscode/extensions`, then delete the low version `simonhe.common-intellisense-low-version`, and restart vscode.
+- If you encounter [All promises were rejected], you can try to uninstall and reinstall the plugin, or check the local network proxy, because the plugin will request NPM packages from different sources through multiple channels. If your network proxy is not connected, this problem may occur
 
 ## :coffee:
 
-[buy me a cup of coffee](https://github.com/Simon-He95/sponsor)
+[Sponsor Common Intellisense](https://github.com/Simon-He95/sponsor)
 
 ## License
 
