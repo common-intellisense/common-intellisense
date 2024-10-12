@@ -229,10 +229,13 @@ export function getCacheMap() {
 async function getOthers() {
   try {
     const others = Object.assign({}, ...await Promise.all([fetchFromLocalUris(), fetchFromRemoteUrls(), fetchFromRemoteNpmUrls()]))
-    if (Object.keys(others).length) {
-      for (const key in others) {
+
+    Object.assign(UI, others)
+
+    if (Object.keys(UI).length) {
+      for (const key in UI) {
         if (key.endsWith('Components')) {
-          const componentsNames = others[key]?.()
+          const componentsNames = UI[key]?.()
           if (!componentsNames)
             continue
           for (const componentsName of componentsNames) {
@@ -249,7 +252,7 @@ async function getOthers() {
           }
         }
         else {
-          const completion = others[key]?.()
+          const completion = UI[key]?.()
           if (!completion)
             continue
           if (!UiCompletions)
@@ -259,7 +262,12 @@ async function getOthers() {
         }
       }
     }
-    Object.assign(UI, others)
+    try {
+      fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
+    }
+    catch (error) {
+      logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
+    }
   }
   catch (error) {
     logger.error(`fetch error： ${String(error)}`)

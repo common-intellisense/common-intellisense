@@ -43,7 +43,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(registerCodeLensProviderFn())
 
   context.subscriptions.push(addEventListener('activeText-change', (editor?: vscode.TextEditor) => {
-    if (!editor)
+    if (!editor || editor.document.languageId === 'Log')
       return
 
     if (isSkip())

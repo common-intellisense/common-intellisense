@@ -122,6 +122,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
   }
 }
 
+const tempCache = new Map()
 export async function fetchFromRemoteUrls() {
   // 读区 urls
   const uris = getConfiguration('common-intellisense.remoteUris') as string[]
@@ -133,8 +134,19 @@ export async function fetchFromRemoteUrls() {
   if (isRemoteUrisInProgress)
     return
 
-  let resolver!: () => void
-  let rejecter!: (msg?: string) => void
+  const fixedUris = (await Promise.all(uris.map(async (name) => {
+    const key = `remote-uri:${name}`
+    if (tempCache.has(key))
+      return ''
+    tempCache.set(key, true)
+    return name
+  }))).filter(Boolean)
+
+  if (!fixedUris.length)
+    return
+
+  let resolver: () => void = () => { }
+  let rejecter: (msg?: string) => void = () => { }
   isRemoteUrisInProgress = true
   createFakeProgress({
     title: isZh ? `正在拉取远程文件` : 'Pulling remote files',
@@ -146,7 +158,7 @@ export async function fetchFromRemoteUrls() {
   })
   logger.info(isZh ? '从 remoteUris 中拉取数据...' : 'Fetching data from remoteUris...')
   try {
-    const scriptContents = await Promise.all(uris.map(async (uri) => {
+    const scriptContents = await Promise.all(fixedUris.map(async (uri) => {
       logger.info(isZh ? `正在加载 ${uri}` : `Loading ${uri}`)
       return [uri, cacheFetch.has(uri) ? cacheFetch.get(uri) : await ofetch(uri, { responseType: 'text', retry, timeout })]
     }))
@@ -191,9 +203,36 @@ export async function fetchFromRemoteNpmUrls() {
   if (isRemoteUrisInProgress)
     return
 
-  let resolver!: () => void
-  let rejecter!: (msg?: string) => void
+  const fixedUris = (await Promise.all(uris.map(async (name) => {
+    let version = ''
+    logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
+    try {
+      version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000, concurrency: 3 })
+    }
+    catch (error: any) {
+      if (error.message.includes('404 Not Found')) {
+        // 说明这个版本还未支持, 可以通过 issue 提出
+        logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
+      }
+      else {
+        logger.error(String(error))
+      }
+    }
+    const key = `remote-npm-uri:${name}`
+    const cachedVersion = tempCache.get(key)
+    if (cachedVersion === version)
+      return ''
+    tempCache.set(key, version)
+    return [name, version]
+  }))).filter(Boolean)
+
+  if (!fixedUris.length)
+    return
+
+  let resolver: () => void = () => { }
+  let rejecter: (msg?: string) => void = () => { }
   isRemoteUrisInProgress = true
+
   createFakeProgress({
     title: isZh ? `正在拉取远程 NPM 文件` : 'Pulling remote NPM files',
     message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
@@ -205,7 +244,17 @@ export async function fetchFromRemoteNpmUrls() {
   logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
 
   try {
-    (await Promise.all(uris.map(name => fetch({ name })))).forEach((moduleExports) => {
+    (await Promise.all(fixedUris.map(([name, version]) => {
+      const key = `${name}@${version}`
+      if (cacheFetch.has(key)) {
+        const scriptContent = cacheFetch.get(key)
+        const module: any = {}
+        const runModule = new Function('module', scriptContent)
+        runModule(module)
+        return module.exports
+      }
+      return fetch({ name, version })
+    }))).forEach((moduleExports) => {
       const temp: any = {}
       const isZh = getLocale()!.includes('zh')
       for (const key in moduleExports) {
