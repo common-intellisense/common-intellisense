@@ -1,7 +1,7 @@
 <p align="center">
 <img height="200" src="./assets/kv.png" alt="common-intellisense">
 </p>
-<p align="center"> English | <a href="https://github.com/Simon-He95/vscode-common-intellisense/blob/main/README_zh.md">简体中文</a></p>
+<p align="center"> English | <a href="https://github.com/common-intellisense/common-intellisense/blob/main/README_zh.md">简体中文</a></p>
 
 This plugin can provide a super powerful smart prompt function, including properties, events, slots and corresponding annotations and types, methods on instances, etc. It supports multiple UI libraries, taking your development efficiency to the next level.
 
