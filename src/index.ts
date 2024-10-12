@@ -670,8 +670,10 @@ export async function activate(context: vscode.ExtensionContext) {
         else if (!result.propName) {
           return
         }
-
-        const propName = result.propName === 'bind' ? result.props[0].arg.content : result.propName
+        // 这个实现有些问题，要从底层去修改 propName 上的信息，才能拿到准确的数据
+        const findBind = () => result.props.find((p: any) => p.name === 'bind')
+        const findOn = () => result.props.find((p: any) => p.name === 'on')
+        const propName = result.propName === true && result.props[0].name === 'on' ? findOn().arg.content : result.propName === 'bind' ? findBind().arg.content : result.propName
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
         const tag = toCamel(result.tag)[0].toUpperCase() + toCamel(result.tag).slice(1)
