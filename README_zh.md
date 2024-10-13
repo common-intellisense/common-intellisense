@@ -44,6 +44,7 @@
 - @headlessui/vue 1
 - @headlessui/react 2
 - @chakraUi/react 2
+- wot-design-uni 1
 
 ### [antdv demo](assets/antdv.gif)
 

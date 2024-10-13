@@ -1,0 +1,173 @@
+[
+  {
+    "name": "WdTable",
+    "props": {
+      "data": {
+        "default": "",
+        "value": "-",
+        "type": "Array",
+        "description": "显示的数据",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "显示的数据"
+      },
+      "border": {
+        "default": "",
+        "value": "true",
+        "type": "boolean",
+        "description": "是否带有边框",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "是否带有边框"
+      },
+      "stripe": {
+        "default": "",
+        "value": "true",
+        "type": "boolean",
+        "description": "是否为斑马纹表",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "是否为斑马纹表"
+      },
+      "height": {
+        "default": "",
+        "value": "80vh",
+        "type": "string",
+        "description": "Table 的高度，默认为80vh",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "Table 的高度，默认为80vh"
+      },
+      "rowHeight": {
+        "default": "",
+        "value": "50",
+        "type": "number / string",
+        "description": "行高",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "行高"
+      },
+      "showHeader": {
+        "default": "",
+        "value": "true",
+        "type": "boolean",
+        "description": "是否显示表头",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "是否显示表头"
+      },
+      "ellipsis": {
+        "default": "",
+        "value": "true",
+        "type": "boolean",
+        "description": "是否超出 2 行隐藏",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "是否超出 2 行隐藏"
+      },
+      "index": {
+        "default": "",
+        "value": "false",
+        "type": "boolean / TableColumnProps",
+        "description": "是否显示索引列，可传入boolean也可传入 column 配置",
+        "version": "1.2.19",
+        "required": false,
+        "description_zh": "是否显示索引列，可传入boolean也可传入 column 配置"
+      }
+    },
+    "link": "https://wot-design-uni.pages.dev/component/table.html",
+    "link_zh": "https://wot-design-uni.pages.dev/component/table.html",
+    "typeDetail": {},
+    "events": [
+      {
+        "name": "sort-method",
+        "description": "指定数据按照哪个属性进行排序，仅当 sortable 设置为 true 的时候有效",
+        "params": "TableColumn：当前点击列数据",
+        "version": "0.0.39"
+      },
+      {
+        "name": "row-click",
+        "description": "当某一行被点击时会触发该事件",
+        "params": "{rowIndex:number} 点击行的下标",
+        "version": "0.0.39"
+      }
+    ],
+    "methods": [],
+    "slots": [],
+    "suggestions": [],
+    "filename": "Table"
+  },
+  {
+    "name": "WdTableColumn",
+    "props": {
+      "prop": {
+        "default": "",
+        "value": "-",
+        "type": "string",
+        "description": "字段名称,对应列内容的字段名",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "字段名称,对应列内容的字段名"
+      },
+      "label": {
+        "default": "",
+        "value": "-",
+        "type": "string",
+        "description": "显示的标题",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "显示的标题"
+      },
+      "width": {
+        "default": "",
+        "value": "100",
+        "type": "number / string",
+        "description": "对应列的宽度，单位为 px",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "对应列的宽度，单位为 px"
+      },
+      "sortable": {
+        "default": "",
+        "value": "false",
+        "type": "boolean",
+        "description": "是否开启列排序",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "是否开启列排序"
+      },
+      "fixed": {
+        "default": "",
+        "value": "false",
+        "type": "boolean",
+        "description": "是否固定本列",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "是否固定本列"
+      },
+      "align": {
+        "default": "",
+        "value": "left",
+        "type": "left, center, right",
+        "description": "列的对齐方式",
+        "version": "0.0.39",
+        "required": false,
+        "description_zh": "列的对齐方式"
+      }
+    },
+    "link": "https://wot-design-uni.pages.dev/component/table.html",
+    "link_zh": "https://wot-design-uni.pages.dev/component/table.html",
+    "typeDetail": {},
+    "events": [],
+    "methods": [],
+    "slots": [
+      {
+        "name": "value",
+        "description": "自定义列的内容，1.2.16 新增index参数",
+        "version": "{ row: Object, index: number }"
+      }
+    ],
+    "suggestions": [],
+    "filename": "TableColumn"
+  }
+]

@@ -44,6 +44,7 @@ Install the supported ui component library in your project and install the plug-
 - @headlessui/vue 1
 - @headlessui/react 2
 - @chakraUi/react 2
+- wot-design-uni 1
 
 ### [antdv demo](assets/antdv.gif)
 

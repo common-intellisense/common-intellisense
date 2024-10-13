@@ -41,6 +41,7 @@ export const UINames = [
   '@mantine/core',
   '@mantine/dates',
   '@mantine/charts',
+  'wot-design-uni',
 ]
 
 export const nameMap: any = {

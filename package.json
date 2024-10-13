@@ -114,7 +114,8 @@
               "@chakraUi/react2",
               "@mantine/core7",
               "@mantine/dates7",
-              "@mantine/charts7"
+              "@mantine/charts7",
+              "wotDesignUi1"
             ]
           },
           "description": "%uiDescription%"

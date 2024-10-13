@@ -5,14 +5,14 @@ const fg = require('fast-glob')
 
 export async function run() {
   const folder = 'src/ui'
-  const lib = '@mantine/charts'
-  const name = 'mantineCharts7'
-  const isReact = true
+  const lib = 'wot-design-uni'
+  const name = 'wotDesignUni1'
+  const isReact = false
   const isHyphen = !isReact  /** 生成的模板中的使用是 true ? a-affix : AAfix */
   const url = path.resolve(root, `${folder}/${name}`)
   const entry = await fg(['**/*.json'], { dot: true, cwd: url })
   const imports = entry.map((_url: string) => `import ${_url.split('.')[0]} from './${_url}'`)
-  let prefix = ''
+  let prefix = 'wd'
   const map = entry.map((_url: string) => {
     let tagName = `${_url.split('.')[0]}`
     if (isHyphen) {
