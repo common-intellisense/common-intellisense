@@ -475,6 +475,7 @@ export type ComponentsConfig = ComponentsConfigItem[]
 export function componentsReducer(options: ComponentOptions): ComponentsConfig {
   const { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
   const isZh = getLocale().includes('zh')
+
   if (!isReact && prefix) {
     return [
       {

@@ -33,6 +33,7 @@ export interface SlotItem {
   description?: string
   description_zh?: string
   params?: string
+  version?: string
 }
 export type Slots = SlotItem[]
 

@@ -135,7 +135,7 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
       if (componentsNames) {
         for (const componentsName of componentsNames) {
           const { prefix, data, directives, lib } = componentsName
-          if (optionsComponents.libs.includes(lib))
+          if (optionsComponents.libs.includes(lib) && optionsComponents.prefix.includes(prefix))
             continue
           optionsComponents.libs.push(lib)
           if (!optionsComponents.prefix.includes(prefix))
