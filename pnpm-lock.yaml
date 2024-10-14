@@ -42,8 +42,8 @@ importers:
         specifier: ^3.1.1
         version: 3.1.1
       '@vue-vine/compiler':
-        specifier: ^0.1.21
-        version: 0.1.21
+        specifier: ^0.1.22
+        version: 0.1.22
       '@vue/compiler-sfc':
         specifier: 3.3.4
         version: 3.3.4
@@ -904,8 +904,8 @@ packages:
     engines: {node: '>= 20'}
     hasBin: true
 
-  '@vue-vine/compiler@0.1.21':
-    resolution: {integrity: sha512-+7ZYg+cQD3HHd9rlryN5L9R3dz+4wgwyQ4GvV3jEEynH9VglWJ8a7bZz/uT25KQ8vUub3hsJg0Qps3QxdGC66w==}
+  '@vue-vine/compiler@0.1.22':
+    resolution: {integrity: sha512-NDdn5cp1fXwA430mi3E3tmOrGp3tnVi/7re7CRdPJcRV54MDHxIbxJtzNF/f4UQNp8vy3c4RVcXZnwPB0r3ptQ==}
 
   '@vue/compiler-core@3.3.4':
     resolution: {integrity: sha512-cquyDNvZ6jTbf/+x+AgM2Arrp6G4Dzbb0R64jiG804HRMfRiFXWI6kqUVqZ6ZR0bQhIoQjB4+2bhNtVwndW15g==}
@@ -4221,7 +4221,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vue-vine/compiler@0.1.21':
+  '@vue-vine/compiler@0.1.22':
     dependencies:
       '@babel/parser': 7.25.6
       '@babel/types': 7.25.8
