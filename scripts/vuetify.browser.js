@@ -58,8 +58,9 @@ function run() {
   for (let i = 0; i < slotsChildren.length; i += 3) {
     const item = slotsChildren[i]
     const name = item.children[0].textContent.replace('*', '').trim()
+    const params = item.nextElementSibling?.textContent.trim()
     const description = item.nextElementSibling?.nextElementSibling?.textContent.trim()
-    slots.push({ name, description, description_zh: description })
+    slots.push({ name, description, description_zh: description, params: params === 'never' ? '' : params })
   }
   for (let i = 0; i < exposedChildren.length; i += 3) {
     const item = exposedChildren[i]
@@ -73,8 +74,9 @@ function run() {
       detail
     })
   }
+  console.log({result})
 
-  copyToClipboard(JSON.stringify(result, null, 2))
+  copyToClipboard(JSON.stringify(result.slots, null, 2))
 
   return result
 }
@@ -146,3 +148,6 @@ function copyToClipboard(text) {
   document.execCommand('copy');
   document.body.removeChild(textArea);
 }
+
+
+
