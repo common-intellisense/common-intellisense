@@ -711,7 +711,7 @@ export function registerCodeLensProviderFn() {
               title: `${i === 0 ? 'Slots: ' : ''}${name}`,
               tooltip: isZh ? description_zh : description,
               command: 'common-intellisense.slots',
-              arguments: [child, name, offset],
+              arguments: [child, name, offset, s],
             }))
           })
         })

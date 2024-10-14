@@ -10,6 +10,7 @@ import { isVine, isVue, toCamel } from './ui/utils'
 import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getIsShowSlots, getUiDeps } from './ui-utils'
 import { cacheFetch, localCacheUri } from './fetch'
+import { prettierType } from './prettier-type'
 
 const defaultExclude = getConfiguration('common-intellisense.exclude')
 const filterId = createFilter(defaultExclude)
@@ -198,7 +199,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // 监听pkg变化
   if (getIsShowSlots()) {
-    context.subscriptions.push(registerCommand('common-intellisense.slots', (child, name, offset) => {
+    context.subscriptions.push(registerCommand('common-intellisense.slots', (child, name, offset, detail) => {
       const UiCompletions = getUiCompletions()
       const activeText = getActiveText()
       if (!activeText)
@@ -217,6 +218,9 @@ export async function activate(context: vscode.ExtensionContext) {
       let slotName = `#${name}`
       if (child.range)
         slotName = `v-slot:${name}`
+      if (detail.params) {
+        slotName += '="slotProps"'
+      }
 
       if (lastChild) {
         if (isVine() && lastChild.codegenNode) {
@@ -520,7 +524,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (parent) {
         const parentTag = parent.tag || parent.name
         if (UiCompletions) {
-          const suggestions = UiCompletions[toCamel(parentTag)[0].toUpperCase() + toCamel(parentTag).slice(1)]?.suggestions
+          const suggestions = UiCompletions[parentTag[0].toUpperCase() + toCamel(parentTag).slice(1)]?.suggestions
           if (suggestions && suggestions.length) {
             data.forEach((child) => {
               const label = typeof child.label === 'string' ? child.label.split(' ')[0] : child.label.label.split(' ')[0]
@@ -657,7 +661,7 @@ export async function activate(context: vscode.ExtensionContext) {
           const data = optionsComponents.data.map(c => c()).flat()
           if (!data?.length || !word)
             return createHover('')
-          const tag = toCamel(result.tag)[0].toUpperCase() + toCamel(result.tag).slice(1)
+          const tag = result.tag[0].toUpperCase() + toCamel(result.tag).slice(1)
           const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
           if (!target)
             return
@@ -666,6 +670,37 @@ export async function activate(context: vscode.ExtensionContext) {
 
           if (tableDocument)
             return createHover(tableDocument)
+        }
+        else if (result.type === 'props' && result.tag === 'template') {
+          const parentTag = result.parent.tag
+          if (!parentTag)
+            return
+          const name = parentTag[0].toUpperCase() + toCamel(parentTag).slice(1)
+          const slotName = result.props.find((item: any) => item.name === 'slot').arg.content
+          const from = uiDeps?.[name]
+          const cacheMap = getCacheMap()
+          if (from && cacheMap.size > 2) {
+            // 存在多个 UI 库
+            const nameReg = new RegExp(`${toCamel(nameMap[from] || from)}\\d+$`)
+            const keys = Array.from(cacheMap.keys())
+            const targetKey = keys.find(k => nameReg.test(k))!
+            const targetValue = cacheMap.get(targetKey)! as PropsConfig
+            UiCompletions = targetValue
+          }
+          const target = await findDynamicComponent(name, {}, UiCompletions, componentsPrefix, from)
+          if (!target)
+            return
+          const targetSlot = target.rawSlots?.find(s => s.name === slotName)
+          const params = targetSlot?.params
+          if (!params)
+            return
+          const md = createMarkdownString()
+          md.appendMarkdown(`## ${target.lib} [${targetSlot.name}]\n`)
+          md.appendMarkdown(`#### ${isZh ? '说明' : 'description'}: ${isZh ? targetSlot.description_zh : targetSlot.description}\n`)
+          md.appendMarkdown(`#### ${isZh ? '插槽 props' : 'slotProps'}: \n`)
+          const typeString = `interface SlotProps ${params}`
+          md.appendCodeblock(prettierType(typeString), 'typescript')
+          return createHover(md)
         }
         else if (!result.propName) {
           return
