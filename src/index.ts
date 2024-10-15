@@ -218,9 +218,8 @@ export async function activate(context: vscode.ExtensionContext) {
       let slotName = `#${name}`
       if (child.range)
         slotName = `v-slot:${name}`
-      if (detail.params) {
+      if (detail.params)
         slotName += '="slotProps"'
-      }
 
       if (lastChild) {
         if (isVine() && lastChild.codegenNode) {
