@@ -248,8 +248,8 @@ async function getOthers() {
             optionsComponents.data.push(data)
             const libWithVersion = key.slice(0, -'Components'.length)
             optionsComponents.directivesMap[libWithVersion] = directives
-            cacheMap.set(key, componentsName)
           }
+          cacheMap.set(key, componentsNames)
         }
         else {
           const completion = UI[key]?.()
