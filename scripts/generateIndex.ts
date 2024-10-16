@@ -5,8 +5,8 @@ const fg = require('fast-glob')
 
 export async function run() {
   const folder = 'src/ui'
-  const lib = 'wot-design-uni'
-  const name = 'wotDesignUni1'
+  const lib = 'xxxi'
+  const name = 'xx1'
   const isReact = false
   const isHyphen = !isReact  /** 生成的模板中的使用是 true ? a-affix : AAfix */
   const url = path.resolve(root, `${folder}/${name}`)
