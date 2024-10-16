@@ -128,7 +128,7 @@ export function propsReducer(options: PropsOptions) {
             if (Array.isArray(item.typeDetail![key])) {
               return result += key[0] === '$'
                 ? `\ntype ${key.slice(1).replace(/-(\w)/g, v => v.toUpperCase())} = \n${item.typeDetail![key].map((typeItem: any) => `${typeItem.name} /*${typeItem.description}*/`).join('\n| ')}\n\n`
-                : `\ninterface ${key} {\n  ${item.typeDetail![key].map((typeItem: any) => `${typeItem.name}${typeItem.optional ? '?' : ''}: ${typeItem.type} /*${typeItem.description}${typeItem.default ? ` 默认值: ***${typeItem.default.replace(/\n/g, '')}***` : ''}*/`).join('\n  ')}\n}`
+                : `\ninterface ${key} {\n  ${item.typeDetail![key].map((typeItem: any) => `${typeItem.name}${typeItem.optional ? '?' : ''}: ${typeItem.type} /*${typeItem.description}${String(typeItem.default) ? ` 默认值: ***${String(typeItem.default).replace(/\n/g, '')}***` : ''}*/`).join('\n  ')}\n}`
             }
             return result += `\n${item.typeDetail![key].split('|').join('\n|')}`
           }, '')}`
