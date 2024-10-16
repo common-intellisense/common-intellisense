@@ -333,10 +333,10 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
       if (isVue && lineText.slice(character, character + 6) !== '.value' && !/\.value\.?$/.test(lineText.slice(0, character)))
-        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.value`, documentation: `${refName}.value`, preselect: true, sortText: 'a' }))
+        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.value`, documentation: `${refName}.value`, preselect: true, sortText: '0' }))
 
       if (!isVue && lineText.slice(character, character + 8) !== '.current' && !/\.current\.?$/.test(lineText.slice(0, character)))
-        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.current`, documentation: `${refName}.current`, preselect: true, sortText: 'a' }))
+        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.current`, documentation: `${refName}.current`, preselect: true, sortText: '0' }))
     }
 
     if (result.parent && result.tag === 'template') {
@@ -421,7 +421,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return createCompletionItem({
               content,
               detail,
-              sortText: 'a',
+              sortText: '0',
               type: vscode.CompletionItemKind.Enum,
               snippet,
               params: [uiName, item.name],
@@ -477,7 +477,8 @@ export async function activate(context: vscode.ExtensionContext) {
                   content: p.trim(),
                   snippet: p.trim().replace(/'`/g, ''),
                   documentation: item.documentation,
-                  sortText: 'a',
+                  sortText: '0',
+                  preselect: true,
                   detail: item.detail,
                   type: item.kind,
                 }))
@@ -491,7 +492,7 @@ export async function activate(context: vscode.ExtensionContext) {
               snippet: item.snippet,
               documentation: item.documentation,
               detail: item.detail,
-              sortText: 'a',
+              sortText: '0',
               preselect: true,
               type: item.kind,
             }))))

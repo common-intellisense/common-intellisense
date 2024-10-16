@@ -186,9 +186,9 @@ export function propsReducer(options: PropsOptions) {
           type,
           documentation,
           preselect: true,
-          sortText: 'a',
+          sortText: '0',
           params: [uiName, key.replace(/^:/, '')],
-          propType: value.type,
+          propType: Array.isArray(value.value) ? value.value.join(' / ') : value.type,
           command: {
             command: 'editor.action.triggerSuggest', // 这个命令会触发代码提示
             title: 'Trigger Suggest',
@@ -264,7 +264,7 @@ export function propsReducer(options: PropsOptions) {
           documentation.isTrusted = true
           documentation.supportHtml = true
           documentation.appendMarkdown(detail.join('\n\n'))
-          return proxyCreateCompletionItem({ content, snippet, documentation, type: vscode.CompletionItemKind.Event, sortText: 'b', preselect: true, params: [uiName, name] })
+          return proxyCreateCompletionItem({ content, snippet, documentation, type: vscode.CompletionItemKind.Event, sortText: '1', preselect: true, params: [uiName, name] })
         },
         )
       }
@@ -296,7 +296,7 @@ export function propsReducer(options: PropsOptions) {
 
         documentation.appendMarkdown(detail.join('\n\n'))
         const hover = createHover(documentation)
-        return proxyCreateCompletionItem({ content: method.name, snippet: `${name.endsWith('()') ? name : `${name}()`}$1`, documentation, type: 1, sortText: 'b', params: uiName, hover })
+        return proxyCreateCompletionItem({ content: method.name, snippet: `${name.endsWith('()') ? name : `${name}()`}$1`, documentation, type: 1, sortText: '0', params: uiName, hover })
       }))
     }
 
@@ -325,7 +325,7 @@ export function propsReducer(options: PropsOptions) {
 
         documentation.appendMarkdown(details.join('\n\n'))
         const hover = createHover(documentation)
-        return proxyCreateCompletionItem({ content: expose.name, snippet: expose.detail.startsWith('()') ? `${expose.name}()` : expose.name, detail, documentation, type: 1, sortText: 'b', params: uiName, hover })
+        return proxyCreateCompletionItem({ content: expose.name, snippet: expose.detail.startsWith('()') ? `${expose.name}()` : expose.name, detail, documentation, type: 1, sortText: '0', params: uiName, hover })
       }))
     }
 
@@ -562,7 +562,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib,
             importWay,
           }
-          return createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: 'a', params: fixParams, demo })
+          return createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
       },
       {
@@ -645,7 +645,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             importWay,
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]
-          return createCompletionItem({ content: _content, detail: description, snippet, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: 'a', params: fixParams, demo })
+          return createCompletionItem({ content: _content, detail: description, snippet, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
       },
     ]
@@ -729,7 +729,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         dynamicLib,
         importWay,
       }
-      const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: 'a', params: fixParams, demo })
+      const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
       return completionItem
     }),
   }]
