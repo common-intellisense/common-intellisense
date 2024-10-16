@@ -194,7 +194,7 @@ export async function fetchFromRemoteUrls() {
 
 export async function fetchFromRemoteNpmUrls() {
   // 读区 urls
-  const uris = getConfiguration('common-intellisense.remoteNpmUris') as string[]
+  const uris = getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[]
   if (!uris.length)
     return
 
@@ -203,7 +203,16 @@ export async function fetchFromRemoteNpmUrls() {
   if (isRemoteUrisInProgress)
     return
 
-  const fixedUris = (await Promise.all(uris.map(async (name) => {
+  const fixedUris = (await Promise.all(uris.map(async (item) => {
+    let name = ''
+    let resource = ''
+    if (typeof item === 'string') {
+      name = item
+    }
+    else {
+      name = item.name
+      resource = item.resource || ''
+    }
     let version = ''
     logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
     try {
@@ -223,8 +232,8 @@ export async function fetchFromRemoteNpmUrls() {
     if (cachedVersion === version)
       return ''
     tempCache.set(key, version)
-    return [name, version]
-  }))).filter(Boolean)
+    return [name, version, resource]
+  }))).filter(Boolean) as [string, string, undefined | string][]
 
   if (!fixedUris.length)
     return
@@ -244,7 +253,7 @@ export async function fetchFromRemoteNpmUrls() {
   logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
 
   try {
-    (await Promise.all(fixedUris.map(([name, version]) => {
+    (await Promise.all(fixedUris.map(([name, version, privateResource]) => {
       const key = `${name}@${version}`
       if (cacheFetch.has(key)) {
         const scriptContent = cacheFetch.get(key)
@@ -253,7 +262,7 @@ export async function fetchFromRemoteNpmUrls() {
         runModule(module)
         return module.exports
       }
-      return fetch({ name, version })
+      return fetch({ name, version, privateResource })
     }))).forEach((moduleExports) => {
       const temp: any = {}
       const isZh = getLocale()!.includes('zh')
