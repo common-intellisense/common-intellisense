@@ -141,7 +141,11 @@ export function propsReducer(options: PropsOptions) {
 
         let content = ''
         let snippet = ''
-        if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'false') {
+        if (Array.isArray(value.value)) {
+          content = key
+          snippet = `${key}="\${1|${value.value.map((i: string) => i.replace(/['`\s]/g, '').replace(/,/g, '\\,')).join(',')}|}"`
+        }
+        else if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'false') {
           content = snippet = key
         }
         else if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'true') {
@@ -173,7 +177,7 @@ export function propsReducer(options: PropsOptions) {
           else
             snippet = `${key}="\${1}"`
         }
-        const details = `${content}\n-  ${isZh ? (value.description_zh || value.description) : value.description}\n-  ${value.default ? `  ${isZh ? '默认' : 'default'}：${value.default.replace(/\n/g, '')}` : ''}`
+        const details = `${isZh ? '***属性***' : '***prop***'}: ${content}\n-  ${isZh ? `***描述***: ${value.description_zh || value.description}` : `***description***: ${value.description}`}\n-  ${value.default ? `  ${isZh ? '***默认***' : '***default***'}: ${value.default.replace(/\n/g, '')}` : ''}\n-  ${value.type ? `  ${isZh ? '***类型***' : '***type***'}: ${value.type.replace(/\n/g, '')}` : ''}`
         content += `  ${isZh ? (value.description_zh || value.description) : value.description}  ${value.default ? `  ${isZh ? '默认' : 'default'}：${value.default.replace(/\n/g, '')}` : ''}`
         data.push(createCompletionItem({
           content,
