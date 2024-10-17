@@ -1,4 +1,5 @@
 import fsp from 'node:fs/promises'
+import path from 'node:path'
 import * as vscode from 'vscode'
 import { parse } from '@vue/compiler-sfc'
 import type { SFCTemplateBlock } from '@vue/compiler-sfc'
