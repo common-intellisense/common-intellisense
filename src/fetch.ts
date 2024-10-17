@@ -124,7 +124,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
 
 const tempCache = new Map()
 export async function fetchFromRemoteUrls() {
-  // 读区 urls
+  // 读取 urls
   const uris = getConfiguration('common-intellisense.remoteUris') as string[]
   if (!uris.length)
     return
