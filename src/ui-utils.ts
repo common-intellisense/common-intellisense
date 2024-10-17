@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { findUp } from 'find-up'
 import type * as vscode from 'vscode'
 import { getConfiguration } from '@vscode-use/utils'
-import { UINames as UINamesMap, nameMap } from './constants'
+import { nameMap } from './constants'
 // import { componentsReducer, propsReducer } from './ui/utils'
 import type { ComponentOptions, PropsOptions } from './ui/utils'
 
@@ -28,6 +28,7 @@ export const getAlias = () => getConfiguration('common-intellisense.alias') as R
 export const getSelectedUIs = () => getConfiguration('common-intellisense.ui') as string[]
 
 const UIIMPORT_REG = /import\s+\{([^}]+)\}\s+from\s+['"]([^"']+)['"]/g
+const UIIMPORTDefault_REG = /import\s+(\S+)\s+from\s+['"]([^"']+)['"]/g
 export function getUiDeps(text: string) {
   if (!text)
     return
@@ -37,12 +38,17 @@ export function getUiDeps(text: string) {
     if (!match)
       continue
     const from = match[2]
-    if (!UINamesMap.includes(from))
-      continue
     const _deps = match[1].trim().replace(/\s+/g, ' ').split(/,\s*/)
     _deps.forEach((d) => {
       deps[d] = from
     })
+  }
+  for (const match of text.matchAll(UIIMPORTDefault_REG)) {
+    if (!match)
+      continue
+    const from = match[2]
+    const key = match[1]
+    deps[key] = from
   }
   return deps
 }
@@ -77,5 +83,5 @@ export async function getIntellisenseConfig(name: string, cwd?: string) {
       ...uiConfigObject,
     }
   }
-  catch {}
+  catch { }
 }

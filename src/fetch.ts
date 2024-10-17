@@ -15,7 +15,7 @@ export const localCacheUri = path.resolve(__dirname, 'mapping.json')
 let isCommonIntellisenseInProgress = false
 let isRemoteUrisInProgress = false
 let isLocalUrisInProgress = false
-const retry = 1
+const retry = 3
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
 const isZh = getLocale()?.includes('zh')
 const { fetch } = fetchFromCjs(cacheFetch)
@@ -26,7 +26,8 @@ export const getLocalCache = new Promise((resolve) => {
       try {
         const oldMap = JSON.parse(res) as [string, string][]
         oldMap.forEach(([key, value]) => {
-          cacheFetch.set(key, value)
+          if (value)
+            cacheFetch.set(key, value)
         })
       }
       catch (error) {
@@ -165,7 +166,8 @@ export async function fetchFromRemoteUrls() {
     scriptContents.forEach(([uri, scriptContent]) => {
       const module: any = {}
       const runModule = new Function('module', scriptContent)
-      cacheFetch.set(uri, scriptContent)
+      if (scriptContent)
+        cacheFetch.set(uri, scriptContent)
       runModule(module)
       const moduleExports = module.exports
       const temp: any = {}
@@ -333,7 +335,8 @@ export async function fetchFromLocalUris() {
       }
       const module: any = {}
       const scriptContent = await fsp.readFile(uri, 'utf-8')
-      cacheFetch.set(uri, scriptContent)
+      if (scriptContent)
+        cacheFetch.set(uri, scriptContent)
       const runModule = new Function('module', scriptContent)
       runModule(module)
       const moduleExports = module.exports

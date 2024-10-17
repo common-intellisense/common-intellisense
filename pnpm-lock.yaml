@@ -18,8 +18,8 @@ importers:
         specifier: ^5.1.2
         version: 5.1.2(rollup@3.29.4)
       '@simon_he/fetch-npm-cjs':
-        specifier: ^0.0.8
-        version: 0.0.8
+        specifier: ^0.0.9
+        version: 0.0.9
       '@simon_he/latest-version':
         specifier: ^0.1.1
         version: 0.1.1
@@ -618,8 +618,8 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm-cjs@0.0.8':
-    resolution: {integrity: sha512-qaCUIBAxF8ETQDH/QiDRyagCHnwrFc+68+oWkKgECUEYgUwxNsVQakaJN7i85q6hUqy2GYTGartrkNG+RS9qyg==}
+  '@simon_he/fetch-npm-cjs@0.0.9':
+    resolution: {integrity: sha512-DnNVFPocTssrMwHcqqdnUJ9wqxDyFKcG8Bm7e5XBu9Th95ybODP0RF/makGD+yh+vk/D5oiBnisqlqfpkn4IcA==}
     hasBin: true
 
   '@simon_he/latest-version@0.1.1':
@@ -3865,7 +3865,7 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm-cjs@0.0.8': {}
+  '@simon_he/fetch-npm-cjs@0.0.9': {}
 
   '@simon_he/latest-version@0.1.1': {}
 

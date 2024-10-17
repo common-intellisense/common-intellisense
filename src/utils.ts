@@ -946,10 +946,10 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
         target = t
         break
       }
-      else if (t) {
-        target = t
-        break
-      }
+      // else if (t) {
+      //   target = t
+      //   break
+      // }
     }
   }
   return target
