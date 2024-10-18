@@ -241,9 +241,18 @@ export function propsReducer(options: PropsOptions) {
           let content
           if (isVue) {
             const _name = name.split(':').map((item: string) =>
-              item[0].toUpperCase() + item.slice(1),
+              item[0] + item.slice(1),
             ).join('').replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
-            snippet = `${name}="\${1:on${_name}}"`
+            const snippetEventNameOptions = [
+              ...new Set([
+                _name,
+                !_name.startsWith('on') ? `on${_name[0].toUpperCase()}${_name.slice(1)}` : _name,
+                `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
+                `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
+                `${_name}Handler`,
+              ]),
+            ]
+            snippet = `${name}="\${1|${snippetEventNameOptions.join(',')}|}"`
             content = `@${name}="on${_name}"`
           }
           else if (lan === 'svelte') {
@@ -251,11 +260,18 @@ export function propsReducer(options: PropsOptions) {
             content = `${name}={${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}`
           }
           else {
-            let _name = name
-            if (!_name.startsWith('on'))
-              _name = `on${_name[0].toUpperCase()}${_name.slice(1)}`
+            const _name = name
+            // if (!_name.startsWith('on'))
+            //   _name = `on${_name[0].toUpperCase()}${_name.slice(1)}`
+            const snippetEventNameOptions = [...new Set([
+              _name,
+              !_name.startsWith('on') ? `on${_name[0].toUpperCase()}${_name.slice(1)}` : _name,
+              `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
+              `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
+              `${_name}Handler`,
+            ])]
 
-            snippet = `${_name}={\${1:${_name}}}`
+            snippet = `${_name}={\${1|${snippetEventNameOptions.join(',')}|}}`
             content = `${_name}={${_name}}`
           }
 
