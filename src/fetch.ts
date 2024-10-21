@@ -195,7 +195,7 @@ export async function fetchFromRemoteUrls() {
 }
 
 export async function fetchFromRemoteNpmUrls() {
-  // 读区 urls
+  // 读取 urls
   const uris = getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[]
   if (!uris.length)
     return
