@@ -4,7 +4,7 @@ import path from 'node:path'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
 import { latestVersion } from '@simon_he/latest-version'
-import { fetchFromCjs } from '@simon_he/fetch-npm-cjs'
+import { fetchWithPack } from '@simon_he/fetch-npm'
 import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from './ui-find'
 
@@ -18,7 +18,7 @@ let isLocalUrisInProgress = false
 const retry = 3
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
 const isZh = getLocale()?.includes('zh')
-const { fetch } = fetchFromCjs(cacheFetch)
+
 export const getLocalCache = new Promise((resolve) => {
   if (existsSync(localCacheUri)) {
     fsp.readFile(localCacheUri, 'utf-8').then((res) => {
@@ -91,12 +91,16 @@ export async function fetchFromCommonIntellisense(tag: string) {
       logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
     }
 
-    const moduleExports = await fetch({
+    const scriptContent = await fetchWithPack({
       name,
-      retry,
-      timeout,
-      version,
+      dist: 'index.cjs',
     })
+    const module: any = {}
+    const runModule = new Function('module', scriptContent)
+    if (scriptContent)
+      cacheFetch.set(key, scriptContent)
+    runModule(module)
+    const moduleExports = module.exports
 
     const result: any = {}
     for (const key in moduleExports) {
@@ -207,13 +211,11 @@ export async function fetchFromRemoteNpmUrls() {
 
   const fixedUris = (await Promise.all(uris.map(async (item) => {
     let name = ''
-    let resource = ''
     if (typeof item === 'string') {
       name = item
     }
     else {
       name = item.name
-      resource = item.resource || ''
     }
     let version = ''
     logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
@@ -234,7 +236,7 @@ export async function fetchFromRemoteNpmUrls() {
     if (cachedVersion === version)
       return ''
     tempCache.set(key, version)
-    return [name, version, resource]
+    return [name, version]
   }))).filter(Boolean) as [string, string, undefined | string][]
 
   if (!fixedUris.length)
@@ -255,17 +257,20 @@ export async function fetchFromRemoteNpmUrls() {
   logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
 
   try {
-    (await Promise.all(fixedUris.map(([name, version, privateResource]) => {
+    (await Promise.all(fixedUris.map(async ([name, version]) => {
       const key = `${name}@${version}`
-      if (cacheFetch.has(key)) {
-        const scriptContent = cacheFetch.get(key)
-        const module: any = {}
-        const runModule = new Function('module', scriptContent)
-        runModule(module)
-        return module.exports
-      }
-      return fetch({ name, version, privateResource })
-    }))).forEach((moduleExports) => {
+      if (cacheFetch.has(key))
+        return cacheFetch.get(key)
+
+      const scriptContent = await fetchWithPack({ name, dist: 'index.cjs' })
+      if (scriptContent)
+        cacheFetch.set(key, scriptContent)
+      return scriptContent
+    }))).forEach((scriptContent) => {
+      const module: any = {}
+      const runModule = new Function('module', scriptContent)
+      runModule(module)
+      const moduleExports = module.exports
       const temp: any = {}
       const isZh = getLocale()!.includes('zh')
       for (const key in moduleExports) {

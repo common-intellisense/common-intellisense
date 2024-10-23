@@ -80,6 +80,7 @@ export function propsReducer(options: PropsOptions) {
       const data: SubCompletionItem[] = [
         'id',
         isVue ? 'class' : 'className',
+        'ref',
       ].map(item => proxyCreateCompletionItem({ content: item, snippet: `${item}="\${1:}"`, type: 5, params: [] }))
 
       if (isVue)

@@ -181,7 +181,7 @@
     "@antfu/eslint-config": "^2.27.3",
     "@babel/types": "^7.25.8",
     "@rollup/pluginutils": "^5.1.2",
-    "@simon_he/fetch-npm-cjs": "^0.0.9",
+    "@simon_he/fetch-npm": "^0.0.2",
     "@simon_he/latest-version": "^0.1.1",
     "@types/node": "^18.19.55",
     "@types/vscode": "1.77.0",
