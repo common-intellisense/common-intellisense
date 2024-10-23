@@ -94,6 +94,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
     const scriptContent = await fetchWithPack({
       name,
       dist: 'index.cjs',
+      retry,
     })
     const module: any = {}
     const runModule = new Function('module', scriptContent)

@@ -18,11 +18,8 @@ importers:
         specifier: ^5.1.2
         version: 5.1.2(rollup@3.29.4)
       '@simon_he/fetch-npm':
-        specifier: ^0.0.2
-        version: 0.0.2
-      '@simon_he/fetch-npm-cjs':
-        specifier: ^0.0.9
-        version: 0.0.9
+        specifier: ^0.0.3
+        version: 0.0.3
       '@simon_he/latest-version':
         specifier: ^0.1.1
         version: 0.1.1
@@ -68,9 +65,6 @@ importers:
       find-up:
         specifier: ^6.3.0
         version: 6.3.0
-      jiti:
-        specifier: ^2.3.3
-        version: 2.3.3
       ofetch:
         specifier: ^1.4.1
         version: 1.4.1
@@ -624,12 +618,8 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm-cjs@0.0.9':
-    resolution: {integrity: sha512-DnNVFPocTssrMwHcqqdnUJ9wqxDyFKcG8Bm7e5XBu9Th95ybODP0RF/makGD+yh+vk/D5oiBnisqlqfpkn4IcA==}
-    hasBin: true
-
-  '@simon_he/fetch-npm@0.0.2':
-    resolution: {integrity: sha512-7IgWEm8HJAL8xl8FAeGvM2PMhy8F5oaP1ymThKwOD9FVuQX9KBAD8qPdws8jZo84pNDUsSfple0ag79oRabhaw==}
+  '@simon_he/fetch-npm@0.0.3':
+    resolution: {integrity: sha512-fVSxmoDl8BTy7BCDgPfy6xAE2arGCrJiqGvlp/Rm2a0qROhTIS83Lr1EAQ36razr8NONdR6k0hMm9c+68GiScw==}
     hasBin: true
 
   '@simon_he/latest-version@0.1.1':
@@ -2138,10 +2128,6 @@ packages:
 
   jiti@1.21.6:
     resolution: {integrity: sha512-2yTgeWTWzMWkHu6Jp9NKgePDaYHbntiwvYuuJLbbN9vl7DC9DvXKOB2BC3ZZ92D3cvV/aflH0osDfwpHepQ53w==}
-    hasBin: true
-
-  jiti@2.3.3:
-    resolution: {integrity: sha512-EX4oNDwcXSivPrw2qKH2LB5PoFxEvgtv2JgwW0bU858HoLQ+kutSvjLMUqBd0PeJYEinLWhoI9Ol0eYMqj/wNQ==}
     hasBin: true
 
   joycon@3.0.1:
@@ -3879,9 +3865,7 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm-cjs@0.0.9': {}
-
-  '@simon_he/fetch-npm@0.0.2': {}
+  '@simon_he/fetch-npm@0.0.3': {}
 
   '@simon_he/latest-version@0.1.1': {}
 
@@ -5619,8 +5603,6 @@ snapshots:
       '@pkgjs/parseargs': 0.11.0
 
   jiti@1.21.6: {}
-
-  jiti@2.3.3: {}
 
   joycon@3.0.1: {}
 
