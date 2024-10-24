@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { fetchWithPack } from '@simon_he/fetch-npm'
+import { latestVersion } from '@simon_he/latest-version'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
-import { latestVersion } from '@simon_he/latest-version'
-import { fetchWithPack } from '@simon_he/fetch-npm'
 import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from './ui-find'
 

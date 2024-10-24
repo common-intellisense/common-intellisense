@@ -1,11 +1,11 @@
-import fsp from 'node:fs/promises'
-import { findUp } from 'find-up'
-import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFiles } from '@vscode-use/utils'
 import type * as vscode from 'vscode'
-import { UINames as configUINames } from './constants'
-import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
 import type { ComponentsConfig, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
+import fsp from 'node:fs/promises'
+import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFiles } from '@vscode-use/utils'
+import { findUp } from 'find-up'
+import { UINames as configUINames } from './constants'
 import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
+import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
 
 export interface OptionsComponents {
   prefix: string[]
@@ -93,7 +93,7 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
       if (uiName in alias) {
         const v = alias[uiName]
         const m = v.match(/([^1-9^]+)\^?(\d)/)!
-        _version = m[2]
+        _version = m[2] || _version
         originUisName.push(`${uiName}${_version}`)
         uiName = m[1]
       }

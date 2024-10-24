@@ -1,16 +1,16 @@
-import fsp from 'node:fs/promises'
-import * as vscode from 'vscode'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
-import { CreateWebview } from '@vscode-use/createwebview'
-import { createFilter } from '@rollup/pluginutils'
-import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
-import { nameMap } from './constants'
 import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
-import { isVine, isVue, toCamel } from './ui/utils'
-import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
-import { getIsShowSlots, getUiDeps } from './ui-utils'
+import fsp from 'node:fs/promises'
+import { createFilter } from '@rollup/pluginutils'
+import { CreateWebview } from '@vscode-use/createwebview'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
+import * as vscode from 'vscode'
+import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
+import { isVine, isVue, toCamel } from './ui/utils'
+import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
+import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
+import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
 
 const defaultExclude = getConfiguration('common-intellisense.exclude')
 const filterId = createFilter(defaultExclude)
@@ -27,7 +27,7 @@ export async function activate(context: vscode.ExtensionContext) {
   logger.info('common-intellisense activate!')
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
-
+  const alias = getAlias()
   if (!isSkip())
     findUI(context, detectSlots)
 
@@ -360,7 +360,13 @@ export async function activate(context: vscode.ExtensionContext) {
       const cacheMap = getCacheMap()
       if (from && cacheMap.size > 2) {
         // 存在多个 UI 库
-        const nameReg = new RegExp(`${toCamel(nameMap[from] || from)}\\d+$`)
+        let fixedFrom = nameMap[from] || from
+        if (fixedFrom in alias) {
+          const v = alias[fixedFrom]
+          fixedFrom = v.replace(/\d+$/, '')
+        }
+
+        const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
         const keys = Array.from(cacheMap.keys())
         const targetKey = keys.find(k => nameReg.test(k))!
         const targetValue = cacheMap.get(targetKey)! as PropsConfig
@@ -465,37 +471,35 @@ export async function activate(context: vscode.ExtensionContext) {
       else if (propName) {
         const r: any[] = []
         if (isValue) {
-          (completionsCallback ?? []).filter((item: any) => hasProps.find((prop: any) => item?.params?.[1] === prop))
-            .filter((item: any) => {
-              const reg = propName === 'bind'
-                ? new RegExp('^:')
-                : new RegExp(`^:?${propName}`)
-              return reg.test(item.label)
-            }).forEach((item: any) => {
-              item.propType?.split('/').forEach((p: string) => {
-                r.push(createCompletionItem({
-                  content: p.trim(),
-                  snippet: p.trim().replace(/'`/g, ''),
-                  documentation: item.documentation,
-                  sortText: '0',
-                  preselect: true,
-                  detail: item.detail,
-                  type: item.kind,
-                }))
-              })
+          (completionsCallback ?? []).filter((item: any) => hasProps.find((prop: any) => item?.params?.[1] === prop)).filter((item: any) => {
+            const reg = propName === 'bind'
+              ? new RegExp('^:')
+              : new RegExp(`^:?${propName}`)
+            return reg.test(item.label)
+          }).forEach((item: any) => {
+            item.propType?.split('/').forEach((p: string) => {
+              r.push(createCompletionItem({
+                content: p.trim(),
+                snippet: p.trim().replace(/'`/g, ''),
+                documentation: item.documentation,
+                sortText: '0',
+                preselect: true,
+                detail: item.detail,
+                type: item.kind,
+              }))
             })
+          })
         }
         else {
-          r.push(...(completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
-            .map((item: any) => createCompletionItem(({
-              content: item.content,
-              snippet: item.snippet,
-              documentation: item.documentation,
-              detail: item.detail,
-              sortText: '0',
-              preselect: true,
-              type: item.kind,
-            }))))
+          r.push(...(completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop)).map((item: any) => createCompletionItem(({
+            content: item.content,
+            snippet: item.snippet,
+            documentation: item.documentation,
+            detail: item.detail,
+            sortText: '0',
+            preselect: true,
+            type: item.kind,
+          }))))
         }
         const events = isVue
           ? []
@@ -681,7 +685,13 @@ export async function activate(context: vscode.ExtensionContext) {
           const cacheMap = getCacheMap()
           if (from && cacheMap.size > 2) {
             // 存在多个 UI 库
-            const nameReg = new RegExp(`${toCamel(nameMap[from] || from)}\\d+$`)
+            let fixedFrom = nameMap[from] || from
+            if (fixedFrom in alias) {
+              const v = alias[fixedFrom]
+              fixedFrom = v.replace(/\d+$/, '')
+            }
+
+            const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
             const keys = Array.from(cacheMap.keys())
             const targetKey = keys.find(k => nameReg.test(k))!
             const targetValue = cacheMap.get(targetKey)! as PropsConfig
@@ -837,7 +847,13 @@ export async function activate(context: vscode.ExtensionContext) {
       const cacheMap = getCacheMap()
       if (from && cacheMap.size > 2) {
         // 存在多个 UI 库
-        const nameReg = new RegExp(`${toCamel(nameMap[from] || from)}\\d+$`)
+        let fixedFrom = nameMap[from] || from
+        if (fixedFrom in alias) {
+          const v = alias[fixedFrom]
+          fixedFrom = v.replace(/\d+$/, '')
+        }
+
+        const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
         const keys = Array.from(cacheMap.keys())
         const targetKey = keys.find(k => nameReg.test(k))!
         const targetValue = cacheMap.get(targetKey)! as PropsConfig

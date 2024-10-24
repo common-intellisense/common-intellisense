@@ -1,18 +1,19 @@
+import type { SFCTemplateBlock } from '@vue/compiler-sfc'
+import type { VineCompilerHooks, VineDiagnostic, VineFileCtx } from '@vue-vine/compiler'
+import type { PropsConfig, PropsConfigItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import * as vscode from 'vscode'
-import { parse } from '@vue/compiler-sfc'
-import type { SFCTemplateBlock } from '@vue/compiler-sfc'
+import { traverse } from '@babel/types'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
 import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
-import { traverse } from '@babel/types'
-import type { VineCompilerHooks, VineDiagnostic, VineFileCtx } from '@vue-vine/compiler'
+import { parse } from '@vue/compiler-sfc'
 import {
   compileVineTypeScriptFile,
   createCompilerCtx,
 } from '@vue-vine/compiler'
+
+import * as vscode from 'vscode'
 import { isVine, isVue, toCamel } from './ui/utils'
-import type { PropsConfig, PropsConfigItem } from './ui/utils'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -934,6 +935,9 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
 }
 
 function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], from?: string) {
+  if (!UiCompletions)
+    return
+
   let target: PropsConfigItem | null = UiCompletions[tag]
   if (target && from && target.lib !== from) {
     target = null
