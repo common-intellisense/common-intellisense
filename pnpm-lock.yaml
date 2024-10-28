@@ -12,14 +12,14 @@ importers:
         specifier: ^3.8.0
         version: 3.8.0(@typescript-eslint/utils@8.11.0(eslint@8.57.1)(typescript@5.6.3))(@vue/compiler-sfc@3.3.4)(eslint@8.57.1)(svelte@4.2.19)(typescript@5.6.3)(vitest@0.29.8)
       '@babel/types':
-        specifier: ^7.25.9
-        version: 7.25.9
+        specifier: ^7.26.0
+        version: 7.26.0
       '@rollup/pluginutils':
         specifier: ^5.1.3
         version: 5.1.3(rollup@3.29.4)
       '@simon_he/fetch-npm':
-        specifier: ^0.0.5
-        version: 0.0.5
+        specifier: ^0.0.6
+        version: 0.0.6
       '@simon_he/latest-version':
         specifier: ^0.1.1
         version: 0.1.1
@@ -39,11 +39,11 @@ importers:
         specifier: 0.1.30
         version: 0.1.30
       '@vscode/vsce':
-        specifier: ^3.2.0
-        version: 3.2.0
+        specifier: ^3.2.1
+        version: 3.2.1
       '@vue-vine/compiler':
-        specifier: ^0.1.22
-        version: 0.1.22
+        specifier: ^0.1.24
+        version: 0.1.24
       '@vue/compiler-sfc':
         specifier: 3.3.4
         version: 3.3.4
@@ -233,8 +233,8 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
-  '@babel/types@7.25.9':
-    resolution: {integrity: sha512-OwS2CM5KocvQ/k7dFJa8i5bNGJP0hXWfVCfDkqRFP1IreH1JDC7wG6eCYCi0+McbfT8OR/kNqsI0UU0xP9H6PQ==}
+  '@babel/types@7.26.0':
+    resolution: {integrity: sha512-Z/yiTPj+lDVnF7lWeKCIJzaIkI0vYO87dMpZ4bg4TDrFe4XXLFWL1TbXU27gBP3QccxV9mZICCrnjnYlJjXHOA==}
     engines: {node: '>=6.9.0'}
 
   '@clack/core@0.3.4':
@@ -638,8 +638,8 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm@0.0.5':
-    resolution: {integrity: sha512-R78PyJQwtQa33l1lF/1GWv01+oThKU5gxukxsq0tu1NTjlVCofHVjnTUnQprAGeaaEneDM811QxUXt2fJ2G5Ng==}
+  '@simon_he/fetch-npm@0.0.6':
+    resolution: {integrity: sha512-q7V04SyVxHnrEJdgcUcmLgGRF8q+Rb3aB2Xb7RzGCgsT3dmxQbIxksxAqcc6t3RXUyxPgduuAAAM7qKoBVoG9w==}
     hasBin: true
 
   '@simon_he/latest-version@0.1.1':
@@ -887,13 +887,13 @@ packages:
   '@vscode/vsce-sign@2.0.4':
     resolution: {integrity: sha512-0uL32egStKYfy60IqnynAChMTbL0oqpqk0Ew0YHiIb+fayuGZWADuIPHWUcY1GCnAA+VgchOPDMxnc2R3XGWEA==}
 
-  '@vscode/vsce@3.2.0':
-    resolution: {integrity: sha512-c/AId5Lp50HTszCBDfXfD/Go2djm6qO/WfedP2Y3BpRP+V+ttr8T0mTvZ8WEyTiBp2EfrYnzYUCx0ocB9mHy4Q==}
+  '@vscode/vsce@3.2.1':
+    resolution: {integrity: sha512-AY9vBjwExakK1c0cI/3NN2Ey0EgiKLBye/fxl/ue+o4q6RZ7N+xzd1jAD6eI6eBeMVANi617+V2rxIAkDPco2Q==}
     engines: {node: '>= 20'}
     hasBin: true
 
-  '@vue-vine/compiler@0.1.22':
-    resolution: {integrity: sha512-NDdn5cp1fXwA430mi3E3tmOrGp3tnVi/7re7CRdPJcRV54MDHxIbxJtzNF/f4UQNp8vy3c4RVcXZnwPB0r3ptQ==}
+  '@vue-vine/compiler@0.1.24':
+    resolution: {integrity: sha512-RZZ7ZFPMWirurY1BEELC4q30cnFu/tUUtZM/pDaPOQhRnEtRFO6GICQlyWX8XelQmPWmxJ4j5MBcyCNNtIeHdA==}
 
   '@vue/compiler-core@3.3.4':
     resolution: {integrity: sha512-cquyDNvZ6jTbf/+x+AgM2Arrp6G4Dzbb0R64jiG804HRMfRiFXWI6kqUVqZ6ZR0bQhIoQjB4+2bhNtVwndW15g==}
@@ -3673,19 +3673,19 @@ snapshots:
 
   '@babel/highlight@7.16.10':
     dependencies:
-      '@babel/helper-validator-identifier': 7.25.7
+      '@babel/helper-validator-identifier': 7.25.9
       chalk: 2.4.2
       js-tokens: 4.0.0
 
   '@babel/parser@7.24.7':
     dependencies:
-      '@babel/types': 7.25.9
+      '@babel/types': 7.26.0
 
   '@babel/parser@7.25.6':
     dependencies:
-      '@babel/types': 7.25.9
+      '@babel/types': 7.26.0
 
-  '@babel/types@7.25.9':
+  '@babel/types@7.26.0':
     dependencies:
       '@babel/helper-string-parser': 7.25.9
       '@babel/helper-validator-identifier': 7.25.9
@@ -3976,7 +3976,7 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm@0.0.5': {}
+  '@simon_he/fetch-npm@0.0.6': {}
 
   '@simon_he/latest-version@0.1.1': {}
 
@@ -4260,7 +4260,7 @@ snapshots:
       '@vscode/vsce-sign-win32-arm64': 2.0.2
       '@vscode/vsce-sign-win32-x64': 2.0.2
 
-  '@vscode/vsce@3.2.0':
+  '@vscode/vsce@3.2.1':
     dependencies:
       '@azure/identity': 4.4.1
       '@vscode/vsce-sign': 2.0.4
@@ -4291,10 +4291,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vue-vine/compiler@0.1.22':
+  '@vue-vine/compiler@0.1.24':
     dependencies:
       '@babel/parser': 7.25.6
-      '@babel/types': 7.25.9
+      '@babel/types': 7.26.0
       '@vue/compiler-dom': 3.5.4
       '@vue/compiler-ssr': 3.5.4
       estree-walker: 2.0.2

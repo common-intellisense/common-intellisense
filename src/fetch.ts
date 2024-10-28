@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { fetchWithPack } from '@simon_he/fetch-npm'
+import { fetchAndExtractPackage } from '@simon_he/fetch-npm'
 import { latestVersion } from '@simon_he/latest-version'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
@@ -91,7 +91,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
       logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
     }
 
-    const scriptContent = await fetchWithPack({
+    const scriptContent = await fetchAndExtractPackage({
       name,
       dist: 'index.cjs',
       retry,
@@ -263,7 +263,7 @@ export async function fetchFromRemoteNpmUrls() {
       if (cacheFetch.has(key))
         return cacheFetch.get(key)
 
-      const scriptContent = await fetchWithPack({ name, dist: 'index.cjs' })
+      const scriptContent = await fetchAndExtractPackage({ name, dist: 'index.cjs' })
       if (scriptContent)
         cacheFetch.set(key, scriptContent)
       return scriptContent
