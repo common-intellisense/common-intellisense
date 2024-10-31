@@ -84,18 +84,20 @@ export async function fetchFromCommonIntellisense(tag: string) {
   }
 
   try {
+    let scriptContent = ''
     if (cacheFetch.has(key)) {
       logger.info(isZh ? `已缓存的 ${key}` : `cachedKey: ${key}`)
+      scriptContent = cacheFetch.get(key)
     }
     else {
       logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
+      scriptContent = await fetchAndExtractPackage({
+        name,
+        dist: 'index.cjs',
+        retry,
+      })
     }
 
-    const scriptContent = await fetchAndExtractPackage({
-      name,
-      dist: 'index.cjs',
-      retry,
-    })
     const module: any = {}
     const runModule = new Function('module', scriptContent)
     if (scriptContent)
