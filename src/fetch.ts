@@ -50,7 +50,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
   let version = ''
   logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
   try {
-    version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000, concurrency: 3 })
+    version = await latestVersion(name, { concurrency: 3 })
   }
   catch (error: any) {
     if (error.message.includes('404 Not Found')) {
@@ -58,7 +58,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
       logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
     }
     else {
-      logger.error(String(error))
+      logger.error(`获取最新版本错误: ${String(error)}`)
     }
     return
   }
@@ -95,6 +95,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
         name,
         dist: 'index.cjs',
         retry,
+        logger,
       })
     }
 
@@ -223,7 +224,7 @@ export async function fetchFromRemoteNpmUrls() {
     let version = ''
     logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
     try {
-      version = await latestVersion(name, { cwd: getRootPath(), timeout: 5000, concurrency: 3 })
+      version = await latestVersion(name, { concurrency: 3 })
     }
     catch (error: any) {
       if (error.message.includes('404 Not Found')) {
@@ -265,7 +266,7 @@ export async function fetchFromRemoteNpmUrls() {
       if (cacheFetch.has(key))
         return cacheFetch.get(key)
 
-      const scriptContent = await fetchAndExtractPackage({ name, dist: 'index.cjs' })
+      const scriptContent = await fetchAndExtractPackage({ name, dist: 'index.cjs', logger })
       if (scriptContent)
         cacheFetch.set(key, scriptContent)
       return scriptContent
