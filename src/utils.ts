@@ -126,6 +126,9 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
     if (!isInPosition(loc, position, offset))
       continue
 
+    if (parent) {
+      child.parent = parent
+    }
     if (tag) {
       const isTag = isInPosition({
         start: loc.start,
@@ -144,6 +147,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
           parent: {
             tag: parent.tag ? parent.tag : 'template',
             props: parent.props || [],
+            parent: parent.parent,
           },
           template: parent,
         }
@@ -166,6 +170,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
               parent: {
                 tag: parent.tag ? parent.tag : 'template',
                 props: parent.props || [],
+                parent: parent.parent,
               },
               isDynamic: prop.name === 'bind',
               isEvent: prop.name === 'on',
@@ -189,6 +194,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
               parent: {
                 tag: parent.tag ? parent.tag : 'template',
                 props: parent.props || [],
+                parent: parent.parent,
               },
               template: parent,
             }
@@ -212,6 +218,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
         parent: {
           tag: parent.tag ? parent.tag : 'template',
           props: parent.props || [],
+          parent: parent.parent,
         },
         template: parent,
       }
@@ -224,6 +231,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
         parent: {
           tag: parent.tag ? parent.tag : 'template',
           props: parent.props || [],
+          parent: parent.parent,
         },
         template: parent,
       }
@@ -266,6 +274,10 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
 
     if (!isInPosition(loc, position))
       continue
+
+    if (parent)
+      child.parent = parent
+
     if (!openingElement && child.attributes) {
       openingElement = {
         name: {
@@ -355,7 +367,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
       children = [children]
 
     if (children && children.length) {
-      const p = child.type === 'JSXElement' ? { name: openingElement.name.name, props: openingElement.attributes } : null
+      const p = child.type === 'JSXElement' ? { ...child, name: openingElement.name.name, props: openingElement.attributes } : null
       const result = jsxDfs(children, p, position) as any
       if (result)
         return result
