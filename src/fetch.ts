@@ -347,12 +347,9 @@ export async function fetchFromLocalUris() {
   })
   try {
     await Promise.all(uris.map(async (uri) => {
-      if (cacheFetch.has(uri)) {
-        Object.assign(result, cacheFetch.get(uri))
-        return
-      }
+      let scriptContent = ''
       const module: any = {}
-      const scriptContent = await fsp.readFile(uri, 'utf-8')
+      scriptContent = await fsp.readFile(uri, 'utf-8')
       if (scriptContent)
         cacheFetch.set(uri, scriptContent)
       const runModule = new Function('module', scriptContent)

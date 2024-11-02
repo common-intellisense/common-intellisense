@@ -503,20 +503,20 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix,
         directives,
         lib,
-        data: () => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
+        data: (parent?: any) => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
           const isVue = isVueOrVine()
           let snippet = ''
           let _content = ''
           let description = ''
           if (typeof content === 'object') {
-            let [requiredProps, index] = getRequireProp(content, 0, isVue)
+            let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
             if (requiredProps.length) {
               if (content?.suggestions?.length === 1) {
                 const suggestionTag = content.suggestions[0]
                 const suggestion = findTargetMap(map, suggestionTag)
                 if (suggestion) {
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue)
+                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
                   snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
@@ -533,7 +533,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
                 const suggestionTag = content.suggestions[0]
                 const suggestion = findTargetMap(map, suggestionTag)
                 if (suggestion) {
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue)
+                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
                   snippet = `<${tag}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
@@ -586,13 +586,13 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix: '',
         directives,
         lib,
-        data: () => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
+        data: (parent?: any) => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
           const isVue = isVueOrVine()
           let snippet = ''
           let _content = ''
           let description = ''
           if (typeof content === 'object') {
-            let [requiredProps, index] = getRequireProp(content, 0, isVue)
+            let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
             const tag = content.name.slice(prefix.length)
             if (requiredProps.length) {
               if (content?.suggestions?.length === 1) {
@@ -600,7 +600,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
                 const suggestion = findTargetMap(map, suggestionTag)
                 if (suggestion) {
                   suggestionTag = suggestion.name.slice(prefix.length)
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue)
+                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
                   snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
@@ -618,7 +618,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
                 const suggestion = findTargetMap(map, suggestionTag)
                 if (suggestion) {
                   suggestionTag = suggestion.name.slice(prefix.length)
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue)
+                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
                   snippet = `<${tag}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
@@ -671,20 +671,20 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
     prefix,
     directives,
     lib,
-    data: () => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
+    data: (parent?: any) => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
       const isVue = isVueOrVine()
       let snippet = ''
       let _content = ''
       let description = ''
       if (typeof content === 'object') {
-        let [requiredProps, index] = getRequireProp(content, 0, isVue)
+        let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
         const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
         if (requiredProps.length) {
           if (content?.suggestions?.length === 1) {
             const suggestionTag = content.suggestions[0]
             const suggestion = findTargetMap(map, suggestionTag)
             if (suggestion) {
-              const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue)
+              const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
               index = _index
               snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
             }
@@ -701,7 +701,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             const suggestionTag = content.suggestions[0]
             const suggestion = findTargetMap(map, suggestionTag)
             if (suggestion) {
-              const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue)
+              const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
               index = _index
               snippet = `<${tag}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
             }
@@ -764,7 +764,7 @@ export function toCamel(s: string) {
   return s.replace(/-(\w)/g, (_, v) => v.toUpperCase())
 }
 
-export function getRequireProp(content: any, index = 0, isVue: boolean): [string[], number] {
+export function getRequireProp(content: any, index = 0, isVue: boolean, parent: any = null): [string[], number] {
   const requiredProps: string[] = []
   if (!content.props)
     return [requiredProps, index]
@@ -772,6 +772,43 @@ export function getRequireProp(content: any, index = 0, isVue: boolean): [string
     const item = content.props[key]
     if (!item.required)
       return
+    let prefix = ''
+    if (item.related && item.related.length && parent) {
+      for (const _item of item.related) {
+        const name = _item.split('.').slice(0, -1).join('.')
+        const prop = _item.split('.').slice(-1)[0]
+        if (name === parent.tag) {
+          const props = parent.props
+          if (props.length) {
+            for (const p of props) {
+              if (p.name === 'bind' && p.arg.content === prop) {
+                prefix = p.exp.content
+                break
+              }
+              else if (p.name === prop) {
+                prefix = p.value.content
+                break
+              }
+            }
+          }
+        }
+        else if (name === parent.parent.tag) {
+          const props = parent.parent.props
+          if (props.length) {
+            for (const p of props) {
+              if (p.name === 'bind' && p.arg.content === prop) {
+                prefix = p.exp.content
+                break
+              }
+              else if (p.name === prop) {
+                prefix = p.value.content
+                break
+              }
+            }
+          }
+        }
+      }
+    }
     let attr = ''
     const v = item.value
     if (key.startsWith(':')) {
@@ -788,7 +825,7 @@ export function getRequireProp(content: any, index = 0, isVue: boolean): [string
         ++index
         if (!v) {
           if (isVue)
-            attr = `${key}="\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
+            attr = `${key}="${prefix ? `${prefix}.` : ''}\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
           else
             attr = `${key.slice(1)}={\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}}`
         }
