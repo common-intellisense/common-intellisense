@@ -10,7 +10,7 @@ import { prettierType } from './prettier-type'
 import { isVine, isVue, toCamel } from './ui/utils'
 import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
-import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './utils'
+import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
 
 const defaultExclude = getConfiguration('common-intellisense.exclude')
 const filterId = createFilter(defaultExclude)

@@ -7,6 +7,8 @@ import { createFakeProgress, getConfiguration, getLocale, getRootPath, message }
 import { ofetch } from 'ofetch'
 import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from './ui-find'
+import { cancellablePromiseAny } from './utils'
+import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
 
 const prefix = '@common-intellisense/'
 
@@ -91,12 +93,15 @@ export async function fetchFromCommonIntellisense(tag: string) {
     }
     else {
       logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
-      scriptContent = await fetchAndExtractPackage({
-        name,
-        dist: 'index.cjs',
-        retry,
-        logger,
-      })
+      scriptContent = await cancellablePromiseAny([
+        fetchAndExtractPackage({
+          name,
+          dist: 'index.cjs',
+          retry,
+          logger,
+        }),
+        fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
+      ])
     }
 
     const module: any = {}
@@ -266,7 +271,11 @@ export async function fetchFromRemoteNpmUrls() {
       if (cacheFetch.has(key))
         return cacheFetch.get(key)
 
-      const scriptContent = await fetchAndExtractPackage({ name, dist: 'index.cjs', logger })
+      const scriptContent = await cancellablePromiseAny([
+        fetchAndExtractPackage({ name, dist: 'index.cjs', logger }),
+        fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
+      ])
+
       if (scriptContent)
         cacheFetch.set(key, scriptContent)
       return scriptContent

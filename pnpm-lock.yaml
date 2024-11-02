@@ -20,6 +20,9 @@ importers:
       '@simon_he/fetch-npm':
         specifier: ^0.0.12
         version: 0.0.12
+      '@simon_he/fetch-npm-cjs':
+        specifier: ^0.0.13
+        version: 0.0.13
       '@simon_he/latest-version':
         specifier: ^0.1.2
         version: 0.1.2
@@ -637,6 +640,10 @@ packages:
     peerDependenciesMeta:
       rollup:
         optional: true
+
+  '@simon_he/fetch-npm-cjs@0.0.13':
+    resolution: {integrity: sha512-Vgrrg/FDkSM35boCE9fgBRoEoDfoxScENLGHl/c1gNgCufPGBA0eRjT7xQQiP5YNPQ3V0/rrtkRgaOT20jXcew==}
+    hasBin: true
 
   '@simon_he/fetch-npm@0.0.12':
     resolution: {integrity: sha512-O0u5e6J9tRgUJoLQdzcSS2FCjYxu28CJQ2rP6x3F+6LulfhyInuzGk3ShEMb/qj5fQPdIuUQwqJJp52HGNjWsQ==}
@@ -3984,6 +3991,8 @@ snapshots:
       picomatch: 4.0.2
     optionalDependencies:
       rollup: 3.29.4
+
+  '@simon_he/fetch-npm-cjs@0.0.13': {}
 
   '@simon_he/fetch-npm@0.0.12': {}
 
