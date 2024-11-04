@@ -308,30 +308,42 @@ export async function fetchFromRemoteNpmUrls() {
   return result
 }
 
+const localUrisMap = new Map<string, any>()
 export async function fetchFromLocalUris() {
-  let uris = getConfiguration('common-intellisense.localUris') as string[]
+  const uris = getConfiguration('common-intellisense.localUris') as string[]
   if (!uris.length)
     return
   logger.info(`localUris: ${uris}`)
+  const result: any = {}
   // 查找本地文件 是否存在
-  uris = uris.map((uri) => {
+  const scriptContents = (await Promise.all(uris.map(async (uri) => {
     // 如果是相对路径，转换为绝对路径，否则直接用
     if (uri.startsWith('./'))
       uri = path.resolve(getRootPath()!, uri)
 
-    if (cacheFetch.has(uri) || existsSync(uri)) {
-      return uri
+    if (cacheFetch.has(uri) && existsSync(uri)) {
+      // 如果缓存中已存在，比对内容是否改变，没改变则不再处理，直接过滤
+      const scriptContent = await fsp.readFile(uri, 'utf-8')
+      if (cacheFetch.get(uri) === scriptContent && localUrisMap.has(uri)) {
+        const temp = localUrisMap.get(uri)!
+        Object.assign(result, temp)
+        return
+      }
+      else if (localUrisMap.has(uri)) {
+        localUrisMap.delete(uri)
+      }
+      cacheFetch.set(uri, scriptContent)
+      return [uri, scriptContent]
     }
     else {
       logger.error(isZh ? `加载本地文件不存在: [${uri}]` : `Local file does not exist: [${uri}]`)
       return false
     }
-  }).filter(Boolean) as string[]
+  }))).filter(Boolean) as [string, string][]
 
-  if (!uris.length)
-    return
+  if (!scriptContents.length)
+    return result
 
-  const result: any = {}
   if (isLocalUrisInProgress)
     return
   let resolver!: () => void
@@ -346,12 +358,8 @@ export async function fetchFromLocalUris() {
     },
   })
   try {
-    await Promise.all(uris.map(async (uri) => {
-      let scriptContent = ''
+    scriptContents.forEach(async ([uri, scriptContent]) => {
       const module: any = {}
-      scriptContent = await fsp.readFile(uri, 'utf-8')
-      if (scriptContent)
-        cacheFetch.set(uri, scriptContent)
       const runModule = new Function('module', scriptContent)
       runModule(module)
       const moduleExports = module.exports
@@ -366,8 +374,9 @@ export async function fetchFromLocalUris() {
           temp[key] = () => propsReducer(v())
         }
       }
+      localUrisMap.set(uri, temp)
       Object.assign(result, temp)
-    }))
+    })
     resolver()
   }
   catch (error) {
