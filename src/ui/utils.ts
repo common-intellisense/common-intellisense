@@ -777,35 +777,24 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
       for (const _item of item.related) {
         const name = _item.split('.').slice(0, -1).join('.')
         const prop = _item.split('.').slice(-1)[0]
-        if (name === parent.tag) {
-          const props = parent.props
-          if (props.length) {
-            for (const p of props) {
-              if (p.name === 'bind' && p.arg.content === prop) {
-                prefix = p.exp.content
-                break
-              }
-              else if (p.name === prop) {
-                prefix = p.value.content
-                break
-              }
-            }
-          }
-        }
-        else if (name === parent.parent.tag) {
-          const props = parent.parent.props
-          if (props.length) {
-            for (const p of props) {
-              if (p.name === 'bind' && p.arg.content === prop) {
-                prefix = p.exp.content
-                break
-              }
-              else if (p.name === prop) {
-                prefix = p.value.content
-                break
+        let p = parent
+        outerLoop: while (p) {
+          if (p.tag === name) {
+            const props = p.props
+            if (props.length) {
+              for (const p of props) {
+                if (p.name === 'bind' && p.arg.content === prop) {
+                  prefix = p.exp.content
+                  break outerLoop
+                }
+                else if (p.name === prop) {
+                  prefix = p.value.content
+                  break outerLoop
+                }
               }
             }
           }
+          p = p.parent
         }
       }
     }
@@ -877,6 +866,26 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
     }
     requiredProps.push(attr)
   })
+  for (const e of content.events) {
+    if (!e.required)
+      continue
+    const _name = e.name.split(':').map((item: string) =>
+      item[0] + item.slice(1),
+    ).join('').replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
+    const snippetEventNameOptions = [
+      ...new Set([
+        _name,
+        !_name.startsWith('on') ? `on${_name[0].toUpperCase()}${_name.slice(1)}` : _name,
+        `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
+        `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
+        `${_name}Handler`,
+      ]),
+    ]
+    const snippetVue = `@${e.name}="\${${requiredProps.length + 1}|${snippetEventNameOptions.join(',')}|}"`
+    const snippetJsx = `${e.name}={\${${requiredProps.length + 1}|${snippetEventNameOptions.join(',')}|}}`
+    index++
+    requiredProps.push(isVue ? snippetVue : snippetJsx)
+  }
 
   return [requiredProps, index]
 }

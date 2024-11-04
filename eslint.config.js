@@ -24,6 +24,7 @@ module.exports = antfu(
       'regexp/no-dupe-disjunctions': 'off',
       'no-new-func': 'off',
       'perfectionist/sort-imports': 'off',
+      'no-labels': 'off',
     },
   },
 )

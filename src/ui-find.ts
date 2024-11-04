@@ -9,7 +9,7 @@ import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } fro
 
 export interface OptionsComponents {
   prefix: string[]
-  data: (() => vscode.CompletionItem[])[]
+  data: ((parent?: any) => vscode.CompletionItem[])[]
   directivesMap: Record<string, Directives | undefined>
   libs: string[]
 }
