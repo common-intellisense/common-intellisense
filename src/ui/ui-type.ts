@@ -78,4 +78,6 @@ export interface Component {
   typeDetail?: typeDetail
   link?: string
   link_zh?: string
+  dynamicLib?: string
+  importWay?: 'as default' | 'default' | 'specifier'
 }

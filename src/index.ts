@@ -125,19 +125,19 @@ export async function activate(context: vscode.ExtensionContext) {
       })
       : []
 
-    if (uiComponents[lib])
-      deps.push(...uiComponents[lib].components)
+    if (uiComponents[from])
+      deps.push(...uiComponents[from].components)
     else
       deps.push(name)
 
     deps = [...new Set(deps)]
-    if (uiComponents[lib]) {
+    if (uiComponents[from]) {
       if (deps.includes(name))
         return
       deps.push(name)
 
-      const offsetStart = code.match(uiComponents[lib].match[0])!.index!
-      const offsetEnd = offsetStart + uiComponents[lib].match[0].length
+      const offsetStart = code.match(uiComponents[from].match[0])!.index!
+      const offsetEnd = offsetStart + uiComponents[from].match[0].length
       const posStart = getPosition(offsetStart).position
       const posEnd = getPosition(offsetEnd).position
 

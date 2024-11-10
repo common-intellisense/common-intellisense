@@ -494,7 +494,7 @@ export interface ComponentsConfigItem {
 
 export type ComponentsConfig = ComponentsConfigItem[]
 export function componentsReducer(options: ComponentOptions): ComponentsConfig {
-  const { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
+  let { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
   const isZh = getLocale().includes('zh')
 
   if (!isReact && prefix) {
@@ -509,6 +509,10 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           let _content = ''
           let description = ''
           if (typeof content === 'object') {
+            if (content.dynamicLib)
+              dynamicLib = content.dynamicLib
+            if (content.importWay)
+              importWay = content.importWay
             let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
             if (requiredProps.length) {
@@ -677,6 +681,10 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       let _content = ''
       let description = ''
       if (typeof content === 'object') {
+        if (content.dynamicLib)
+          dynamicLib = content.dynamicLib
+        if (content.importWay)
+          importWay = content.importWay
         let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
         const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
         if (requiredProps.length) {
