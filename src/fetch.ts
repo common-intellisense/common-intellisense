@@ -321,10 +321,10 @@ export async function fetchFromLocalUris() {
     if (uri.startsWith('./'))
       uri = path.resolve(getRootPath()!, uri)
 
-    if (cacheFetch.has(uri) && existsSync(uri)) {
+    if (existsSync(uri)) {
       // 如果缓存中已存在，比对内容是否改变，没改变则不再处理，直接过滤
       const scriptContent = await fsp.readFile(uri, 'utf-8')
-      if (cacheFetch.get(uri) === scriptContent && localUrisMap.has(uri)) {
+      if (cacheFetch.has(uri) && cacheFetch.get(uri) === scriptContent && localUrisMap.has(uri)) {
         const temp = localUrisMap.get(uri)!
         Object.assign(result, temp)
         return
