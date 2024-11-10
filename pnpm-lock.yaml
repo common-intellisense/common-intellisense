@@ -24,11 +24,11 @@ importers:
         specifier: ^0.0.13
         version: 0.0.13
       '@simon_he/latest-version':
-        specifier: ^0.1.2
-        version: 0.1.2
+        specifier: ^0.1.4
+        version: 0.1.4
       '@types/node':
-        specifier: ^18.19.63
-        version: 18.19.63
+        specifier: ^18.19.64
+        version: 18.19.64
       '@types/vscode':
         specifier: 1.77.0
         version: 1.77.0
@@ -45,8 +45,8 @@ importers:
         specifier: ^3.2.1
         version: 3.2.1
       '@vue-vine/compiler':
-        specifier: ^0.1.26
-        version: 0.1.26
+        specifier: ^0.1.33
+        version: 0.1.33
       '@vue/compiler-sfc':
         specifier: 3.3.4
         version: 3.3.4
@@ -54,8 +54,8 @@ importers:
         specifier: ^2.10.0
         version: 2.10.0
       bumpp:
-        specifier: ^9.8.0
-        version: 9.8.0
+        specifier: ^9.8.1
+        version: 9.8.1
       eslint:
         specifier: ^8.57.1
         version: 8.57.1
@@ -649,9 +649,8 @@ packages:
     resolution: {integrity: sha512-O0u5e6J9tRgUJoLQdzcSS2FCjYxu28CJQ2rP6x3F+6LulfhyInuzGk3ShEMb/qj5fQPdIuUQwqJJp52HGNjWsQ==}
     hasBin: true
 
-  '@simon_he/latest-version@0.1.2':
-    resolution: {integrity: sha512-ky6J/onY58VMg6sot4TlPA8jgXBzeEX+FB6HankBQHu82wd7xtTsSPjryRsSTy9SFTPBGBm4z9bi84u2ktOLdQ==}
-    hasBin: true
+  '@simon_he/latest-version@0.1.4':
+    resolution: {integrity: sha512-tquNNf92Grpk6t+v3H7klgkvol+PYZjwO2i+GKbgVGM2Io+BSR+4v9mE+XX83z71wTRXYE67vPo/xM5j4LsVmw==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -694,8 +693,8 @@ packages:
   '@types/ms@0.7.34':
     resolution: {integrity: sha512-nG96G3Wp6acyAgJqGasjODb+acrI7KltPiRxzHPXnP3NgI28bpQDRv53olbqGXbfcgF5aiiHmO3xpwEpS5Ld9g==}
 
-  '@types/node@18.19.63':
-    resolution: {integrity: sha512-hcUB7THvrGmaEcPcvUZCZtQ2Z3C+UR/aOcraBLCvTsFMh916Gc1kCCYcfcMuB76HM2pSerxl1PoP3KnmHzd9Lw==}
+  '@types/node@18.19.64':
+    resolution: {integrity: sha512-955mDqvO2vFf/oL7V3WiUtiz+BugyX8uVbaT2H8oj3+8dRyH2FLiNdowe7eNqRM7IOIZvzDH76EoAT+gwm6aIQ==}
 
   '@types/normalize-package-data@2.4.0':
     resolution: {integrity: sha512-f5j5b/Gf71L+dbqxIpQ4Z2WlmI/mPJ0fOkGGmFgtb6sAu97EPczzbS3/tJKxmcYDj55OX6ssqwDAWOHIYDRDGA==}
@@ -899,8 +898,8 @@ packages:
     engines: {node: '>= 20'}
     hasBin: true
 
-  '@vue-vine/compiler@0.1.26':
-    resolution: {integrity: sha512-tjq9SseWVkwr59hQJhibZdN2HdDUvebdiIJzjuKt47RK/mX985ld3AMe3Tgm5PZynzWHFGxKp8uW6HD6msmqcQ==}
+  '@vue-vine/compiler@0.1.33':
+    resolution: {integrity: sha512-zEGYepWV/ZeE0NC1RSd1wMc+eJuOInJdbbnZBosgGFqZ4m8ahkuPcP6wcIVJm4CWw8I4Iz9CTDmsdHTmPfWFNg==}
 
   '@vue/compiler-core@3.3.4':
     resolution: {integrity: sha512-cquyDNvZ6jTbf/+x+AgM2Arrp6G4Dzbb0R64jiG804HRMfRiFXWI6kqUVqZ6ZR0bQhIoQjB4+2bhNtVwndW15g==}
@@ -1076,8 +1075,8 @@ packages:
     resolution: {integrity: sha512-zhaCDicdLuWN5UbN5IMnFqNMhNfo919sH85y2/ea+5Yg9TsTkeZxpL+JLbp6cgYFS4sRLp3YV4S6yDuqVWHYOw==}
     engines: {node: '>=6'}
 
-  bumpp@9.8.0:
-    resolution: {integrity: sha512-RKHjvOpN6RGhh7LNXGQCRRTPJ99PvVJRcX7EvKKpgj+3nKV8DWDM+8O1TMK0UvcGWhE74PRrQpISqFTcq8wPSg==}
+  bumpp@9.8.1:
+    resolution: {integrity: sha512-25W55DZI/rq6FboM0Q5y8eHbUk9eNn9oZ4bg/I5kiWn8/rdZCw6iqML076akQiUOQGhrm6QDvSSn4PgQ48bS4A==}
     engines: {node: '>=10'}
     hasBin: true
 
@@ -3996,7 +3995,7 @@ snapshots:
 
   '@simon_he/fetch-npm@0.0.12': {}
 
-  '@simon_he/latest-version@0.1.2': {}
+  '@simon_he/latest-version@0.1.4': {}
 
   '@sindresorhus/is@4.6.0': {}
 
@@ -4020,7 +4019,7 @@ snapshots:
     dependencies:
       '@types/http-cache-semantics': 4.0.3
       '@types/keyv': 3.1.4
-      '@types/node': 18.19.63
+      '@types/node': 18.19.64
       '@types/responselike': 1.0.2
 
   '@types/chai-subset@1.3.3':
@@ -4039,7 +4038,7 @@ snapshots:
 
   '@types/keyv@3.1.4':
     dependencies:
-      '@types/node': 18.19.63
+      '@types/node': 18.19.64
 
   '@types/mdast@4.0.4':
     dependencies:
@@ -4047,7 +4046,7 @@ snapshots:
 
   '@types/ms@0.7.34': {}
 
-  '@types/node@18.19.63':
+  '@types/node@18.19.64':
     dependencies:
       undici-types: 5.26.5
 
@@ -4055,7 +4054,7 @@ snapshots:
 
   '@types/responselike@1.0.2':
     dependencies:
-      '@types/node': 18.19.63
+      '@types/node': 18.19.64
 
   '@types/unist@3.0.3': {}
 
@@ -4309,7 +4308,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vue-vine/compiler@0.1.26':
+  '@vue-vine/compiler@0.1.33':
     dependencies:
       '@babel/parser': 7.25.6
       '@babel/types': 7.26.0
@@ -4322,6 +4321,7 @@ snapshots:
       merge-source-map: 1.1.0
       postcss: 8.4.39
       postcss-selector-parser: 6.0.16
+      prettier: 3.3.3
       source-map-js: 1.2.0
 
   '@vue/compiler-core@3.3.4':
@@ -4519,7 +4519,7 @@ snapshots:
 
   builtin-modules@3.3.0: {}
 
-  bumpp@9.8.0:
+  bumpp@9.8.1:
     dependencies:
       '@jsdevtools/ez-spawn': 3.0.4
       c12: 1.11.2
@@ -7101,14 +7101,14 @@ snapshots:
       spdx-correct: 3.1.1
       spdx-expression-parse: 3.0.1
 
-  vite-node@0.29.8(@types/node@18.19.63):
+  vite-node@0.29.8(@types/node@18.19.64):
     dependencies:
       cac: 6.7.14
       debug: 4.3.4
       mlly: 1.2.0
       pathe: 1.1.0
       picocolors: 1.0.1
-      vite: 4.5.3(@types/node@18.19.63)
+      vite: 4.5.3(@types/node@18.19.64)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -7119,20 +7119,20 @@ snapshots:
       - supports-color
       - terser
 
-  vite@4.5.3(@types/node@18.19.63):
+  vite@4.5.3(@types/node@18.19.64):
     dependencies:
       esbuild: 0.18.20
       postcss: 8.4.39
       rollup: 3.29.4
     optionalDependencies:
-      '@types/node': 18.19.63
+      '@types/node': 18.19.64
       fsevents: 2.3.2
 
   vitest@0.29.8:
     dependencies:
       '@types/chai': 4.3.4
       '@types/chai-subset': 1.3.3
-      '@types/node': 18.19.63
+      '@types/node': 18.19.64
       '@vitest/expect': 0.29.8
       '@vitest/runner': 0.29.8
       '@vitest/spy': 0.29.8
@@ -7151,8 +7151,8 @@ snapshots:
       tinybench: 2.4.0
       tinypool: 0.4.0
       tinyspy: 1.1.1
-      vite: 4.5.3(@types/node@18.19.63)
-      vite-node: 0.29.8(@types/node@18.19.63)
+      vite: 4.5.3(@types/node@18.19.64)
+      vite-node: 0.29.8(@types/node@18.19.64)
       why-is-node-running: 2.2.2
     transitivePeerDependencies:
       - less
