@@ -449,7 +449,7 @@ export function propsReducer(options: PropsOptions) {
     }
     const tableDocument = createTableDocument()
 
-    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: item.slots, uiName, lib }
+    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: item.slots, uiName, lib: item.dynamicLib || lib }
     return result
   }, result)
 }
