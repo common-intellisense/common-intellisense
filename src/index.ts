@@ -153,10 +153,10 @@ export async function activate(context: vscode.ExtensionContext) {
     else {
       // 顶部导入
       let str = importWay === 'as default'
-        ? `import * as ${deps.join(', ')} from '${from}'`
+        ? `  import * as ${deps.join(', ')} from '${from}'`
         : importWay === 'default'
-          ? `import ${deps.join(', ')} from '${from}'`
-          : `import { ${deps.join(', ')} } from '${from}'`
+          ? `  import ${deps.join(', ')} from '${from}'`
+          : `  import { ${deps.join(', ')} } from '${from}'`
       let pos: any = null
       if (isVue()) {
         if (loc) {
