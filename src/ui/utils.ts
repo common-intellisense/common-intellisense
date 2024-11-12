@@ -212,7 +212,7 @@ export function propsReducer(options: PropsOptions) {
             name: isVue
               ? 'click'
               : lan === 'svelte'
-                ? 'on:click'
+                ? 'onclick'
                 : 'onClick',
             description: isZh ? '点击事件' : 'click event',
             params: [],

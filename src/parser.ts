@@ -268,7 +268,8 @@ export function parserJSX(code: string, position: vscode.Position) {
 function jsxDfs(children: any, parent: any, position: vscode.Position) {
   for (const child of children) {
     let { loc, type, openingElement, body: children, argument, declarations, init } = child
-    child.name = openingElement?.name.name
+    if (openingElement?.name.name)
+      child.name = openingElement.name.name
     if (!loc)
       loc = convertPositionToLoc(child)
 
@@ -406,7 +407,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
         start: loc.start,
         end: {
           line: loc.start.line,
-          column: loc.start.column + child.name.length,
+          column: loc.start.column + (child.name || '').length,
         },
       }, position)
       return {
