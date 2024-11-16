@@ -18,14 +18,14 @@ importers:
         specifier: ^5.1.3
         version: 5.1.3(rollup@3.29.4)
       '@simon_he/fetch-npm':
-        specifier: ^0.0.12
-        version: 0.0.12
+        specifier: ^0.0.14
+        version: 0.0.14
       '@simon_he/fetch-npm-cjs':
-        specifier: ^0.0.13
-        version: 0.0.13
+        specifier: ^0.0.14
+        version: 0.0.14
       '@simon_he/latest-version':
-        specifier: ^0.1.4
-        version: 0.1.4
+        specifier: ^0.1.5
+        version: 0.1.5
       '@types/node':
         specifier: ^18.19.64
         version: 18.19.64
@@ -644,16 +644,16 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm-cjs@0.0.13':
-    resolution: {integrity: sha512-Vgrrg/FDkSM35boCE9fgBRoEoDfoxScENLGHl/c1gNgCufPGBA0eRjT7xQQiP5YNPQ3V0/rrtkRgaOT20jXcew==}
+  '@simon_he/fetch-npm-cjs@0.0.14':
+    resolution: {integrity: sha512-oRowq/wF/EYm3wbS0eE92PdrdBAQo33Dse3DmeRpks5osnvX2B6t3LupP/8R0TQYJGYaDa805dhnJlggZfOxHw==}
     hasBin: true
 
-  '@simon_he/fetch-npm@0.0.12':
-    resolution: {integrity: sha512-O0u5e6J9tRgUJoLQdzcSS2FCjYxu28CJQ2rP6x3F+6LulfhyInuzGk3ShEMb/qj5fQPdIuUQwqJJp52HGNjWsQ==}
+  '@simon_he/fetch-npm@0.0.14':
+    resolution: {integrity: sha512-HATII9cPzZ74habrQUq/T0JTuMeo0nPPVDaVNEHs1Jvw/dd1+CtPhI7TxK9b+IyVVlS6UCm7eOT99uIOBY1bXg==}
     hasBin: true
 
-  '@simon_he/latest-version@0.1.4':
-    resolution: {integrity: sha512-tquNNf92Grpk6t+v3H7klgkvol+PYZjwO2i+GKbgVGM2Io+BSR+4v9mE+XX83z71wTRXYE67vPo/xM5j4LsVmw==}
+  '@simon_he/latest-version@0.1.5':
+    resolution: {integrity: sha512-YN2vZc7an+6Fu3946EBWW8R7T2W3tqnzj7tKOHpMLbmlvYQEthhAn9ATOfRbVvZRsVRvgewGSaJJHIw7x+YBbg==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -3999,11 +3999,11 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm-cjs@0.0.13': {}
+  '@simon_he/fetch-npm-cjs@0.0.14': {}
 
-  '@simon_he/fetch-npm@0.0.12': {}
+  '@simon_he/fetch-npm@0.0.14': {}
 
-  '@simon_he/latest-version@0.1.4': {}
+  '@simon_he/latest-version@0.1.5': {}
 
   '@sindresorhus/is@4.6.0': {}
 
