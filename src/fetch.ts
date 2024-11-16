@@ -55,7 +55,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
     version = await latestVersion(name, { concurrency: 3 })
   }
   catch (error: any) {
-    if (error.message.includes('404 Not Found')) {
+    if (error.includes('404 Not Found')) {
       // 说明这个版本还未支持, 可以通过 issue 提出
       logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
     }
@@ -232,7 +232,7 @@ export async function fetchFromRemoteNpmUrls() {
       version = await latestVersion(name, { concurrency: 3 })
     }
     catch (error: any) {
-      if (error.message.includes('404 Not Found')) {
+      if (error.includes('404 Not Found')) {
         // 说明这个版本还未支持, 可以通过 issue 提出
         logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
       }

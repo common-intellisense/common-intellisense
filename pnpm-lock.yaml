@@ -21,11 +21,11 @@ importers:
         specifier: ^0.0.14
         version: 0.0.14
       '@simon_he/fetch-npm-cjs':
-        specifier: ^0.0.14
-        version: 0.0.14
+        specifier: ^0.0.15
+        version: 0.0.15
       '@simon_he/latest-version':
-        specifier: ^0.1.5
-        version: 0.1.5
+        specifier: ^0.1.6
+        version: 0.1.6
       '@types/node':
         specifier: ^18.19.64
         version: 18.19.64
@@ -644,16 +644,16 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm-cjs@0.0.14':
-    resolution: {integrity: sha512-oRowq/wF/EYm3wbS0eE92PdrdBAQo33Dse3DmeRpks5osnvX2B6t3LupP/8R0TQYJGYaDa805dhnJlggZfOxHw==}
+  '@simon_he/fetch-npm-cjs@0.0.15':
+    resolution: {integrity: sha512-/eYs6vwnTqBxS5i53Ji8pSiYHqEbNX8DixgqftrYN40RM0xM+K/wsrpzpSYNnkuD4UGklKeZzEqh5Uwe1qacNw==}
     hasBin: true
 
   '@simon_he/fetch-npm@0.0.14':
     resolution: {integrity: sha512-HATII9cPzZ74habrQUq/T0JTuMeo0nPPVDaVNEHs1Jvw/dd1+CtPhI7TxK9b+IyVVlS6UCm7eOT99uIOBY1bXg==}
     hasBin: true
 
-  '@simon_he/latest-version@0.1.5':
-    resolution: {integrity: sha512-YN2vZc7an+6Fu3946EBWW8R7T2W3tqnzj7tKOHpMLbmlvYQEthhAn9ATOfRbVvZRsVRvgewGSaJJHIw7x+YBbg==}
+  '@simon_he/latest-version@0.1.6':
+    resolution: {integrity: sha512-aF1RloBoT+gtQoutGdTxPlyEwF83a5vYcFBob/EVzkGfTIak29cfYYQsEKwqSxHaU6bLpESgxlTkndI7A8ncaA==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -3999,11 +3999,11 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm-cjs@0.0.14': {}
+  '@simon_he/fetch-npm-cjs@0.0.15': {}
 
   '@simon_he/fetch-npm@0.0.14': {}
 
-  '@simon_he/latest-version@0.1.5': {}
+  '@simon_he/latest-version@0.1.6': {}
 
   '@sindresorhus/is@4.6.0': {}
 
