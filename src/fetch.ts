@@ -7,7 +7,6 @@ import { createFakeProgress, getConfiguration, getLocale, getRootPath, message }
 import { ofetch } from 'ofetch'
 import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from './ui-find'
-import { cancellablePromiseAny } from './utils'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
 
 const prefix = '@common-intellisense/'
@@ -64,7 +63,6 @@ export async function fetchFromCommonIntellisense(tag: string) {
     }
     return
   }
-
   logger.info(isZh ? `找到 ${name} 的最新版本: ${version}` : `Found the latest version of ${name}: ${version}`)
   const key = `${name}@${version}`
   // 当版本修改是否要删除相同 name 下的其它版本缓存？
@@ -93,7 +91,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
     }
     else {
       logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
-      scriptContent = await cancellablePromiseAny([
+      scriptContent = await Promise.any([
         fetchAndExtractPackage({
           name,
           dist: 'index.cjs',
@@ -103,7 +101,6 @@ export async function fetchFromCommonIntellisense(tag: string) {
         fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
       ])
     }
-
     const module: any = {}
     const runModule = new Function('module', scriptContent)
     if (scriptContent)
@@ -271,7 +268,7 @@ export async function fetchFromRemoteNpmUrls() {
       if (cacheFetch.has(key))
         return cacheFetch.get(key)
 
-      const scriptContent = await cancellablePromiseAny([
+      const scriptContent = await Promise.any([
         fetchAndExtractPackage({ name, dist: 'index.cjs', logger }),
         fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
       ])

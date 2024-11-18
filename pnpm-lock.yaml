@@ -18,14 +18,14 @@ importers:
         specifier: ^5.1.3
         version: 5.1.3(rollup@3.29.4)
       '@simon_he/fetch-npm':
-        specifier: ^0.0.14
-        version: 0.0.14
-      '@simon_he/fetch-npm-cjs':
         specifier: ^0.0.15
         version: 0.0.15
+      '@simon_he/fetch-npm-cjs':
+        specifier: ^0.0.16
+        version: 0.0.16
       '@simon_he/latest-version':
-        specifier: ^0.1.6
-        version: 0.1.6
+        specifier: ^0.1.8
+        version: 0.1.8
       '@types/node':
         specifier: ^18.19.64
         version: 18.19.64
@@ -644,16 +644,16 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm-cjs@0.0.15':
-    resolution: {integrity: sha512-/eYs6vwnTqBxS5i53Ji8pSiYHqEbNX8DixgqftrYN40RM0xM+K/wsrpzpSYNnkuD4UGklKeZzEqh5Uwe1qacNw==}
+  '@simon_he/fetch-npm-cjs@0.0.16':
+    resolution: {integrity: sha512-jKUL741mAy+XaWqCZGqu9D+LFO2ZlRCeS1NRFKXKRBgxwqmHnnd+0du6dIjBYtq46mzKYex+YurbbdHmhQJchA==}
     hasBin: true
 
-  '@simon_he/fetch-npm@0.0.14':
-    resolution: {integrity: sha512-HATII9cPzZ74habrQUq/T0JTuMeo0nPPVDaVNEHs1Jvw/dd1+CtPhI7TxK9b+IyVVlS6UCm7eOT99uIOBY1bXg==}
+  '@simon_he/fetch-npm@0.0.15':
+    resolution: {integrity: sha512-R/9FoTd9dL/HLuTlR+mDDlULlkIJPeBThcKM9IFmikDksQGc0L5bpSNBdrCic+Fjw7A2j6xKqNSpfciPW+4v2A==}
     hasBin: true
 
-  '@simon_he/latest-version@0.1.6':
-    resolution: {integrity: sha512-aF1RloBoT+gtQoutGdTxPlyEwF83a5vYcFBob/EVzkGfTIak29cfYYQsEKwqSxHaU6bLpESgxlTkndI7A8ncaA==}
+  '@simon_he/latest-version@0.1.8':
+    resolution: {integrity: sha512-5/uPPpL6nh0z+y3w3OPtQXtaO2fvl9wHfNMViwDpqNdp3Z4k1hH+OoBB8qJb6g5HFX4xWts1lPFRJFuIUv7kLw==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -3999,11 +3999,11 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm-cjs@0.0.15': {}
+  '@simon_he/fetch-npm-cjs@0.0.16': {}
 
-  '@simon_he/fetch-npm@0.0.14': {}
+  '@simon_he/fetch-npm@0.0.15': {}
 
-  '@simon_he/latest-version@0.1.6': {}
+  '@simon_he/latest-version@0.1.8': {}
 
   '@sindresorhus/is@4.6.0': {}
 
