@@ -125,27 +125,30 @@ export async function activate(context: vscode.ExtensionContext) {
       })
       : []
 
-    if (uiComponents[from])
+    const importTarget = uiComponents[from]
+    if (importTarget)
       deps.push(...uiComponents[from].components)
     else
       deps.push(name)
 
     deps = [...new Set(deps)]
-    if (uiComponents[from]) {
+    const line = importTarget.match[1].startsWith('\n')
+    if (importTarget) {
       if (deps.includes(name))
         return
       deps.push(name)
 
-      const offsetStart = code.match(uiComponents[from].match[0])!.index!
-      const offsetEnd = offsetStart + uiComponents[from].match[0].length
+      const offsetStart = code.match(importTarget.match[0])!.index!
+      const offsetEnd = offsetStart + importTarget.match[0].length
       const posStart = getPosition(offsetStart).position
       const posEnd = getPosition(offsetEnd).position
-
       const str = importWay === 'as default'
         ? `import * as ${deps.join(', ')} from '${from}'`
         : importWay === 'default'
           ? `import ${deps.join(', ')} from '${from}'`
-          : `import { ${deps.join(', ')} } from '${from}'`
+          : line
+            ? `import {\n    ${deps.join(',\n    ')}\n  } from '${from}'`
+            : `import { ${deps.join(', ')} } from '${from}'`
       updateText((edit) => {
         edit.replace(createRange(posStart, posEnd), str)
       })
