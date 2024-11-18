@@ -171,6 +171,8 @@
 - 如果你发现代码提示重复了，可能是因为插件升级了，但是老版本的插件仍然在生效, 尝试进入到 vscode 插件目录 `code ~/.vscode/extensions`, 然后删除低版本的 `simonhe.common-intellisense-low-version`，重启 vscode 即可
 - 如果发现遇到 [All promises were rejected], 可以尝试卸载重新安装插件，或者检查本地网络代理，因为插件会多渠道请求不同源的 NPM 包，如果你的网络代理不通，可能会导致这个问题
 - 如果你在内网环境或者没有网络的情况下使用，可以安装 [common-intellisense-local](https://marketplace.visualstudio.com/items?itemName=simonhe.common-intellisense-local)
+- 如果你使用 `fnm` 或 `nvm` 等 `node` 版本工具 若出现下载异常、无法下载等问题、请检查系统环境变量是否设置
+  - 使用 `fnm` 请添加 `%USERPROFILE%\AppData\Roaming\fnm\aliases\default` 环境变量
 
 ## :coffee:
 
