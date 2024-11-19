@@ -18,11 +18,11 @@ importers:
         specifier: ^5.1.3
         version: 5.1.3(rollup@3.29.4)
       '@simon_he/fetch-npm':
-        specifier: ^0.0.16
-        version: 0.0.16
+        specifier: ^0.0.18
+        version: 0.0.18
       '@simon_he/fetch-npm-cjs':
-        specifier: ^0.0.17
-        version: 0.0.17
+        specifier: ^0.0.18
+        version: 0.0.18
       '@simon_he/latest-version':
         specifier: ^0.1.9
         version: 0.1.9
@@ -644,12 +644,12 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm-cjs@0.0.17':
-    resolution: {integrity: sha512-6EBvK/2FO7396h2ABAKbdKhiM2uOQtjhgjX5hwm1lxHae7XN0NHyL0Ih4LsyWHCkQYoWkfKogoslsxVH7qDyaA==}
+  '@simon_he/fetch-npm-cjs@0.0.18':
+    resolution: {integrity: sha512-SdTPprBFtnp0L+pTpDRwTDkqYLHj2Q6hwOXasuACLwOe6Q7kzmd+nznY5V7QwvogJ0mq2gbZfkjyThn5GDgXPg==}
     hasBin: true
 
-  '@simon_he/fetch-npm@0.0.16':
-    resolution: {integrity: sha512-fpKjlKc6G7O9GqQsJT8timUY8VfU7BoPyCJi73Nkymc0EVv6cNULQQ7Ta3QBvRjGMKep8dC2yxJhFnFWi5XVwQ==}
+  '@simon_he/fetch-npm@0.0.18':
+    resolution: {integrity: sha512-eyZ8WAG9oYhesxmWze57pK5IZINij/97v9woJTfg3FNHu6sC98Pj4R50YT07gE7x8mJ4DutY2hBvfmtDDvstyw==}
     hasBin: true
 
   '@simon_he/latest-version@0.1.9':
@@ -3999,9 +3999,9 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm-cjs@0.0.17': {}
+  '@simon_he/fetch-npm-cjs@0.0.18': {}
 
-  '@simon_he/fetch-npm@0.0.16': {}
+  '@simon_he/fetch-npm@0.0.18': {}
 
   '@simon_he/latest-version@0.1.9': {}
 
