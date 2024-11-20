@@ -18,14 +18,14 @@ importers:
         specifier: ^5.1.3
         version: 5.1.3(rollup@3.29.4)
       '@simon_he/fetch-npm':
-        specifier: ^0.0.18
-        version: 0.0.18
+        specifier: ^0.0.19
+        version: 0.0.19
       '@simon_he/fetch-npm-cjs':
-        specifier: ^0.0.18
-        version: 0.0.18
+        specifier: ^0.0.19
+        version: 0.0.19
       '@simon_he/latest-version':
-        specifier: ^0.1.9
-        version: 0.1.9
+        specifier: ^0.1.10
+        version: 0.1.10
       '@types/node':
         specifier: ^18.19.64
         version: 18.19.64
@@ -644,16 +644,16 @@ packages:
       rollup:
         optional: true
 
-  '@simon_he/fetch-npm-cjs@0.0.18':
-    resolution: {integrity: sha512-SdTPprBFtnp0L+pTpDRwTDkqYLHj2Q6hwOXasuACLwOe6Q7kzmd+nznY5V7QwvogJ0mq2gbZfkjyThn5GDgXPg==}
+  '@simon_he/fetch-npm-cjs@0.0.19':
+    resolution: {integrity: sha512-WYpBebRiXwZ0V41sOLHWyvANvxsmXMYePQk9jtJDUXBWpukbQINbmCX1ALh0HGgXNI3z2lq7kAf7IPz0AZjlHA==}
     hasBin: true
 
-  '@simon_he/fetch-npm@0.0.18':
-    resolution: {integrity: sha512-eyZ8WAG9oYhesxmWze57pK5IZINij/97v9woJTfg3FNHu6sC98Pj4R50YT07gE7x8mJ4DutY2hBvfmtDDvstyw==}
+  '@simon_he/fetch-npm@0.0.19':
+    resolution: {integrity: sha512-XGRqcUlsTPK6jaa/U89vFyKCAewXFkJOlpI4lNmXMxXGCq5L9QsxzUqvefWIMFuK8SSq9j504dvRYOQbvUCBsQ==}
     hasBin: true
 
-  '@simon_he/latest-version@0.1.9':
-    resolution: {integrity: sha512-WGJsNA7zDB5wWYlGaQzAqDZBtoUv1JogqZWG0ceosLoruqPX+Z51DEPGpawkMg65EoA7Gdp+KAnwfeJiVgEJTA==}
+  '@simon_he/latest-version@0.1.10':
+    resolution: {integrity: sha512-ky7kmJRPVXcsuTT0aMGRclkMZ03ditswJc+Y9PEUQuJnQolpq/WKy1fIVl8jHMd1mEW2GKCE+uNf1dhZg0RWTw==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -3999,11 +3999,11 @@ snapshots:
     optionalDependencies:
       rollup: 3.29.4
 
-  '@simon_he/fetch-npm-cjs@0.0.18': {}
+  '@simon_he/fetch-npm-cjs@0.0.19': {}
 
-  '@simon_he/fetch-npm@0.0.18': {}
+  '@simon_he/fetch-npm@0.0.19': {}
 
-  '@simon_he/latest-version@0.1.9': {}
+  '@simon_he/latest-version@0.1.10': {}
 
   '@sindresorhus/is@4.6.0': {}
 
