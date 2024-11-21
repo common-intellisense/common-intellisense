@@ -241,18 +241,7 @@ export function propsReducer(options: PropsOptions) {
           let snippet
           let content
           if (isVue) {
-            const _name = name.split(':').map((item: string) =>
-              item[0] + item.slice(1),
-            ).join('').replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
-            const snippetEventNameOptions = [
-              ...new Set([
-                _name,
-                !_name.startsWith('on') ? `on${_name[0].toUpperCase()}${_name.slice(1)}` : _name,
-                `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
-                `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
-                `${_name}Handler`,
-              ]),
-            ]
+            const [snippetEventNameOptions, _name] = generateScriptNames(name)
             snippet = `${name}="\${1|${snippetEventNameOptions.join(',')}|}"`
             content = `@${name}="on${_name}"`
           }
@@ -261,17 +250,7 @@ export function propsReducer(options: PropsOptions) {
             content = `${name}={${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}`
           }
           else {
-            const _name = name
-            // if (!_name.startsWith('on'))
-            //   _name = `on${_name[0].toUpperCase()}${_name.slice(1)}`
-            const snippetEventNameOptions = [...new Set([
-              _name,
-              !_name.startsWith('on') ? `on${_name[0].toUpperCase()}${_name.slice(1)}` : _name,
-              `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
-              `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
-              `${_name}Handler`,
-            ])]
-
+            const [snippetEventNameOptions, _name] = generateScriptNames(name)
             snippet = `${_name}={\${1|${snippetEventNameOptions.join(',')}|}}`
             content = `${_name}={${_name}}`
           }
@@ -877,18 +856,7 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
   for (const e of content.events) {
     if (!e.required)
       continue
-    const _name = e.name.split(':').map((item: string) =>
-      item[0] + item.slice(1),
-    ).join('').replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
-    const snippetEventNameOptions = [
-      ...new Set([
-        _name,
-        !_name.startsWith('on') ? `on${_name[0].toUpperCase()}${_name.slice(1)}` : _name,
-        `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
-        `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
-        `${_name}Handler`,
-      ]),
-    ]
+    const [snippetEventNameOptions] = generateScriptNames(e.name)
     const snippetVue = `@${e.name}="\${${requiredProps.length + 1}|${snippetEventNameOptions.join(',')}|}"`
     const snippetJsx = `${e.name}={\${${requiredProps.length + 1}|${snippetEventNameOptions.join(',')}|}}`
     index++
@@ -968,4 +936,22 @@ export function isVueOrVine() {
  */
 export function escapeRegExp(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export function generateScriptNames(name: string): [string[], string] {
+  if (name.startsWith('on'))
+    name = name.slice(2)
+  const _name = name.split(':').map((item: string) =>
+    item[0] + item.slice(1),
+  ).join('').replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
+  const snippetEventNameOptions = [
+    ...new Set([
+      _name,
+      `on${_name[0].toUpperCase()}${_name.slice(1)}`,
+      `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
+      `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
+      `${_name}Handler`,
+    ]),
+  ]
+  return [snippetEventNameOptions, _name]
 }

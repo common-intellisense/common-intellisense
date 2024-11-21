@@ -7,7 +7,7 @@ import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
-import { isVine, isVue, toCamel } from './ui/utils'
+import { generateScriptNames, isVine, isVue, toCamel } from './ui/utils'
 import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
@@ -390,8 +390,18 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      if (!target)
+      if (!target) {
+        if (result.isEvent) {
+          const [options] = generateScriptNames(propName)
+          return options.map(content => createCompletionItem({
+            content,
+            type: vscode.CompletionItemKind.Event,
+            preselect: true,
+            sortText: '0',
+          }))
+        }
         return
+      }
 
       const { events, completions, uiName } = target
       const key = uiName + name
@@ -512,7 +522,15 @@ export async function activate(context: vscode.ExtensionContext) {
         if (propName === 'o')
           return [...events, ...r]
 
-        return [...r, ...events]
+        if ([...r, ...events].length)
+          return [...r, ...events]
+        if (result.isEvent) {
+          const [options] = generateScriptNames(propName)
+          return options.map(content => createCompletionItem({
+            content,
+            type: vscode.CompletionItemKind.Event,
+          }))
+        }
       }
       else if (hasProps.length) {
         return (completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item.params?.[1] === prop))

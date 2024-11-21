@@ -179,10 +179,19 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
           }
           else {
             let propName = prop.name
-            if (prop.arg && isInPosition(prop.arg.loc, position))
+            const isEvent = propName === 'on'
+            if (prop.arg && isInPosition(prop.arg.loc, position)) {
               propName = prop.arg.content
-            else if (prop.exp && isInPosition(prop.exp.loc, position))
-              propName = prop.exp.content
+            }
+            else if (prop.exp && isInPosition({
+              start: {
+                line: prop.exp.loc.start.line,
+                column: prop.exp.loc.start.column - 1,
+              },
+              end: prop.exp.loc.end,
+            }, position)) {
+              propName = prop.arg.content
+            }
 
             return {
               tag,
@@ -190,7 +199,8 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
               props,
               type: 'props',
               isInTemplate: true,
-              isValue: prop.value?.content !== undefined,
+              isEvent,
+              isValue: prop.value?.content !== undefined || prop.exp?.content !== undefined,
               parent: {
                 tag: parent.tag ? parent.tag : 'template',
                 props: parent.props || [],
