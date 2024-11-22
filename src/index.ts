@@ -391,7 +391,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       if (!target) {
-        if (result.isEvent) {
+        if (result.isEvent && propName !== 'on') {
           const [options] = generateScriptNames(propName)
           return options.map(content => createCompletionItem({
             content,
@@ -524,7 +524,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if ([...r, ...events].length)
           return [...r, ...events]
-        if (result.isEvent) {
+        if (result.isEvent && propName !== 'on') {
           const [options] = generateScriptNames(propName)
           return options.map(content => createCompletionItem({
             content,
