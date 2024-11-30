@@ -743,7 +743,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
         const tag = toCamel(result.tag)[0].toUpperCase() + toCamel(result.tag).slice(1)
-        const r = UiCompletions[tag] || await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix)
+        const r = UiCompletions[tag] || await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
         if (!r)
           return
         const completions = result.isEvent ? r.events[0]?.() : r.completions[0]?.()
