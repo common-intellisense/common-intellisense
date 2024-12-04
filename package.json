@@ -47,7 +47,9 @@
     "Opentiny",
     "TDesign",
     "HeadlessUI",
-    "MantineUI"
+    "MantineUI",
+    "WotDesign",
+    "Ark UI"
   ],
   "categories": [
     "Other"
@@ -115,7 +117,8 @@
               "@mantine/core7",
               "@mantine/dates7",
               "@mantine/charts7",
-              "wotDesignUi1"
+              "wotDesignUi1",
+              "arkUi4"
             ]
           },
           "description": "%uiDescription%"

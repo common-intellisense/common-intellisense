@@ -7,7 +7,7 @@ import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
-import { generateScriptNames, isVine, isVue, toCamel } from './ui/utils'
+import { generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
 import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
@@ -114,7 +114,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const { data, lib, prefix, dynamicLib, importWay } = params
     const name = data.name.split('.')[0]
     const fromName = data.from
-    const from = fromName || dynamicLib ? dynamicLib.replace('${name}', name.toLowerCase()) : lib
+    const from = fromName || dynamicLib ? dynamicLib.replace('${name}', hyphenate(name)) : lib
     const code = getActiveText()!
     const uiComponents = getImportUiComponents(code)
     let deps = data.suggestions?.length === 1

@@ -42,6 +42,7 @@ export const UINames = [
   '@mantine/dates',
   '@mantine/charts',
   'wot-design-uni',
+  '@ark-ui/vue',
 ]
 
 export const nameMap: any = {
@@ -59,11 +60,11 @@ export const nameMap: any = {
   '@mui/material': 'materialUi',
   '@opentiny/vue': 'tinyVue',
   '@nutui/nutui': 'nutUi',
-  'view-ui-plus': 'viewUiPlus',
   '@vant/weapp': 'vantWeapp',
   '@headlessui/react': 'headlessuiReact',
   '@headlessui/vue': 'headlessuiVue',
   '@mantine/core': 'mantineCore',
   '@mantine/dates': 'mantineDates',
   '@mantine/charts': 'mantineCharts',
+  '@arkUi/vue': 'arkVue',
 }
