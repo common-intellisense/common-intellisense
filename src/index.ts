@@ -25,6 +25,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // todo: createWebviewPanel
   // createWebviewPanel(context)
   logger.info('common-intellisense activate!')
+  logger.info('🌟 please help star this project: https://github.com/common-intellisense/common-intellisense')
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
   const alias = getAlias()
