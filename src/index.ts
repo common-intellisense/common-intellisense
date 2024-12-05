@@ -133,8 +133,8 @@ export async function activate(context: vscode.ExtensionContext) {
       deps.push(name)
 
     deps = [...new Set(deps)]
-    const line = importTarget.match[1].startsWith('\n')
     if (importTarget) {
+      const line = importTarget.match[1].startsWith('\n')
       if (deps.includes(name))
         return
       deps.push(name)
