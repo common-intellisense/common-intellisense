@@ -501,14 +501,14 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
                 if (suggestion) {
                   const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
-                  snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
+                  snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n ')}\$${++index}\n` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
                 else {
-                  snippet = `<${tag}>\$${++index}</${tag}>`
+                  snippet = `<${tag}\$${++index}>\$${++index}</${tag}>`
                 }
               }
               else {
-                snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>$${++index}</${tag}>`
+                snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>$${++index}</${tag}>`
               }
             }
             else {
@@ -518,19 +518,19 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
                 if (suggestion) {
                   const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
-                  snippet = `<${tag}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
+                  snippet = `<${tag}\$${++index}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
                 else {
-                  snippet = `<${tag}>$1</${tag}>`
+                  snippet = `<${tag}$1>$2</${tag}>`
                 }
               }
-              else { snippet = `<${tag}>$1</${tag}>` }
+              else { snippet = `<${tag}$1>$2</${tag}>` }
             }
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
           else {
-            snippet = `<${content}>$1</${content}>`
+            snippet = `<${content}$1>$2</${content}>`
             _content = `${content}  ${detail}`
           }
           if (!demo)
@@ -585,14 +585,14 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
                   suggestionTag = suggestion.name.slice(prefix.length)
                   const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
-                  snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
+                  snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
                 else {
-                  snippet = `<${tag}>\$${++index}</${tag}>`
+                  snippet = `<${tag}\$${++index}>\$${++index}</${tag}>`
                 }
               }
               else {
-                snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>$${++index}</${tag}>`
+                snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>$${++index}</${tag}>`
               }
             }
             else {
@@ -603,19 +603,19 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
                   suggestionTag = suggestion.name.slice(prefix.length)
                   const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
                   index = _index
-                  snippet = `<${tag}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
+                  snippet = `<${tag}\$${++index}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
                 }
                 else {
-                  snippet = `<${tag}>$1</${tag}>`
+                  snippet = `<${tag}$1>$2</${tag}>`
                 }
               }
-              else { snippet = `<${tag}>$1</${tag}>` }
+              else { snippet = `<${tag}$1>$2</${tag}>` }
             }
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
           else {
-            snippet = `<${content}>$1</${content}>`
+            snippet = `<${content}$1>$2</${content}>`
             _content = `${content}  ${detail}`
           }
           if (!demo)
@@ -673,14 +673,14 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             if (suggestion) {
               const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
               index = _index
-              snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
+              snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
             }
             else {
-              snippet = `<${tag}>\$${++index}</${tag}>`
+              snippet = `<${tag}\$${++index}>\$${++index}</${tag}>`
             }
           }
           else {
-            snippet = `<${tag}${requiredProps.length ? ` ${requiredProps.join(' ')}` : ''}>$${++index}</${tag}>`
+            snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>$${++index}</${tag}>`
           }
         }
         else {
@@ -690,19 +690,19 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             if (suggestion) {
               const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
               index = _index
-              snippet = `<${tag}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
+              snippet = `<${tag}\$${++index}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
             }
             else {
-              snippet = `<${tag}>$1</${tag}>`
+              snippet = `<${tag}$1>$2</${tag}>`
             }
           }
-          else { snippet = `<${tag}>$1</${tag}>` }
+          else { snippet = `<${tag}$1>$2</${tag}>` }
         }
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
       }
       else {
-        snippet = `<${content}>$1</${content}>`
+        snippet = `<${content}$1>$2</${content}>`
         _content = `${content}  ${detail}`
       }
       if (!demo)

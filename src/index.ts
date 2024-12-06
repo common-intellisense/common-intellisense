@@ -588,7 +588,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     return item
-  }, ['"', '\'', '-', ' ', '@', '.', ':']))
+  }, ['"', '\'', '-', ' ', '@', '.', ':', '\n']))
 
   context.subscriptions.push(registerCommand('intellisense.openDocument', (args) => {
     // 注册全局的 link 点击事件
