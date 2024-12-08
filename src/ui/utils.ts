@@ -944,14 +944,23 @@ export function generateScriptNames(name: string): [string[], string] {
   const _name = name.split(':').map((item: string) =>
     item[0] + item.slice(1),
   ).join('').replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
+  const options = [
+    _name,
+    `on${_name[0].toUpperCase()}${_name.slice(1)}`,
+    `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
+    `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
+    `${_name}Handler`,
+  ]
+  if (name === 'click') {
+    options.push('onReset', 'onSubmit', 'onCancel', 'onSave', 'onClose', 'onOpen', 'onConfirm', 'onCancel', 'onOk', 'onError', 'onSuccess', 'onFailure', 'onComplete', 'onFinish', 'onStart', 'onStop', 'onPause', 'onResume', 'onPlay', 'onPause', 'onSeek', 'onSkip', 'onNext', 'onPrev', 'onFirst', 'onLast', 'onSelect', 'onUnselect', 'onSelectAll', 'onUnselectAll', 'onAdd', 'onRemove', 'onDelete', 'onEdit', 'onUpdate', 'onCreate', 'onDestroy', 'onShow', 'onHide', 'onVisible', 'onInvisible', 'onEnable', 'onDisable', 'onDisabled', 'onEnabled', 'onActive', 'onInactive', 'onFocus', 'onBlur', 'onFocusIn', 'onFocusOut', 'onHover', 'onEnter', 'onLeave', 'onScroll', 'onDrag', 'onDrop', 'onDragStart', 'onDragEnd', 'onDragEnter', 'onDragLeave', 'onDragOver', 'onDragExit', 'onDrop', 'onDragDrop', 'onDragCancel', 'onDragMove', 'onDragEnter', 'onDragLeave', 'onDragOver', 'onDragExit', 'onDragDrop', 'onDragCancel', 'onDragMove', 'onDragStart', 'onDragEnd', 'onDragEnter', 'onDragLeave', 'onDragOver', 'onDragExit', 'onDragDrop', 'onDragCancel', 'onDragMove', 'onDragStart', 'onDragEnd', 'onDragEnter', 'onDragLeave', 'onDragOver', 'onDragExit', 'onDragDrop', 'onDragCancel', 'onDragMove', 'onDragStart', 'onDragEnd', 'onDragEnter', 'onDragLeave', 'onDragOver', 'onDragExit', 'onDragDrop', 'onDragCancel', 'onDragMove', 'onDragStart', 'onDragEnd', 'onDragEnter', 'onDragLeave', 'onDragOver', 'onDragExit', 'onDragDrop', 'onDragCancel', 'onDragMove', 'onDragStart')
+  }
+  else if (name === 'change') {
+    options.push('onChange', 'onInput', 'onSelect', 'onCheck', 'onUncheck', 'onToggle', 'onSwitch', 'onSwitchChange', 'onSwitchToggle', 'onSwitchCheck', 'onSwitchUncheck', 'onSwitchSelect', 'onSwitchUnselect', 'onPasswordChange', 'onPasswordInput', 'onPasswordSelect', 'onPasswordCheck', 'onPasswordUncheck', 'onPasswordToggle', 'onPasswordSwitch', 'onPasswordSwitchChange', 'onPasswordSwitchToggle', 'onPasswordSwitchCheck', 'onPasswordSwitchUncheck', 'onPasswordSwitchSelect', 'onPasswordSwitchUnselect')
+  }
   const snippetEventNameOptions = [
-    ...new Set([
-      _name,
-      `on${_name[0].toUpperCase()}${_name.slice(1)}`,
-      `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
-      `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
-      `${_name}Handler`,
-    ]),
+    ...new Set(
+      options,
+    ),
   ]
   return [snippetEventNameOptions, _name]
 }
