@@ -49,7 +49,8 @@
     "HeadlessUI",
     "MantineUI",
     "WotDesign",
-    "Ark UI"
+    "Ark UI",
+    "Dcloudio UniUi"
   ],
   "categories": [
     "Other"
@@ -118,7 +119,8 @@
               "@mantine/dates7",
               "@mantine/charts7",
               "wotDesignUi1",
-              "arkUi4"
+              "arkUi4",
+              "dcloudioUniUi"
             ]
           },
           "description": "%uiDescription%"

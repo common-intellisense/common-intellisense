@@ -43,6 +43,7 @@ export const UINames = [
   '@mantine/charts',
   'wot-design-uni',
   '@ark-ui/vue',
+  '@dcloudio/uni-ui',
 ]
 
 export const nameMap: any = {
@@ -67,4 +68,5 @@ export const nameMap: any = {
   '@mantine/dates': 'mantineDates',
   '@mantine/charts': 'mantineCharts',
   '@arkUi/vue': 'arkVue',
+  '@dcloudio/uniUi': 'dcloudioUniUi',
 }
