@@ -113,6 +113,10 @@ export function propsReducer(options: PropsOptions) {
             detail.push(`#### 🚀 version:    ***\`${value.version}\`***`)
         }
 
+        if (value.platform) {
+          detail.push(`#### 🚀 平台:   ***\`${value.platform}\`***`)
+        }
+
         if (value.description) {
           if (isZh)
             detail.push(`#### 🔦 说明:    ***\`${value.description_zh || value.description}\`***`)
@@ -225,7 +229,7 @@ export function propsReducer(options: PropsOptions) {
         })
         return item.events.map((events: any) => {
           const detail: string[] = []
-          const { name, description, params, description_zh } = events
+          const { name, description, params, description_zh, platform } = events
 
           detail.push(`## ${uiName} [${item.name}]`)
 
@@ -236,8 +240,12 @@ export function propsReducer(options: PropsOptions) {
               detail.push(`#### 🔦 description:    ***\`${description}\`***`)
           }
 
+          if (platform)
+            detail.push(`#### 🚀 平台:    ***\`${platform}\`***`)
+
           if (params)
             detail.push(`#### 🔮 ${isZh ? '回调参数' : 'callback parameters'}:    ***\`${params}\`***`)
+
           let snippet
           let content
           if (isVue) {
@@ -351,7 +359,7 @@ export function propsReducer(options: PropsOptions) {
       const details: string[] = []
       let text = `## ${uiName} [${item.name}]`
       if (item.link) {
-        text += `\`            \`[🔗 ${isZh ? '文档链接' : 'Documentation link'}](command:intellisense.openDocument?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D)\`   \`[🔗 ${isZh ? '外部链接' : 'External document links'}](command:intellisense.openDocumentExternal?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D)`
+        text += `\`            \`[🔗 ${isZh ? '文档链接' : 'Documentation link'}](command:intellisense.openDocument?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D)\`   \`[🔗 ${isZh ? '外部链接' : 'External document links'}](command:intellisense.openDocumentExternal?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D) \`            \` [🌟 Star!](https://github.com/common-intellisense/common-intellisense) \`            \` [❤️ Sponsor!](https://github.com/Simon-He95/sponsor)`
       }
       details.push(text)
 
@@ -871,10 +879,10 @@ function findTargetMap(maps: any, suggestionTag: string | SuggestionItem) {
   label = toCamel(`-${label}`)
   for (const map of maps) {
     if (typeof map[0] === 'object') {
-      if (map[0].name === label)
+      if (toCamel(`-${map[0].name}`) === label)
         return map[0]
     }
-    else if (map[0] === label) {
+    else if (toCamel(`-${map[0].name}`) === label) {
       return map
     }
   }

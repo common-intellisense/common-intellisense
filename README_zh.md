@@ -6,7 +6,7 @@
 此插件能够提供超级强大的智能提示功能，包含属性、事件、插槽以及对应的注释和类型，实例上的方法等等，支持多个 UI 库，让你的开发效率更上一层楼。
 
 ### 🛠️️ 如何使用
-在你的项目中安装已支持的 ui 组件库并安装此插件即可。如果插件不能生效，可以重启 vscode，如遇到问题可以打开一个 issue
+在你的项目中安装已支持的 ui 组件库并安装此插件即可。如果插件不能生效，可以重启 vscode，如遇到问题可以打开一个 [issue](https://github.com/common-intellisense/common-intellisense/issues/new)
 
 ### 🍬 目前支持
 - vant 4
@@ -45,6 +45,9 @@
 - @headlessui/react 2
 - @chakraUi/react 2
 - wot-design-uni 1
+- ark/vue 4
+- @dcloudio/uni-app 3
+- @dcloudio/uni-ui 1
 
 ### [antdv demo](assets/antdv.gif)
 

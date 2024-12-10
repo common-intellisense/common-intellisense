@@ -6,7 +6,7 @@
 This plugin can provide a super powerful smart prompt function, including properties, events, slots and corresponding annotations and types, methods on instances, etc. It supports multiple UI libraries, taking your development efficiency to the next level.
 
 ### 🛠️️ How to use
-Install the supported ui component library in your project and install the plug-in. If the plug-in does not work, you can restart vscode. If you encounter problems, you can open an issue.
+Install the supported ui component library in your project and install the plug-in. If the plug-in does not work, you can restart vscode. If you encounter problems, you can open an [issue](https://github.com/common-intellisense/common-intellisense/issues/new).
 
 ### 🍬 Currently supported
 - vant 4
@@ -45,6 +45,9 @@ Install the supported ui component library in your project and install the plug-
 - @headlessui/react 2
 - @chakraUi/react 2
 - wot-design-uni 1
+- ark/vue 4
+- @dcloudio/uni-app 3
+- @dcloudio/uni-ui 1
 
 ### [antdv demo](assets/antdv.gif)
 

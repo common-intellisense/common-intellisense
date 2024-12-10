@@ -13,7 +13,7 @@ import {
 } from '@vue-vine/compiler'
 
 import * as vscode from 'vscode'
-import { isVine, isVue, toCamel } from './ui/utils'
+import { hyphenate, isVine, isVue, toCamel } from './ui/utils'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -964,6 +964,9 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
   let target: PropsConfigItem | null = UiCompletions[tag]
   if (target && from && target.lib !== from) {
     target = null
+  }
+  else if (UiCompletions[hyphenate(tag[0].toLocaleLowerCase() + tag.slice(1))]) {
+    target = UiCompletions[hyphenate(tag[0].toLocaleLowerCase() + tag.slice(1))]
   }
   if (!target) {
     for (const p of prefix) {
