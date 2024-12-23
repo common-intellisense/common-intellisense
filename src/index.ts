@@ -247,9 +247,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (child.isSelfClosing) {
           if (isVine())
-            insertText(`>\n${empty}  <template ${slotName}>$1</template>\n</${child.tag}>`, getPosition(child.loc.end.offset + offset - 3).position)
+            insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(getPosition(child.loc.end.offset + offset - 3).position, getPosition(child.loc.end.offset + offset).position))
           else
-            insertText(`>\n${empty}  <template ${slotName}>$1</template>\n</${child.tag}>`, createPosition(child.loc.end.line - 1, child.loc.end.column - 3))
+            insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(createPosition(child.loc.end.line - 1, child.loc.end.column - 3), createPosition(child.loc.end.line - 1, child.loc.end.column)))
           // updateText((edit) => {
           //   if (isVine())
           //     edit.replace(createRange(getPosition(child.loc.end.offset + offset - 3), getPosition(child.loc.end.offset + offset - 1)), `>\n${empty}  <template ${slotName}></template>\n${empty}</${child.tag}>`)
