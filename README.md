@@ -138,7 +138,8 @@ If your project is a private library, you can also refer to [vuetify](https://gi
       "description": "en description",
       "description_zh": "zh description",
       "required": true, // if with true when select component will auto has this attribute
-      "foreach": false // it only work with vue, when you want generate with v-for
+      "foreach": false, // it only work with vue, when you want generate with v-for
+      "version": "Hints are available only in a specified version"
     }
   },
   "link": "en link to document",
@@ -157,7 +158,8 @@ If your project is a private library, you can also refer to [vuetify](https://gi
       "name": "close",
       "description": "Emitted when close icon is clicked.",
       "description_zh": "单击关闭图标时发出。",
-      "params": "[MouseEvent]"
+      "params": "[MouseEvent]",
+      "version": "Hints are available only in a specified version"
     }
   ],
   "exposed": [ // when use ref get vm, vm.value or vm.current will get this hints

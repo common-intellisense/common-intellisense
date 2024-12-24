@@ -131,7 +131,8 @@
       "description": "en 描述",
       "description_zh": "zh 说明",
       "required": true, // 如果为true时select组件会自动有这个属性
-      "foreach": false // 它只适用于 vue，当你想使用 v-for 生成时
+      "foreach": false, // 它只适用于 vue，当你想使用 v-for 生成时
+      "version": "提示在指定版本才可使用"
     }
   },
   "link": "en 指向文档的链接",
@@ -150,7 +151,8 @@
       "name": "close",
       "description": "单击关闭图标时发出。",
       "description_zh": "单击关闭图标时发出。",
-      "params": "[MouseEvent]"
+      "params": "[MouseEvent]",
+      "version": "提示在指定版本才可使用"
     }
   ],
   "exposed": [ // 使用 ref get vm, vm.value 或 vm.current 时会得到此提示
