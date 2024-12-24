@@ -122,7 +122,7 @@
 ## 如何配置组件的json
 ```json
 {
-  "name": "组件名称如 Button.Grop 或 VButton(大驼峰命名格式)",
+  "name": "组件名称如 Button.Group 或 VButton(大驼峰命名格式)",
   "props": {
     "attributeName": {
       "default": "默认值",

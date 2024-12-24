@@ -129,7 +129,7 @@ If your project is a private library, you can also refer to [vuetify](https://gi
 ## How to configure the component's JSON
 ```json
 {
-  "name": "componentName like Button.Grop or VButton(Big CamelCase Format)",
+  "name": "componentName like Button.Group or VButton(Big CamelCase Format)",
   "props": {
     "attributeName": {
       "default": "defaultValue",
