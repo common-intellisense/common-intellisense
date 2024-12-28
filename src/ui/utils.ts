@@ -223,7 +223,8 @@ export function propsReducer(options: PropsOptions) {
               : lan === 'svelte'
                 ? 'onclick'
                 : 'onClick',
-            description: isZh ? '点击事件' : 'click event',
+            description: 'click event',
+            description_zh: '点击事件',
             params: [],
           },
         ]
@@ -273,7 +274,7 @@ export function propsReducer(options: PropsOptions) {
           documentation.isTrusted = true
           documentation.supportHtml = true
           documentation.appendMarkdown(detail.join('\n\n'))
-          return proxyCreateCompletionItem({ content, snippet, documentation, type: vscode.CompletionItemKind.Event, sortText: '1', preselect: true, params: [uiName, name] })
+          return proxyCreateCompletionItem({ content, snippet, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
         },
         )
       }
@@ -505,40 +506,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
               dynamicLib = content.dynamicLib
             if (content.importWay)
               importWay = content.importWay
-            let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
-            if (requiredProps.length) {
-              if (content?.suggestions?.length === 1) {
-                const suggestionTag = content.suggestions[0]
-                const suggestion = findTargetMap(map, suggestionTag)
-                if (suggestion) {
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
-                  index = _index
-                  snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n ')}\$${++index}\n` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
-                }
-                else {
-                  snippet = `<${tag}\$${++index}>\$${++index}</${tag}>`
-                }
-              }
-              else {
-                snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>$${++index}</${tag}>`
-              }
-            }
-            else {
-              if (content?.suggestions?.length === 1) {
-                const suggestionTag = content.suggestions[0]
-                const suggestion = findTargetMap(map, suggestionTag)
-                if (suggestion) {
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
-                  index = _index
-                  snippet = `<${tag}\$${++index}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
-                }
-                else {
-                  snippet = `<${tag}$1>$2</${tag}>`
-                }
-              }
-              else { snippet = `<${tag}$1>$2</${tag}>` }
-            }
+            snippet = getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
@@ -588,42 +557,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           let _content = ''
           let description = ''
           if (typeof content === 'object') {
-            let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
+            snippet = getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
             const tag = content.name.slice(prefix.length)
-            if (requiredProps.length) {
-              if (content?.suggestions?.length === 1) {
-                let suggestionTag = content.suggestions[0]
-                const suggestion = findTargetMap(map, suggestionTag)
-                if (suggestion) {
-                  suggestionTag = suggestion.name.slice(prefix.length)
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
-                  index = _index
-                  snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
-                }
-                else {
-                  snippet = `<${tag}\$${++index}>\$${++index}</${tag}>`
-                }
-              }
-              else {
-                snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>$${++index}</${tag}>`
-              }
-            }
-            else {
-              if (content?.suggestions?.length === 1) {
-                let suggestionTag = content.suggestions[0]
-                const suggestion = findTargetMap(map, suggestionTag)
-                if (suggestion) {
-                  suggestionTag = suggestion.name.slice(prefix.length)
-                  const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
-                  index = _index
-                  snippet = `<${tag}\$${++index}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
-                }
-                else {
-                  snippet = `<${tag}$1>$2</${tag}>`
-                }
-              }
-              else { snippet = `<${tag}$1>$2</${tag}>` }
-            }
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
@@ -677,40 +612,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           dynamicLib = content.dynamicLib
         if (content.importWay)
           importWay = content.importWay
-        let [requiredProps, index] = getRequireProp(content, 0, isVue, parent)
+        snippet = getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
         const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
-        if (requiredProps.length) {
-          if (content?.suggestions?.length === 1) {
-            const suggestionTag = content.suggestions[0]
-            const suggestion = findTargetMap(map, suggestionTag)
-            if (suggestion) {
-              const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
-              index = _index
-              snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>\n  <${suggestionTag}${childRequiredProps.length ? ` ${childRequiredProps.join(' ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
-            }
-            else {
-              snippet = `<${tag}\$${++index}>\$${++index}</${tag}>`
-            }
-          }
-          else {
-            snippet = `<${tag}${requiredProps.length ? `\n  ${requiredProps.join('\n  ')}\$${++index}\n` : ''}>$${++index}</${tag}>`
-          }
-        }
-        else {
-          if (content?.suggestions?.length === 1) {
-            const suggestionTag = content.suggestions[0]
-            const suggestion = findTargetMap(map, suggestionTag)
-            if (suggestion) {
-              const [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
-              index = _index
-              snippet = `<${tag}\$${++index}>\n  <${suggestionTag}${childRequiredProps.length ? `\n  ${childRequiredProps.join('\n  ')}\$${++index}\n` : ''}>\$${++index}</${suggestionTag}>\n</${tag}>`
-            }
-            else {
-              snippet = `<${tag}$1>$2</${tag}>`
-            }
-          }
-          else { snippet = `<${tag}$1>$2</${tag}>` }
-        }
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
       }
@@ -766,7 +669,7 @@ export function toCamel(s: string) {
 
 export function getRequireProp(content: any, index = 0, isVue: boolean, parent: any = null): [string[], number] {
   const requiredProps: string[] = []
-  if (!content.props)
+  if (!content?.props)
     return [requiredProps, index]
   Object.keys(content.props).forEach((key) => {
     const item = content.props[key]
@@ -958,7 +861,6 @@ export function generateScriptNames(name: string): [string[], string] {
     item[0] + item.slice(1),
   ).join('').replace(/-(\w)/g, (_: string, v: string) => v.toUpperCase())
   const options = [
-    _name,
     `on${_name[0].toUpperCase()}${_name.slice(1)}`,
     `handle${_name[0].toUpperCase()}${_name.slice(1)}`,
     `handle${_name[0].toUpperCase()}${_name.slice(1)}Event`,
@@ -976,4 +878,32 @@ export function generateScriptNames(name: string): [string[], string] {
     ),
   ]
   return [snippetEventNameOptions, _name]
+}
+
+// 防止递归出现重复tag
+function getTemplateStr(map: any, content: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): string {
+  const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
+  if (tags.has(tag))
+    return `$${++index}`
+  let [requiredProps, __index] = getRequireProp(content, index, isVue, parent)
+  tags.add(tag)
+  const isFirst = tags.size > 1
+  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${getSuggestionsTemplateStr(content, map, __index, isVue, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
+}
+
+function getSuggestionsTemplateStr(content: any, map: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
+  if (content.suggestions?.length === 1) {
+    const suggestionTag = content.suggestions[0]
+    tags.add(suggestionTag)
+    const suggestion = findTargetMap(map, suggestionTag)
+    let [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
+    if (suggestion) {
+      const chilren = getTemplateStr(map, suggestion, _index, isVue, isSeperatorByHyphen, parent, tags)
+      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>${chilren}</${suggestionTag}>\n`
+    }
+    else {
+      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>$${++_index}</${suggestionTag}>\n  </${suggestionTag}>\n`
+    }
+  }
+  return `$${++index}`
 }
