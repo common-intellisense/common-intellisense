@@ -155,6 +155,10 @@ export function propsReducer(options: PropsOptions) {
           content = key
           snippet = `${key}="\${1|${value.value.map((i: string) => i.replace(/['`\s]/g, '').replace(/,/g, '\\,')).join(',')}|}"`
         }
+        else if (value.value) {
+          content = key
+          snippet = `${key}="${value.value}"`
+        }
         else if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'false') {
           content = snippet = key
         }
