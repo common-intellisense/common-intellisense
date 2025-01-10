@@ -10,6 +10,7 @@ export interface PropsOptions {
   map: Component[]
   extensionContext?: vscode.ExtensionContext
   prefix?: string
+  dynamicLib?: string
 }
 
 export type IconsItem = any
@@ -54,7 +55,7 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
 }
 
 export function propsReducer(options: PropsOptions) {
-  const { uiName, lib, map, prefix = '' } = options
+  const { uiName, lib, map, prefix = '', dynamicLib } = options
   const result: PropsConfig = {}
   // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
   // let icons
@@ -445,8 +446,9 @@ export function propsReducer(options: PropsOptions) {
       return documentation
     }
     const tableDocument = createTableDocument()
-
-    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: item.slots, uiName, lib: item.dynamicLib || lib }
+    const name = item.name.split('.')[0]
+    const from = (item.dynamicLib || dynamicLib) ? (dynamicLib || item.dynamicLib)!.replace('${name}', hyphenate(name)) : lib
+    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: item.slots, uiName, lib: from }
     return result
   }, result)
 }
