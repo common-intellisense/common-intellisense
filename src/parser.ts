@@ -189,7 +189,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
                 column: prop.exp.loc.start.column - 1,
               },
               end: prop.exp.loc.end,
-            }, position)) {
+            }, position) && prop.arg) {
               propName = prop.arg.content
             }
 
