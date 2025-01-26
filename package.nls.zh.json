@@ -1,14 +1,14 @@
 {
-  "displayName": "通用UI组件提示 (Common Intellisense)",
+  "displayName": "通用 UI 组件提示 (Common Intellisense)",
   "description": "适用于任何框架的通用组件智能感知",
-  "configurationTitle": "通用UI组件提示配置 (Common Intellisense Configuration)",
+  "configurationTitle": "通用 UI 组件提示配置 (Common Intellisense Configuration)",
   "uiDescription": "选择UI框架 (Select the UI framework)",
   "showSlotsDescription": "显示插槽 (Show slots)",
   "aliasDescription": "配置别名 (Configure aliases)",
   "excludeDescription": "排除文件或文件夹 (Exclude files or folders)",
-  "pickUITitle": "选择UI框架 (Select UI Framework)",
-  "remoteUris": "远程URI (Remote URIs)",
-  "remoteNpmUris": "远程NPM URI (Remote NPM URIs)",
-  "localUris": "本地URI (Local URIs)",
-  "cleanLocalCache": "清理本地UI缓存 (Clean Local UI Cache)"
+  "pickUITitle": "选择 UI 框架 (Select UI Framework)",
+  "remoteUris": "远程 URI (Remote URIs)",
+  "remoteNpmUris": "远程 NPM URI (Remote NPM URIs)",
+  "localUris": "本地 URI (Local URIs)",
+  "cleanLocalCache": "清理本地 UI 缓存 (Clean Local UI Cache)"
 }

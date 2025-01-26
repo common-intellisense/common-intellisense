@@ -3,7 +3,6 @@
   "name": "common-intellisense",
   "displayName": "%displayName%",
   "version": "0.2.73",
-  "packageManager": "pnpm@8.15.9",
   "description": "%description%",
   "author": "Simon He <https://github.com/Simon-He95>",
   "license": "MIT",
@@ -59,7 +58,7 @@
   "main": "./dist/index.js",
   "icon": "icon.png",
   "engines": {
-    "vscode": "^1.77.0"
+    "vscode": "^1.75.1"
   },
   "activationEvents": [
     "workspaceContains:package.json"
@@ -191,7 +190,7 @@
     "@simon_he/fetch-npm-cjs": "^0.0.22",
     "@simon_he/latest-version": "^0.1.13",
     "@types/node": "^18.19.68",
-    "@types/vscode": "1.77.0",
+    "@types/vscode": "^1.75.1",
     "@typescript-eslint/typescript-estree": "^6.21.0",
     "@vscode-use/createwebview": "^0.0.13",
     "@vscode-use/utils": "0.1.36",
@@ -201,15 +200,11 @@
     "bing-translate-api": "^2.10.0",
     "bumpp": "^9.9.2",
     "eslint": "^8.57.1",
-    "esno": "^0.16.3",
     "fast-glob": "^3.3.2",
     "find-up": "^6.3.0",
     "ofetch": "^1.4.1",
-    "pnpm": "^8.15.9",
     "prettier": "^3.4.2",
-    "rimraf": "^4.4.1",
     "svelte": "^5.15.0",
-    "translate-google": "^1.5.0",
     "tsup": "^6.7.0",
     "typescript": "^5.7.2",
     "vitest": "^0.29.8"
