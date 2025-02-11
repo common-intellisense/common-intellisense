@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode'
 import type { ComponentsConfig, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
-import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFiles } from '@vscode-use/utils'
+import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFile } from '@vscode-use/utils'
 import { findUp } from 'find-up'
 import { UINames as configUINames } from './constants'
 import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
@@ -183,7 +183,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   if (stop)
     stop()
   if (onChange)
-    stop = watchFiles(pkg, { onChange })
+    stop = watchFile(pkg, { onChange })
   const p = JSON.parse(await fsp.readFile(pkg, 'utf-8'))
   const { dependencies = {}, devDependencies = {}, peerDependencies = {} } = p
   const result: Uis = []

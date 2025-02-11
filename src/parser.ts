@@ -690,8 +690,6 @@ export function registerCodeLensProviderFn() {
           const filters: string[] = []
           for (const c of Array.from(child.children) as any) {
             if (c.type === 'JSXElement') {
-              if (c.openingElement.name.name !== 'template')
-                continue
               for (const p of c.openingElement.attributes) {
                 const namespace = p.name.namespace.name
                 if (namespace === 'v-slot') {
@@ -701,19 +699,19 @@ export function registerCodeLensProviderFn() {
                 }
               }
             }
-            else if (c.tag === 'template' && c.props) {
+            else if (c.tag && c.props) {
               for (const p of c.props) {
                 if (p.name === 'slot') {
-                  const slotName = p.arg.content
+                  const slotName = p.arg ? p.arg.content : p.value.content
                   filters.push(slotName)
                   break
                 }
               }
             }
-            else if (c.codegenNode?.tag === 'template' && c.codegenNode.props) {
+            else if (c.codegenNode?.tag && c.codegenNode.props) {
               for (const p of c.codegenNode.props) {
                 if (p.name === 'slot') {
-                  const slotName = p.arg.content
+                  const slotName = p.arg ? p.arg.content : p.value.content
                   filters.push(slotName)
                   break
                 }
