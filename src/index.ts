@@ -2,7 +2,7 @@ import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import { createFilter } from '@rollup/pluginutils'
 import { CreateWebview } from '@vscode-use/createwebview'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
@@ -108,7 +108,7 @@ export async function activate(context: vscode.ExtensionContext) {
       findUI(context, detectSlots)
   }))
 
-  context.subscriptions.push(registerCommand('common-intellisense.import', (params, loc, _lineOffset) => {
+  context.subscriptions.push(registerCommand('common-intellisense.import', async (params, loc, _lineOffset) => {
     if (!params)
       return
     const { data, lib, prefix, dynamicLib, importWay } = params
@@ -150,9 +150,7 @@ export async function activate(context: vscode.ExtensionContext) {
           : line
             ? `import {\n    ${deps.join(',\n    ')}\n  } from '${from}'`
             : `import { ${deps.join(', ')} } from '${from}'`
-      updateText((edit) => {
-        edit.replace(createRange(posStart, posEnd), str)
-      })
+      await insertText(createRange(posStart, posEnd), str)
     }
     else {
       // 顶部导入
@@ -195,15 +193,13 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      updateText((edit) => {
-        edit.insert(pos, str)
-      })
+      await insertText(pos, str)
     }
   }))
 
   // 监听pkg变化
   if (getIsShowSlots()) {
-    context.subscriptions.push(registerCommand('common-intellisense.slots', (child, name, offset, detail) => {
+    context.subscriptions.push(registerCommand('common-intellisense.slots', async (child, name, offset, detail) => {
       const UiCompletions = getUiCompletions()
       const activeText = getActiveText()
       if (!activeText)
@@ -232,45 +228,27 @@ export async function activate(context: vscode.ExtensionContext) {
         const pos = lastChild.loc.end
         const endColumn = Math.max(pos.column - 1, 0)
         if (isVine())
-          insertText(`\n<template ${slotName}>$1</template>`, getPosition(pos.offset + offset).position)
+          await insertText(`\n<template ${slotName}>$1</template>`, getPosition(pos.offset + offset).position)
         else
-          insertText(`\n<template ${slotName}>$1</template>`, createPosition(pos.line - 1, endColumn))
-        // updateText((edit) => {
-        //   if (isVine())
-        //     edit.insert(getPosition(pos.offset + offset).position, `\n${empty}<template ${slotName}></template>`)
-        //   else
-        //     edit.insert(createPosition(pos.line - 1, endColumn), `\n${empty}<template ${slotName}></template>`)
-        // })
+          await insertText(`\n<template ${slotName}>$1</template>`, createPosition(pos.line - 1, endColumn))
       }
       else {
         const empty = ' '.repeat(Math.max(child.loc.start.column - 1, 0))
 
         if (child.isSelfClosing) {
           if (isVine())
-            insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(getPosition(child.loc.end.offset + offset - 3).position, getPosition(child.loc.end.offset + offset).position))
+            await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(getPosition(child.loc.end.offset + offset - 3).position, getPosition(child.loc.end.offset + offset).position))
           else
-            insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(createPosition(child.loc.end.line - 1, child.loc.end.column - 3), createPosition(child.loc.end.line - 1, child.loc.end.column)))
-          // updateText((edit) => {
-          //   if (isVine())
-          //     edit.replace(createRange(getPosition(child.loc.end.offset + offset - 3), getPosition(child.loc.end.offset + offset - 1)), `>\n${empty}  <template ${slotName}></template>\n${empty}</${child.tag}>`)
-          //   else
-          //     edit.replace(createRange([child.loc.end.line - 1, child.loc.end.column - 3], [child.loc.end.line - 1, child.loc.end.column - 1]), `>\n${empty}  <template ${slotName}></template>\n${empty}</${child.tag}>`)
-          // })
+            await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(createPosition(child.loc.end.line - 1, child.loc.end.column - 3), createPosition(child.loc.end.line - 1, child.loc.end.column)))
         }
         else {
           const isNeedLineBlock = child.loc.start.line === child.loc.end.line
           const index = child.loc.start.offset + child.loc.source.indexOf(`</${child.tag}`) - (isNeedLineBlock ? 0 : (child.loc.end.column - `</${child.tag}>`.length - 1))
           const pos = getPosition(index)
           if (isVine())
-            insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, getPosition(index + offset).position)
+            await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, getPosition(index + offset).position)
           else
-            insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, createPosition(pos.line, pos.column))
-          // updateText((edit) => {
-          //   if (isVine())
-          //     edit.insert(getPosition(pos.offset + offset).position, `${isNeedLineBlock ? '\n' : ''}${empty}  <template ${slotName}></template>\n${isNeedLineBlock ? empty : ''}`)
-          //   else
-          //     edit.insert(createPosition(pos), `${isNeedLineBlock ? '\n' : ''}${empty}  <template ${slotName}></template>\n${isNeedLineBlock ? empty : ''}`)
-          // })
+            await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, createPosition(pos.line, pos.column))
         }
       }
     }))

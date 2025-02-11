@@ -193,7 +193,7 @@
     "@types/vscode": "^1.75.1",
     "@typescript-eslint/typescript-estree": "^6.21.0",
     "@vscode-use/createwebview": "^0.0.13",
-    "@vscode-use/utils": "0.1.36",
+    "@vscode-use/utils": "0.1.46",
     "@vscode/vsce": "^3.2.1",
     "@vue-vine/compiler": "^0.1.41",
     "@vue/compiler-sfc": "3.3.4",
