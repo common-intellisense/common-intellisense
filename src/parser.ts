@@ -384,7 +384,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
         return result
     }
 
-    if (type === 'JSXElement' || type === 'Element' || type === 'InlineComponent') {
+    if ((type === 'JSXElement' || type === 'Element' || type === 'InlineComponent') && isInPosition(openingElement.loc, position)) {
       const target = openingElement.attributes.find((item: any) => isInPosition(item.loc, position) || item.value === null)
       if (!openingElement) {
         openingElement = {
