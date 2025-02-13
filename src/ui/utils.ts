@@ -692,7 +692,7 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
             const props = p.props
             if (props.length) {
               for (const p of props) {
-                if (p.name === 'bind' && p.arg.content === prop) {
+                if (p.name === 'bind' && p.arg && p.arg.content === prop) {
                   prefix = p.exp.content
                   break outerLoop
                 }

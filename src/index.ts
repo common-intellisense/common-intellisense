@@ -681,10 +681,16 @@ export async function activate(context: vscode.ExtensionContext) {
           const parentTag = result.parent.tag
           if (!parentTag)
             return
+
           const name = parentTag[0].toUpperCase() + toCamel(parentTag).slice(1)
-          const slotName = result.props.find((item: any) => item.name === 'slot').arg.content
+          const slotName = result.props.find((item: any) => item.name === 'slot')?.arg?.content
+
+          if (!slotName)
+            return
+
           const from = uiDeps?.[name]
           const cacheMap = getCacheMap()
+
           if (from && cacheMap.size > 2) {
             // 存在多个 UI 库
             let fixedFrom = nameMap[from] || from
