@@ -39,8 +39,8 @@ importers:
         specifier: ^0.0.13
         version: 0.0.13
       '@vscode-use/utils':
-        specifier: 0.1.46
-        version: 0.1.46
+        specifier: 0.1.47
+        version: 0.1.47
       '@vscode/vsce':
         specifier: ^3.2.2
         version: 3.2.2
@@ -817,8 +817,8 @@ packages:
     resolution: {integrity: sha512-ie6cCNqrWwWkLQ9CsEpFNfId819KKXClPHyQUEAVETtNy6VVsD5RJph6qlq744tY+T6DRbTJkzzHYr4v9sCqfA==}
     engines: {vscode: ^1.77.0}
 
-  '@vscode-use/utils@0.1.46':
-    resolution: {integrity: sha512-e0M+e1eCqVgVCJ+xKKeAYLyN3WHrXrTzdQjA75grLajApQjhRbMAFZ9HIwYD/eKAPCx/QNRzteJV2E0MzMie+A==}
+  '@vscode-use/utils@0.1.47':
+    resolution: {integrity: sha512-TRh3m4PlWruKDTEyEBH70ekuqE/cxt4OYK+l2lenv6GRUf5lbXLjAmB30y0usBxWr77Yu8DSHdwgKJsorkloaw==}
     engines: {vscode: ^1.92.0}
 
   '@vscode/vsce-sign-alpine-arm64@2.0.2':
@@ -3998,7 +3998,7 @@ snapshots:
 
   '@vscode-use/createwebview@0.0.13': {}
 
-  '@vscode-use/utils@0.1.46': {}
+  '@vscode-use/utils@0.1.47': {}
 
   '@vscode/vsce-sign-alpine-arm64@2.0.2':
     optional: true
