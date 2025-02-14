@@ -837,13 +837,13 @@ export function hash(str: string) {
 }
 
 export function isVue() {
-  const currentFileUrl = getCurrentFileUrl()!
-  return currentFileUrl.endsWith('.vue')
+  const currentFileUrl = getCurrentFileUrl()
+  return currentFileUrl?.endsWith('.vue')
 }
 
 export function isVine() {
-  const currentFileUrl = getCurrentFileUrl()!
-  return currentFileUrl.endsWith('.vine.ts')
+  const currentFileUrl = getCurrentFileUrl()
+  return currentFileUrl?.endsWith('.vine.ts')
 }
 
 export function isVueOrVine() {

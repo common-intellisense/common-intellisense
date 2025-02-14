@@ -21,14 +21,14 @@ const { parse: svelteParser } = require('svelte/compiler')
 let isInTemplate = false
 
 export function parser(code: string, position: vscode.Position) {
-  const entry = getCurrentFileUrl()
-  if (!entry)
-    return
-  const isVine = entry.endsWith('.vine.ts')
-  if (isVine) {
+  if (isVine()) {
     return parserVine(code, position)
   }
   else {
+    const entry = getCurrentFileUrl()
+    if (!entry)
+      return
+
     const suffix = entry.slice(entry.lastIndexOf('.') + 1)
     if (!suffix)
       return
