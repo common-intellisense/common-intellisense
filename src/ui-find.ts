@@ -30,7 +30,7 @@ export const urlCache = new Map<string, Uis>()
 let stop: any = null
 let preUis: Uis | null = null
 
-export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: any) {
+export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: any) {
   UINames.length = 0
   optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
   UiCompletions = null
@@ -48,8 +48,8 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
     return
 
   if (urlCache.has(cwd)) {
+    await getOthers()
     const uis = urlCache.get(cwd)
-    getOthers()
     if (uis && uis.length)
       updateCompletions(uis)
     return
@@ -61,7 +61,8 @@ export function findUI(extensionContext: vscode.ExtensionContext, detectSlots: a
       return
     const { uis } = res
     urlCache.set(cwd, uis)
-    getOthers()
+    await getOthers()
+
     if (!uis || !uis.length)
       return
 
@@ -263,7 +264,7 @@ async function getOthers() {
       }
     }
     try {
-      fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
+      await fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
     }
     catch (error) {
       logger.error(`写入${localCacheUri} 失败: ${String(error)}`)

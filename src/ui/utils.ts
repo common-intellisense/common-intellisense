@@ -677,15 +677,18 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
   const requiredProps: string[] = []
   if (!content?.props)
     return [requiredProps, index]
+
   Object.keys(content.props).forEach((key) => {
     const item = content.props[key]
     if (!item.required)
       return
     let prefix = ''
+    let prefixKey = ''
     if (item.related && item.related.length && parent) {
       for (const _item of item.related) {
         const name = _item.split('.').slice(0, -1).join('.')
         const prop = _item.split('.').slice(-1)[0]
+        prefixKey = prop
         let p = parent
         outerLoop: while (p) {
           if (p.tag === name) {
@@ -758,20 +761,25 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
         return item
       })
 
-      if (item.default && types.includes(item.default)) {
-        // 如果 item.default 并且在 type 中，将 types 的 default 值，放到
-        const i = types.findIndex((i: string) => i === item.default)
-        types.splice(i, 1)
-        types.unshift(item.default)
+      if (prefix && item[`$${prefixKey}`]) {
+        attr = `${key}="${item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)}"`
       }
-      const typeTips = types
-        .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))
-        .join(',')
+      else {
+        if (item.default && types.includes(item.default)) {
+          // 如果 item.default 并且在 type 中，将 types 的 default 值，放到
+          const i = types.findIndex((i: string) => i === item.default)
+          types.splice(i, 1)
+          types.unshift(item.default)
+        }
+        const typeTips = types
+          .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))
+          .join(',')
 
-      if (v)
-        attr = `${key}="${v}"`
-      else
-        attr = `${key}="\${${++index}|${typeTips}|}"`
+        if (v)
+          attr = `${key}="${v}"`
+        else
+          attr = `${key}="\${${++index}|${prefix ? item.value + prefix : typeTips}|}"`
+      }
     }
     requiredProps.push(attr)
   })
