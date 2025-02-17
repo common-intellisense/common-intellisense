@@ -4,6 +4,7 @@
   "displayName": "%displayName%",
   "version": "0.2.76",
   "description": "%description%",
+  "packageManager": "pnpm@9.15.0",
   "author": "Simon He <https://github.com/Simon-He95>",
   "license": "MIT",
   "funding": "https://github.com/sponsors/Simon-He95",
