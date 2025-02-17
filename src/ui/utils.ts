@@ -764,14 +764,14 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
         types.splice(i, 1)
         types.unshift(item.default)
       }
-      const typeTipes = types
+      const typeTips = types
         .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))
         .join(',')
 
       if (v)
         attr = `${key}="${v}"`
       else
-        attr = `${key}="\${${++index}|${typeTipes}|}"`
+        attr = `${key}="\${${++index}|${typeTips}|}"`
     }
     requiredProps.push(attr)
   })
