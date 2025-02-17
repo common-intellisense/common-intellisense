@@ -12,5 +12,5 @@ export async function translate(_prefix: string, lan: 'zh' | 'en') {
     const [A, B] = result.split(' of ')
     result = `${B} ${A}`
   }
-  return result.replace(/\s+/g, '-')
+  return result.replace(/\([^\)]+\)/g, '').trim().replace(/\s+/g, '-')
 }
