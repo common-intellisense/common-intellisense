@@ -25,6 +25,7 @@ module.exports = antfu(
       'no-new-func': 'off',
       'perfectionist/sort-imports': 'off',
       'no-labels': 'off',
+      'style/no-mixed-operators': 'off',
     },
   },
 )

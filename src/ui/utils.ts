@@ -273,8 +273,8 @@ export function propsReducer(options: PropsOptions) {
           }
           else {
             const [snippetEventNameOptions, _name] = generateScriptNames(name)
-            snippet = `${_name}={\${1|${snippetEventNameOptions.join(',')}|}}`
-            content = `${_name}={${_name}}`
+            snippet = `${name}={\${1|${snippetEventNameOptions.join(',')}|}}`
+            content = `${name}={${_name}}`
           }
 
           content += `  ${isZh ? (description_zh || description) : description}${params ? `  ${isZh ? '参数' : 'params'}：${params}` : ''}`

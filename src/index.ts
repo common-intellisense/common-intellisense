@@ -2,7 +2,7 @@ import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import { createFilter } from '@rollup/pluginutils'
 import { CreateWebview } from '@vscode-use/createwebview'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText } from '@vscode-use/utils'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
@@ -150,17 +150,18 @@ export async function activate(context: vscode.ExtensionContext) {
           : line
             ? `import {\n    ${deps.join(',\n    ')}\n  } from '${from}'`
             : `import { ${deps.join(', ')} } from '${from}'`
-      await insertText(createRange(posStart, posEnd), str)
+      updateText(edit => edit.replace(createRange(posStart, posEnd), str))
     }
     else {
       // 顶部导入
+      const _isVue = isVue()
       let str = importWay === 'as default'
-        ? `  import * as ${deps.join(', ')} from '${from}'`
+        ? `${_isVue ? '  ' : ''}import * as ${deps.join(', ')} from '${from}'`
         : importWay === 'default'
-          ? `  import ${deps.join(', ')} from '${from}'`
-          : `  import { ${deps.join(', ')} } from '${from}'`
+          ? `${_isVue ? '  ' : ''}import ${deps.join(', ')} from '${from}'`
+          : `${_isVue ? '  ' : ''}import { ${deps.join(', ')} } from '${from}'`
       let pos: any = null
-      if (isVue()) {
+      if (_isVue) {
         if (loc) {
           if (getLineText(loc.start.line)?.trim()) {
             str += '\n'
@@ -193,7 +194,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      await insertText(pos, str)
+      updateText(edit => edit.insert(pos, str))
     }
   }))
 
@@ -334,7 +335,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }
 
-    if (UiCompletions && result?.type === 'props') {
+    if (UiCompletions && result?.type === 'props' && (!result.propType || result.propType && result.propType !== 'JSXAttribute')) {
       const name = result.tag[0].toUpperCase() + result.tag.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
       if (result.propName === 'icon')
         return UiCompletions.icons
