@@ -483,6 +483,7 @@ export async function activate(context: vscode.ExtensionContext) {
               }))
             })
           })
+          return r
         }
         else {
           r.push(...(completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop)).map((item: any) => createCompletionItem(({

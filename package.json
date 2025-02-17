@@ -128,7 +128,7 @@
         },
         "common-intellisense.translate": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "%useTranslateDescription%"
         },
         "common-intellisense.showSlots": {
@@ -195,7 +195,7 @@
     "@simon_he/fetch-npm": "^0.0.21",
     "@simon_he/fetch-npm-cjs": "^0.0.22",
     "@simon_he/latest-version": "^0.1.13",
-    "@simon_he/translate": "^0.0.8",
+    "@simon_he/translate": "^0.0.9",
     "@types/node": "^18.19.76",
     "@types/vscode": "1.75.1",
     "@typescript-eslint/typescript-estree": "^6.21.0",

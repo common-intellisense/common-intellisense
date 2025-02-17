@@ -718,12 +718,7 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
                 let result = _prefix
                 if (isContainCn(_prefix)) {
                   try {
-                    result = (await translate(_prefix, 'en'))[0].trim()
-
-                    if (result.includes('and')) {
-                      result = result.split('and')[0]
-                    }
-                    result = result.replace(/\s+/g, '-')
+                    result = (await translate(_prefix, 'en'))
                   }
                   catch (errorMsg: any) {
                     logger.error(errorMsg.msg)

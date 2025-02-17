@@ -27,8 +27,8 @@ importers:
         specifier: ^0.1.13
         version: 0.1.13
       '@simon_he/translate':
-        specifier: ^0.0.8
-        version: 0.0.8
+        specifier: ^0.0.9
+        version: 0.0.9
       '@types/node':
         specifier: ^18.19.76
         version: 18.19.76
@@ -637,8 +637,8 @@ packages:
   '@simon_he/latest-version@0.1.13':
     resolution: {integrity: sha512-NWLgEGP7nkGJxn6TC1lIbMwf0pe7BjhALhEVYC7OrUwg7SFBvTZ8/JYEnetZpgEwSjGJ4vOHAOGyTfbGUcNNTA==}
 
-  '@simon_he/translate@0.0.8':
-    resolution: {integrity: sha512-UJuFC6sCeEj5fTVwysXfD/v0QBsJ7D453GVO+MeT1ff+RWqw1koBN1pZRG/yTs6uft3oVBt6lyqm/NNEZaOXHg==}
+  '@simon_he/translate@0.0.9':
+    resolution: {integrity: sha512-CyN6zZjSRFmhyUluemIgVZ8XWlyU8HvGVUaeegPxmdwRhmi8zqb9dc2y4U9jm/rBkl1kiLzcbD0nSLIITbdafQ==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -3830,7 +3830,7 @@ snapshots:
 
   '@simon_he/latest-version@0.1.13': {}
 
-  '@simon_he/translate@0.0.8': {}
+  '@simon_he/translate@0.0.9': {}
 
   '@sindresorhus/is@4.6.0': {}
 
