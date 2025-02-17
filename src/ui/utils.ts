@@ -726,7 +726,10 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
                 }
                 return result ? `${result[0].toLocaleLowerCase()}${camelize(result.slice(1))}` : result
               })
-              attr = `${key}="\${${index}:${fixedPrefixValue}}"`
+              if (fixedPrefixValue === `${prefix}.`)
+                attr = `${key}="${prefix}.\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
+              else
+                attr = `${key}="\${${index}:${fixedPrefixValue}}"`
             }
             else {
               attr = `${key}="${prefix ? `${prefix}.` : ''}\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
