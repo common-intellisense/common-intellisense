@@ -3,6 +3,7 @@
   "description": "适用于任何框架的通用组件智能感知",
   "configurationTitle": "通用 UI 组件提示配置 (Common Intellisense Configuration)",
   "uiDescription": "选择UI框架 (Select the UI framework)",
+  "useTranslateDescription": "使用翻译功能 (Use translation)",
   "showSlotsDescription": "显示插槽 (Show slots)",
   "aliasDescription": "配置别名 (Configure aliases)",
   "excludeDescription": "排除文件或文件夹 (Exclude files or folders)",

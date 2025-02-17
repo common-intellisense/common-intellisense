@@ -526,7 +526,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const prefix = lineText.trim().split(' ').slice(-1)[0]
     if (prefix.toLowerCase() === prefix ? optionsComponents.prefix.some((reg: string) => prefix.startsWith(reg) || reg.startsWith(prefix)) : true) {
       const parent = result.parent
-      const data = optionsComponents.data.map(c => c(parent)).flat()
+      const data = await Promise.all(optionsComponents.data.map(c => c(parent)).flat())
       if (parent) {
         const parentTag = parent.tag || parent.name
         if (UiCompletions) {
@@ -664,7 +664,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!result)
           return
         if (result.type === 'tag') {
-          const data = optionsComponents.data.map(c => c()).flat()
+          const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
           if (!data?.length || !word)
             return createHover('')
           const tag = result.tag[0].toUpperCase() + toCamel(result.tag).slice(1)
@@ -847,7 +847,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return target.hover
         }
       }
-      const data = optionsComponents.data.map(c => c()).flat()
+      const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
       if (!data?.length || !word)
         return createHover('')
       word = toCamel(word)[0].toUpperCase() + toCamel(word).slice(1)

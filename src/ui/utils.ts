@@ -1,8 +1,11 @@
 import type { CompletionItemOptions } from '@vscode-use/utils'
 import type { CompletionItem } from 'vscode'
 import type { Component, Slots, SuggestionItem } from './ui-type'
-import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, setCommandParams } from '@vscode-use/utils'
+import { camelize, isContainCn, replaceAsync } from 'lazy-js-utils'
+import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
+import { translate } from '../translate'
+import { logger } from '../ui-find'
 
 export interface PropsOptions {
   uiName: string
@@ -485,7 +488,7 @@ export interface ComponentsConfigItem {
   prefix: string
   directives?: Directives
   lib: string
-  data: () => CompletionItem[]
+  data: () => Promise<CompletionItem>[]
   isReact?: boolean
   dynamicLib?: string
   importWay?: 'as default' | 'default' | 'specifier'
@@ -502,7 +505,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix,
         directives,
         lib,
-        data: (parent?: any) => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
+        data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
           const isVue = isVueOrVine()
           let snippet = ''
           let _content = ''
@@ -513,7 +516,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             if (content.importWay)
               importWay = content.importWay
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
-            snippet = getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
+            snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
@@ -557,13 +560,13 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix: '',
         directives,
         lib,
-        data: (parent?: any) => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
+        data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
           const isVue = isVueOrVine()
           let snippet = ''
           let _content = ''
           let description = ''
           if (typeof content === 'object') {
-            snippet = getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
+            snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
             const tag = content.name.slice(prefix.length)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
@@ -608,7 +611,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
     prefix,
     directives,
     lib,
-    data: (parent?: any) => (map as [Component | string, string, string?][]).map(([content, detail, demo]) => {
+    data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
       const isVue = isVueOrVine()
       let snippet = ''
       let _content = ''
@@ -618,7 +621,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           dynamicLib = content.dynamicLib
         if (content.importWay)
           importWay = content.importWay
-        snippet = getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
+        snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
         const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
@@ -673,41 +676,22 @@ export function toCamel(s: string) {
   return s.replace(/-(\w)/g, (_, v) => v.toUpperCase())
 }
 
-export function getRequireProp(content: any, index = 0, isVue: boolean, parent: any = null): [string[], number] {
+export async function getRequireProp(content: any, index = 0, isVue: boolean, parent: any = null): Promise<[string[], number]> {
   const requiredProps: string[] = []
   if (!content?.props)
     return [requiredProps, index]
 
-  Object.keys(content.props).forEach((key) => {
+  for (let key of Object.keys(content.props)) {
     const item = content.props[key]
     if (!item.required)
-      return
+      continue
     let prefix = ''
     let prefixKey = ''
     if (item.related && item.related.length && parent) {
       for (const _item of item.related) {
-        const name = _item.split('.').slice(0, -1).join('.')
-        const prop = _item.split('.').slice(-1)[0]
-        prefixKey = prop
-        let p = parent
-        outerLoop: while (p) {
-          if (p.tag === name) {
-            const props = p.props
-            if (props.length) {
-              for (const p of props) {
-                if (p.name === 'bind' && p.arg && p.arg.content === prop) {
-                  prefix = p.exp.content
-                  break outerLoop
-                }
-                else if (p.name === prop) {
-                  prefix = p.value.content
-                  break outerLoop
-                }
-              }
-            }
-          }
-          p = p.parent
-        }
+        ;[prefix, prefixKey] = findValue(parent, _item)
+        if (prefix)
+          break
       }
     }
     let attr = ''
@@ -725,10 +709,37 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
         key = key.replace(':v-model', 'v-model')
         ++index
         if (!v) {
-          if (isVue)
-            attr = `${key}="${prefix ? `${prefix}.` : ''}\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
-          else
+          if (isVue) {
+            if (prefix && item[`$${prefixKey}`] && getConfiguration('common-intellisense.translate')) {
+              const prefixValue = item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)
+              // 替换 $()
+              const fixedPrefixValue = await replaceAsync(prefixValue, /\$\(([^)]+)\)/g, async (_: string, m: string) => {
+                const [_prefix, _prefixKey] = findValue(parent, m)
+                let result = _prefix
+                if (isContainCn(_prefix)) {
+                  try {
+                    result = (await translate(_prefix, 'en'))[0].trim()
+
+                    if (result.includes('and')) {
+                      result = result.split('and')[0]
+                    }
+                    result = result.replace(/\s+/g, '-')
+                  }
+                  catch (errorMsg: any) {
+                    logger.error(errorMsg.msg)
+                  }
+                }
+                return result ? `${result[0].toLocaleLowerCase()}${camelize(result.slice(1))}` : result
+              })
+              attr = `${key}="\${${index}:${fixedPrefixValue}}"`
+            }
+            else {
+              attr = `${key}="${prefix ? `${prefix}.` : ''}\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
+            }
+          }
+          else {
             attr = `${key.slice(1)}={\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}}`
+          }
         }
         else {
           if (isVue)
@@ -782,7 +793,116 @@ export function getRequireProp(content: any, index = 0, isVue: boolean, parent: 
       }
     }
     requiredProps.push(attr)
-  })
+  }
+
+  // Object.keys(content.props).forEach((key) => {
+  //   const item = content.props[key]
+  //   if (!item.required)
+  //     return
+  //   let prefix = ''
+  //   let prefixKey = ''
+  //   if (item.related && item.related.length && parent) {
+  //     for (const _item of item.related) {
+  //       ;[prefix, prefixKey] = findValue(parent, _item)
+  //       if (prefix)
+  //         break
+  //     }
+  //   }
+  //   let attr = ''
+  //   const v = item.value
+  //   if (key.startsWith(':')) {
+  //     const tagName = getComponentTagName(content.name)
+  //     const keyName = toCamel(key.split(':').slice(-1)[0])
+  //     if (item.foreach) {
+  //       if (requiredProps.some(p => p.includes('v-for=')))
+  //         attr = `${key}="item.\${${++index}:${keyName}}"`
+  //       else
+  //         attr = `v-for="item in \${${++index}:${tagName}Options}" :key="item.\${${++index}:key}" ${key}="item.\${${++index}:${keyName}}"`
+  //     }
+  //     else {
+  //       key = key.replace(':v-model', 'v-model')
+  //       ++index
+  //       if (!v) {
+  //         if (isVue) {
+  //           if (prefix && item[`$${prefixKey}`]) {
+  //             debugger
+  //             const prefixValue = item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)
+  //             // 替换 $()
+  //            const fixedPrefixValue =  await replaceAsync(prefixValue, /\$\(([^\)]+)\)/g, async (_: string, m: string) => {
+  //               const [_prefix, _prefixKey] = findValue(parent, m)
+  //               let result = _prefix
+  //               if (isContainCn(_prefix)) {
+  //                 try {
+  //                   result = (await translate(_prefix, 'en'))[0]
+
+  //                   if (result.includes('and')) {
+  //                     result = result.split('and')[0]
+  //                   }
+  //                 } catch (error) { }
+  //               }
+  //               return `${result[0].toLocaleLowerCase()}${camelize(result.slice(1))}`
+  //             })
+  //             debugger
+
+  //           } else
+  //             attr = `${key}="${prefix ? `${prefix}.` : ''}\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
+  //         }
+  //         else
+  //           attr = `${key.slice(1)}={\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}}`
+  //       }
+  //       else {
+  //         if (isVue)
+  //           attr = `${key}="\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
+  //         else
+  //           attr = `${key.slice(1)}={\${${index}:${v}}}`
+  //       }
+  //     }
+  //   }
+  //   else if (item.type && item.type.includes('boolean') && item.default === 'false') {
+  //     // 还要进一步看它的 type 如果 type === boolean 提供 true or false 如果是字符串，使用 / 或着 ｜ 分割，作为提示
+  //     if (isVue)
+  //       attr = key
+  //     else
+  //       attr = `${key}="true"`
+  //   }
+  //   else {
+  //     const tempMap: any = {}
+  //     const types = item.type.replace(/\s+/g, ' ').replace(/\{((?:[^{}]|\{[^{}]*\})*)\}|<((?:[^<>]|<[^<>]*>)*)>/g, (_: string) => {
+  //       const key = hash(_)
+  //       tempMap[key] = _.replace(/,/g, '\,')
+  //       return key
+  //     }).split(/[|/]/).filter((item: string) => {
+  //       // 如果 item长度太长，可能有问题，所以也过滤掉
+  //       return !!item && item.length < 40
+  //     }).map((item: string) => item.replace(/['"]/g, '').trim()).map((item: string) => {
+  //       Object.keys(tempMap).forEach((i) => {
+  //         item = item.replace(i, tempMap[i])
+  //       })
+  //       return item
+  //     })
+
+  //     if (prefix && item[`$${prefixKey}`]) {
+  //       attr = `${key}="${item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)}"`
+  //     }
+  //     else {
+  //       if (item.default && types.includes(item.default)) {
+  //         // 如果 item.default 并且在 type 中，将 types 的 default 值，放到
+  //         const i = types.findIndex((i: string) => i === item.default)
+  //         types.splice(i, 1)
+  //         types.unshift(item.default)
+  //       }
+  //       const typeTips = types
+  //         .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))
+  //         .join(',')
+
+  //       if (v)
+  //         attr = `${key}="${v}"`
+  //       else
+  //         attr = `${key}="\${${++index}|${prefix ? item.value + prefix : typeTips}|}"`
+  //     }
+  //   }
+  //   requiredProps.push(attr)
+  // })
   for (const e of content.events) {
     if (!e.required)
       continue
@@ -895,29 +1015,57 @@ export function generateScriptNames(name: string): [string[], string] {
 }
 
 // 防止递归出现重复tag
-function getTemplateStr(map: any, content: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): string {
+async function getTemplateStr(map: any, content: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
   const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
   if (tags.has(tag))
     return `$${++index}`
-  let [requiredProps, __index] = getRequireProp(content, index, isVue, parent)
+  let [requiredProps, __index] = await getRequireProp(content, index, isVue, parent)
   tags.add(tag)
   const isFirst = tags.size > 1
-  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${getSuggestionsTemplateStr(content, map, __index, isVue, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
+  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, map, __index, isVue, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
 }
 
-function getSuggestionsTemplateStr(content: any, map: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
+async function getSuggestionsTemplateStr(content: any, map: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
   if (content.suggestions?.length === 1) {
     const suggestionTag = content.suggestions[0]
     tags.add(suggestionTag)
     const suggestion = findTargetMap(map, suggestionTag)
-    let [childRequiredProps, _index] = getRequireProp(suggestion, index, isVue, parent)
+    let [childRequiredProps, _index] = await getRequireProp(suggestion, index, isVue, parent)
+
     if (suggestion) {
-      const chilren = getTemplateStr(map, suggestion, _index, isVue, isSeperatorByHyphen, parent, tags)
-      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>${chilren}</${suggestionTag}>\n`
+      const chilren = await getTemplateStr(map, suggestion, ++_index, isVue, isSeperatorByHyphen, parent, tags)
+      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index}>${chilren}</${suggestionTag}>\n`
     }
     else {
       return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>$${++_index}</${suggestionTag}>\n  </${suggestionTag}>\n`
     }
   }
   return `$${++index}`
+}
+
+function findValue(parent: any, item: string) {
+  let p = parent
+  const name = item.split('.').slice(0, -1).join('.')
+  const prop = item.split('.').slice(-1)[0]
+  let prefix = ''
+  const prefixKey = prop
+  outerLoop: while (p) {
+    if (p.tag === name) {
+      const props = p.props
+      if (props.length) {
+        for (const p of props) {
+          if (p.name === 'bind' && p.arg && p.arg.content === prop) {
+            prefix = p.exp.content
+            break outerLoop
+          }
+          else if (p.name === prop) {
+            prefix = p.value.content
+            break outerLoop
+          }
+        }
+      }
+    }
+    p = p.parent
+  }
+  return [prefix, prefixKey]
 }
