@@ -719,7 +719,7 @@ export function registerCodeLensProviderFn() {
             }
           }
           slots.filter((s: any) => !filters.includes(s.name)).forEach((s: any, i: number) => {
-            const { name, description, description_zh } = s
+            const { name, description, description_zh, version } = s
             // 计算偏移量
             let codeLensRange = null
             if (isVine()) {
@@ -730,9 +730,10 @@ export function registerCodeLensProviderFn() {
             else {
               codeLensRange = createRange(range.start.line - 1, range.start.column, range.end.line - 1, range.end.column)
             }
+
             result.push(new vscode.CodeLens(codeLensRange, {
               title: `${i === 0 ? 'Slots: ' : ''}${name}`,
-              tooltip: isZh ? description_zh : description,
+              tooltip: (version ? `❗${version} VERSION: ` : '') + (isZh ? description_zh : description),
               command: 'common-intellisense.slots',
               arguments: [child, name, offset, s],
             }))

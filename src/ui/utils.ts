@@ -343,7 +343,7 @@ export function propsReducer(options: PropsOptions) {
 
         documentation.appendMarkdown(details.join('\n\n'))
         const hover = createHover(documentation)
-        return proxyCreateCompletionItem({ content: expose.name, snippet: expose.detail.startsWith('()') ? `${expose.name}()` : expose.name, detail, documentation, type: 1, sortText: '0', params: uiName, hover })
+        return proxyCreateCompletionItem({ content: expose.name, snippet: expose.detail.startsWith('()') ? `${expose.name}()` : expose.name, detail, documentation, type: 1, sortText: 'a', preselect: true, params: uiName, hover })
       }))
     }
 
