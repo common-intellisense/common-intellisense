@@ -209,6 +209,7 @@
     "eslint": "^8.57.1",
     "fast-glob": "^3.3.3",
     "find-up": "^6.3.0",
+    "get-lib-version": "^0.0.1",
     "lazy-js-utils": "^0.1.31",
     "ofetch": "^1.4.1",
     "prettier": "^3.5.1",

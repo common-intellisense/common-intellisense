@@ -80,4 +80,5 @@ export interface Component {
   link_zh?: string
   dynamicLib?: string
   importWay?: 'as default' | 'default' | 'specifier'
+  version?: string
 }

@@ -253,7 +253,7 @@ async function getOthers() {
           cacheMap.set(key, componentsNames)
         }
         else {
-          const completion = UI[key]?.()
+          const completion = await UI[key]?.()
           if (!completion)
             continue
           if (!UiCompletions)

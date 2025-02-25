@@ -1,11 +1,12 @@
 import type { CompletionItemOptions } from '@vscode-use/utils'
 import type { CompletionItem } from 'vscode'
 import type { Component, Slots, SuggestionItem } from './ui-type'
-import { camelize, isContainCn, replaceAsync } from 'lazy-js-utils'
+import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from 'lazy-js-utils'
 import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { translate } from '../translate'
 import { logger } from '../ui-find'
+import { getLibVersion } from 'get-lib-version'
 
 export interface PropsOptions {
   uiName: string
@@ -72,13 +73,21 @@ export function propsReducer(options: PropsOptions) {
   //   })
   //   result.icons = icons
   // }
-  return map.reduce((result, item: Component) => {
+
+  return reduceAsync(map, async (result, item: Component) => {
     const completions: ((isVue?: boolean) => SubCompletionItem[])[] = []
     const events: ((isVue?: boolean) => SubCompletionItem[])[] = []
     const methods: SubCompletionItem[] = []
     const exposed: SubCompletionItem[] = []
     const slots: SubCompletionItem[] = []
     const isZh = getLocale().includes('zh')
+    if (item.version) {
+      // 过滤在某个版本才增加的新组件
+      const localVersion = await getLibVersion(lib)
+      if (localVersion && compareVersion(item.version, localVersion) === -1) {
+        return result
+      }
+    }
 
     const completionsDeferCallback = (isVue?: boolean) => {
       const data: SubCompletionItem[] = [
