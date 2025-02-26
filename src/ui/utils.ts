@@ -2,7 +2,7 @@ import type { CompletionItemOptions } from '@vscode-use/utils'
 import type { CompletionItem } from 'vscode'
 import type { Component, Slots, SuggestionItem } from './ui-type'
 import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from 'lazy-js-utils'
-import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, setCommandParams } from '@vscode-use/utils'
+import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, getRootPath, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { translate } from '../translate'
 import { logger } from '../ui-find'
@@ -58,6 +58,7 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
   return createCompletionItem(options)
 }
 
+const cwd = getRootPath()
 export function propsReducer(options: PropsOptions) {
   const { uiName, lib, map, prefix = '', dynamicLib } = options
   const result: PropsConfig = {}
@@ -73,6 +74,7 @@ export function propsReducer(options: PropsOptions) {
   //   })
   //   result.icons = icons
   // }
+  let localVersion: string | undefined
 
   return reduceAsync(map, async (result, item: Component) => {
     const completions: ((isVue?: boolean) => SubCompletionItem[])[] = []
@@ -81,9 +83,11 @@ export function propsReducer(options: PropsOptions) {
     const exposed: SubCompletionItem[] = []
     const slots: SubCompletionItem[] = []
     const isZh = getLocale().includes('zh')
+    if (!localVersion)
+      localVersion = await getLibVersion(lib, cwd)
+
     if (item.version) {
       // 过滤在某个版本才增加的新组件
-      const localVersion = await getLibVersion(lib)
       if (localVersion && compareVersion(item.version, localVersion) === -1) {
         return result
       }
@@ -101,7 +105,20 @@ export function propsReducer(options: PropsOptions) {
       else
         data.push(proxyCreateCompletionItem({ content: 'style', snippet: 'style={$1}', type: 5, params: [] }))
 
-      Object.keys(item.props!).forEach((key) => {
+      // 过滤 props 中有 version 并且当前版本小于组件版本的属性
+      const filterProps = localVersion
+        ? Object.keys(item.props || {}).reduce((result, key) => {
+            const value = (item.props as any)[key]
+            // value.version 只提取版本号
+            const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            if (version && compareVersion(version, localVersion!) === -1) {
+              return result
+            }
+            return { ...result, [key]: value }
+          }, {})
+        : item.props
+
+      Object.keys(filterProps).forEach((key) => {
         const value = (item.props as any)[key]
         let type = vscode.CompletionItemKind.Property
         if (typeof value.value !== 'string')
@@ -250,7 +267,16 @@ export function propsReducer(options: PropsOptions) {
           if (!item.events.find(event => event.name === _event.name))
             item.events.push(_event)
         })
-        return item.events.map((events: any) => {
+
+        // 过滤在某个版本才增加的新事件
+        const filterEvents = localVersion
+          ? item.events.filter((event) => {
+              const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
+              return !(version && compareVersion(version, localVersion!) === -1)
+            })
+          : item.events
+
+        return filterEvents.map((events: any) => {
           const detail: string[] = []
           const { name, description, params, description_zh, platform } = events
 
@@ -299,7 +325,14 @@ export function propsReducer(options: PropsOptions) {
     }
 
     if (item.methods) {
-      methods.push(...item.methods.map((method) => {
+      const filterMethods = localVersion
+        ? item.methods.filter((item) => {
+          // 过滤在某个版本才增加的新方法
+            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            return !(version && compareVersion(version, localVersion!) === -1)
+          })
+        : item.methods
+      methods.push(...filterMethods.map((method) => {
         const documentation = new vscode.MarkdownString()
         documentation.isTrusted = true
         documentation.supportHtml = true
@@ -328,7 +361,14 @@ export function propsReducer(options: PropsOptions) {
     }
 
     if (item.exposed) {
-      exposed.push(...item.exposed.map((expose) => {
+      const filterExposed = localVersion
+        ? item.exposed.filter((item) => {
+          // 过滤在某个版本才增加的新方法
+            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            return !(version && compareVersion(version, localVersion!) === -1)
+          })
+        : item.exposed
+      exposed.push(...filterExposed.map((expose) => {
         const documentation = new vscode.MarkdownString()
         documentation.isTrusted = true
         documentation.supportHtml = true
@@ -357,7 +397,14 @@ export function propsReducer(options: PropsOptions) {
     }
 
     if (item.slots) {
-      item.slots.forEach((slot) => {
+      const filterSlots = localVersion
+        ? item.slots.filter((item) => {
+          // 过滤在某个版本才增加的新方法
+            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            return !(version && compareVersion(version, localVersion!) === -1)
+          })
+        : item.slots
+      filterSlots.forEach((slot) => {
         const { name, description, description_zh } = slot
         const documentation = new vscode.MarkdownString()
         documentation.isTrusted = true
@@ -376,7 +423,7 @@ export function propsReducer(options: PropsOptions) {
     }
 
     const createTableDocument = () => {
-      const documentation = new vscode.MarkdownString()
+      const documentation = createMarkdownString()
       documentation.isTrusted = true
       documentation.supportHtml = true
       const details: string[] = []

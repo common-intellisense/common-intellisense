@@ -69,8 +69,8 @@ importers:
         specifier: ^6.3.0
         version: 6.3.0
       get-lib-version:
-        specifier: ^0.0.1
-        version: 0.0.1
+        specifier: ^0.0.2
+        version: 0.0.2
       lazy-js-utils:
         specifier: ^0.1.31
         version: 0.1.31
@@ -1757,8 +1757,8 @@ packages:
   get-intrinsic@1.1.1:
     resolution: {integrity: sha512-kWZrnVM42QCiEA2Ig1bG8zjoIMOgxWwYCEeNdwY6Tv/cOSeGpcoX4pXHfKUxNKVoArnrEr2e9srnAxxGIraS9Q==}
 
-  get-lib-version@0.0.1:
-    resolution: {integrity: sha512-9P6uD/iDbl2uxwmCOU4rJFSkvAHfuTGoAWqy5+UEkNf2GOAvjB1PcxOvXqlRxTZvmq4Ud1r6Z1PNqAUEKQ/euw==}
+  get-lib-version@0.0.2:
+    resolution: {integrity: sha512-6rqIQstezjmK0QTtXq8MTAYlYb7GjttR0Vjh9ZmZvwXh/CdqbU9aIrDvGlGRHJWw5B5OSywI2GLk3yMec633vA==}
     hasBin: true
 
   get-stream@5.2.0:
@@ -5218,7 +5218,7 @@ snapshots:
       has: 1.0.3
       has-symbols: 1.0.3
 
-  get-lib-version@0.0.1:
+  get-lib-version@0.0.2:
     dependencies:
       lazy-js-utils: 0.1.31
 

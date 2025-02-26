@@ -16,6 +16,7 @@ export interface EventItem {
   description_zh?: string
   params?: string | any[]
   value?: string
+  version?: string
 }
 export type Events = EventItem[]
 
@@ -25,6 +26,7 @@ export interface MethodItem {
   description_zh?: string
   params?: string
   value?: string
+  version?: string
 }
 export type Methods = MethodItem[]
 
@@ -42,6 +44,7 @@ export interface ExposedItem {
   description?: string
   description_zh?: string
   detail: string
+  version?: string
 }
 export type Exposed = ExposedItem[]
 
