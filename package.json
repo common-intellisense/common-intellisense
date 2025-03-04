@@ -3,7 +3,7 @@
   "name": "common-intellisense",
   "displayName": "%displayName%",
   "version": "0.2.81",
-  "packageManager": "pnpm@10.4.1",
+  "packageManager": "pnpm@10.5.2",
   "description": "%description%",
   "author": "Simon He <https://github.com/Simon-He95>",
   "license": "MIT",
@@ -196,7 +196,7 @@
     "@simon_he/fetch-npm-cjs": "^0.0.22",
     "@simon_he/latest-version": "^0.1.13",
     "@simon_he/translate": "^0.0.9",
-    "@types/node": "^18.19.76",
+    "@types/node": "^18.19.79",
     "@types/vscode": "1.75.1",
     "@typescript-eslint/typescript-estree": "^6.21.0",
     "@vscode-use/createwebview": "^0.0.13",
@@ -212,10 +212,10 @@
     "get-lib-version": "^0.0.2",
     "lazy-js-utils": "^0.1.31",
     "ofetch": "^1.4.1",
-    "prettier": "^3.5.1",
-    "svelte": "^5.20.1",
+    "prettier": "^3.5.3",
+    "svelte": "^5.21.0",
     "tsup": "^6.7.0",
-    "typescript": "^5.7.3",
+    "typescript": "^5.8.2",
     "vitest": "^0.29.8"
   }
 }

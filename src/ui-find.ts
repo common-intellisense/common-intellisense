@@ -151,11 +151,12 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
         completion = cacheMap.get(name)
       }
       else {
-        completion = UI[name]?.()
+        completion = await UI[name]?.()
         cacheMap.set(name, completion)
       }
       if (!UiCompletions)
         UiCompletions = {}
+
       Object.assign(UiCompletions, completion)
     }))
 
