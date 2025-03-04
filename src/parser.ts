@@ -480,7 +480,7 @@ function findJsxRefs(childrens: any, map: any = {}, refs: any = []) {
       children = [children]
     if (openingElement && openingElement.attributes.length) {
       for (const prop of openingElement.attributes) {
-        if (prop.name.name === 'ref') {
+        if (prop.name && prop.name.name === 'ref') {
           const value = prop.value?.expression?.name || prop.value.value
           map[value] = transformTagName(openingElement.name.name)
         }
