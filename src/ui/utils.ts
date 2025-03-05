@@ -770,17 +770,23 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
               const prefixValue = item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)
               // 替换 $()
               const fixedPrefixValue = await replaceAsync(prefixValue, /\$\(([^)]+)\)/g, async (_: string, m: string) => {
-                const [_prefix, _prefixKey] = findValue(parent, m)
-                let result = _prefix
-                if (isContainCn(_prefix)) {
-                  try {
-                    result = (await translate(_prefix, 'en'))
-                  }
-                  catch (errorMsg: any) {
-                    logger.error(errorMsg.msg)
+                // m 可能存在 xxx.a || xxx.b 的情况
+                for (const splitItem of m.split(/\s*\|\|\s*/)) {
+                  const [_prefix, _prefixKey] = findValue(parent, splitItem)
+                  if (_prefix) {
+                    let result = _prefix
+                    if (isContainCn(_prefix)) {
+                      try {
+                        result = (await translate(_prefix, 'en'))
+                      }
+                      catch (errorMsg: any) {
+                        logger.error(errorMsg.msg)
+                      }
+                    }
+                    return result ? `${result[0].toLocaleLowerCase()}${camelize(result.slice(1))}` : result
                   }
                 }
-                return result ? `${result[0].toLocaleLowerCase()}${camelize(result.slice(1))}` : result
+                return ''
               })
               if (fixedPrefixValue === `${prefix}.`)
                 attr = `${key}="${prefix}.\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
@@ -803,7 +809,7 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
         }
       }
     }
-    else if (item.type && item.type.includes('boolean') && item.default === 'false') {
+    else if (item.type && item.type.toLowerCase().includes('boolean') && item.default?.toLowerCase() === 'false') {
       // 还要进一步看它的 type 如果 type === boolean 提供 true or false 如果是字符串，使用 / 或着 ｜ 分割，作为提示
       if (isVue)
         attr = key
@@ -1080,7 +1086,7 @@ async function getTemplateStr(map: any, content: any, index: number, isVue: bool
 }
 
 async function getSuggestionsTemplateStr(content: any, map: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
-  if (content.suggestions?.length === 1) {
+  if (content.suggestions?.length) {
     const suggestionTag = content.suggestions[0]
     tags.add(suggestionTag)
     const suggestion = findTargetMap(map, suggestionTag)
