@@ -93,7 +93,7 @@ export function propsReducer(options: PropsOptions) {
       }
     }
 
-    const completionsDeferCallback = (isVue?: boolean) => {
+    const completionsDeferCallback = (isVue?: any) => {
       const data: SubCompletionItem[] = [
         'id',
         isVue ? 'class' : 'className',
@@ -181,7 +181,43 @@ export function propsReducer(options: PropsOptions) {
 
         let content = ''
         let snippet = ''
-        if (Array.isArray(value.value)) {
+
+        let _prefix = ''
+        let _prefixKey = ''
+        if (isVue && value.related && value.related.length) {
+          for (const _item of value.related) {
+            ;[_prefix, _prefixKey] = findValue(isVue, _item)
+            if (prefix)
+              break
+          }
+        }
+        if (prefix && value[`$${_prefixKey}`]) {
+          const prefixValue = value[`$${_prefixKey}`].replace(`$${_prefixKey}`, _prefix)
+          // 替换 $()
+          const fixedPrefixValue = prefixValue.replace(/\$\(([^)]+)\)/g, (_: string, m: string) => {
+            // m 可能存在 xxx.a || xxx.b 的情况
+            for (const splitItem of m.split(/\s*\|\|\s*/)) {
+              const [_prefix, _prefixKey] = findValue(isVue, splitItem)
+              if (_prefix) {
+                let result = _prefix
+                if (isContainCn(result)) {
+                  result = `\${1:${result}}`
+                }
+                return result ? `${result[0].toLocaleLowerCase()}${camelize(result.slice(1))}` : result
+              }
+            }
+            return ''
+          })
+          content = key
+          if (fixedPrefixValue === `${_prefix}.`) {
+            const fixedKey = key.replace(/^:/, '')
+            snippet = `${key}="${prefix}.${fixedKey[0].toUpperCase()}${fixedKey.slice(1)}"`
+          }
+          else {
+            snippet = `${key}="${fixedPrefixValue}"`
+          }
+        }
+        else if (Array.isArray(value.value)) {
           content = key
           snippet = `${key}="\${1|${value.value.map((i: string) => i.replace(/['`\s]/g, '').replace(/,/g, '\\,')).join(',')}|}"`
         }
@@ -766,7 +802,8 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
         ++index
         if (!v) {
           if (isVue) {
-            if (prefix && item[`$${prefixKey}`] && getConfiguration('common-intellisense.translate')) {
+            const openTranslate = getConfiguration('common-intellisense.translate')
+            if (prefix && item[`$${prefixKey}`] && openTranslate) {
               const prefixValue = item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)
               // 替换 $()
               const fixedPrefixValue = await replaceAsync(prefixValue, /\$\(([^)]+)\)/g, async (_: string, m: string) => {
@@ -855,114 +892,6 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
     requiredProps.push(attr)
   }
 
-  // Object.keys(content.props).forEach((key) => {
-  //   const item = content.props[key]
-  //   if (!item.required)
-  //     return
-  //   let prefix = ''
-  //   let prefixKey = ''
-  //   if (item.related && item.related.length && parent) {
-  //     for (const _item of item.related) {
-  //       ;[prefix, prefixKey] = findValue(parent, _item)
-  //       if (prefix)
-  //         break
-  //     }
-  //   }
-  //   let attr = ''
-  //   const v = item.value
-  //   if (key.startsWith(':')) {
-  //     const tagName = getComponentTagName(content.name)
-  //     const keyName = toCamel(key.split(':').slice(-1)[0])
-  //     if (item.foreach) {
-  //       if (requiredProps.some(p => p.includes('v-for=')))
-  //         attr = `${key}="item.\${${++index}:${keyName}}"`
-  //       else
-  //         attr = `v-for="item in \${${++index}:${tagName}Options}" :key="item.\${${++index}:key}" ${key}="item.\${${++index}:${keyName}}"`
-  //     }
-  //     else {
-  //       key = key.replace(':v-model', 'v-model')
-  //       ++index
-  //       if (!v) {
-  //         if (isVue) {
-  //           if (prefix && item[`$${prefixKey}`]) {
-  //             debugger
-  //             const prefixValue = item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)
-  //             // 替换 $()
-  //            const fixedPrefixValue =  await replaceAsync(prefixValue, /\$\(([^\)]+)\)/g, async (_: string, m: string) => {
-  //               const [_prefix, _prefixKey] = findValue(parent, m)
-  //               let result = _prefix
-  //               if (isContainCn(_prefix)) {
-  //                 try {
-  //                   result = (await translate(_prefix, 'en'))[0]
-
-  //                   if (result.includes('and')) {
-  //                     result = result.split('and')[0]
-  //                   }
-  //                 } catch (error) { }
-  //               }
-  //               return `${result[0].toLocaleLowerCase()}${camelize(result.slice(1))}`
-  //             })
-  //             debugger
-
-  //           } else
-  //             attr = `${key}="${prefix ? `${prefix}.` : ''}\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
-  //         }
-  //         else
-  //           attr = `${key.slice(1)}={\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}}`
-  //       }
-  //       else {
-  //         if (isVue)
-  //           attr = `${key}="\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
-  //         else
-  //           attr = `${key.slice(1)}={\${${index}:${v}}}`
-  //       }
-  //     }
-  //   }
-  //   else if (item.type && item.type.includes('boolean') && item.default === 'false') {
-  //     // 还要进一步看它的 type 如果 type === boolean 提供 true or false 如果是字符串，使用 / 或着 ｜ 分割，作为提示
-  //     if (isVue)
-  //       attr = key
-  //     else
-  //       attr = `${key}="true"`
-  //   }
-  //   else {
-  //     const tempMap: any = {}
-  //     const types = item.type.replace(/\s+/g, ' ').replace(/\{((?:[^{}]|\{[^{}]*\})*)\}|<((?:[^<>]|<[^<>]*>)*)>/g, (_: string) => {
-  //       const key = hash(_)
-  //       tempMap[key] = _.replace(/,/g, '\,')
-  //       return key
-  //     }).split(/[|/]/).filter((item: string) => {
-  //       // 如果 item长度太长，可能有问题，所以也过滤掉
-  //       return !!item && item.length < 40
-  //     }).map((item: string) => item.replace(/['"]/g, '').trim()).map((item: string) => {
-  //       Object.keys(tempMap).forEach((i) => {
-  //         item = item.replace(i, tempMap[i])
-  //       })
-  //       return item
-  //     })
-
-  //     if (prefix && item[`$${prefixKey}`]) {
-  //       attr = `${key}="${item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)}"`
-  //     }
-  //     else {
-  //       if (item.default && types.includes(item.default)) {
-  //         // 如果 item.default 并且在 type 中，将 types 的 default 值，放到
-  //         const i = types.findIndex((i: string) => i === item.default)
-  //         types.splice(i, 1)
-  //         types.unshift(item.default)
-  //       }
-  //       const typeTips = types
-  //         .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))
-  //         .join(',')
-
-  //       if (v)
-  //         attr = `${key}="${v}"`
-  //       else
-  //         attr = `${key}="\${${++index}|${prefix ? item.value + prefix : typeTips}|}"`
-  //     }
-  //   }
-  //   requiredProps.push(attr)
-  // })
   for (const e of content.events) {
     if (!e.required)
       continue

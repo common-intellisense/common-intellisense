@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode'
-import type { ComponentsConfig, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
+import type { ComponentsConfig, Directives, PropsConfig } from './ui/utils'
 import fsp from 'node:fs/promises'
 import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFile } from '@vscode-use/utils'
 import { findUp } from 'find-up'
@@ -22,8 +22,6 @@ let optionsComponents: OptionsComponents = { prefix: [], data: [], directivesMap
 let UiCompletions: PropsConfig | null = null
 const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
 const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
-export const eventCallbacks = new Map<string, SubCompletionItem[]>()
-export const completionsCallbacks = new Map<string, SubCompletionItem[]>()
 let currentPkgUiNames: null | string[] = null
 // const filters = ['js', 'ts', 'jsx', 'tsx', 'vue', 'svelte']
 export const urlCache = new Map<string, Uis>()
@@ -34,8 +32,6 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
   UINames.length = 0
   optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
   UiCompletions = null
-  eventCallbacks.clear()
-  completionsCallbacks.clear()
   currentPkgUiNames = null
   cacheMap.clear()
   pkgUIConfigMap.clear()
@@ -205,8 +201,6 @@ export function deactivateUICache() {
   cacheMap.clear()
   pkgUIConfigMap.clear()
   urlCache.clear()
-  eventCallbacks.clear()
-  completionsCallbacks.clear()
   Object.entries(UI).forEach(([key]) => {
     delete UI[key]
   })

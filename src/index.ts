@@ -8,7 +8,7 @@ import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
 import { generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
-import { completionsCallbacks, deactivateUICache, eventCallbacks, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
+import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
 
@@ -287,6 +287,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const preText = lineText.slice(0, activeTextEditor.selection.active.character)
     let completionsCallback: SubCompletionItem[] | undefined
+    let eventCallback: SubCompletionItem[] | undefined
     const activeText = getEffectWord(preText)
     const result = parser(document.getText(), p)
     if (!result)
@@ -386,60 +387,52 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       const { events, completions, uiName } = target
-      const key = uiName + name
-      if (!completionsCallbacks.has(key)) {
-        const directives = optionsComponents.directivesMap[uiName]
-        const directivesCompletions = directives
-          ? directives.map((item: Directives[0]) => {
-              const detail = isZh ? item.description_zh : item.description
-              const content = `${item.name}  ${detail}`
-              const documentation = createMarkdownString()
-              if (item.documentation)
-                documentation.appendMarkdown(item.documentation)
-              else if (item.documentationType)
-                documentation.appendCodeblock(item.documentationType, 'typescript')
+      const directives = optionsComponents.directivesMap[uiName]
+      const directivesCompletions = directives
+        ? directives.map((item: Directives[0]) => {
+            const detail = isZh ? item.description_zh : item.description
+            const content = `${item.name}  ${detail}`
+            const documentation = createMarkdownString()
+            if (item.documentation)
+              documentation.appendMarkdown(item.documentation)
+            else if (item.documentationType)
+              documentation.appendCodeblock(item.documentationType, 'typescript')
 
-              if (item.params?.length) {
-                documentation.appendCodeblock('\n')
-                item.params.forEach((i) => {
-                  documentation.appendMarkdown(`### 🌟 ${i.name}: \n`)
-                  documentation.appendMarkdown(`- ${isZh ? '类型' : 'type'}: ${i.type}\n`)
-                  documentation.appendMarkdown(`- ${isZh ? '描述' : 'description'}: ${isZh ? i.description_zh : i.description}\n`)
-                  documentation.appendMarkdown(`- ${isZh ? '默认值' : 'default'}: ${i.default}\n`)
-                })
-              }
-
-              const snippet = item.params?.length
-                ? `:${item.name}="${JSON.stringify(item.params.reduce((acc, i) => {
-                  const key = i.name
-                  const type = i.type.toLocaleLowerCase()
-                  const value = i.default || type === 'boolean' ? false : type === 'number' ? 0 : type === 'string' ? '' : ''
-                  acc[key] = value
-                  return acc
-                }, {} as Record<string, any>), null, 2).replace(/"([^"]+)":/g, '$1:').replace(/"/g, '`')}"`
-                : item.name
-
-              return createCompletionItem({
-                content,
-                detail,
-                sortText: '0',
-                type: vscode.CompletionItemKind.Enum,
-                snippet,
-                params: [uiName, item.name],
-                preselect: true,
-                documentation,
+            if (item.params?.length) {
+              documentation.appendCodeblock('\n')
+              item.params.forEach((i) => {
+                documentation.appendMarkdown(`### 🌟 ${i.name}: \n`)
+                documentation.appendMarkdown(`- ${isZh ? '类型' : 'type'}: ${i.type}\n`)
+                documentation.appendMarkdown(`- ${isZh ? '描述' : 'description'}: ${isZh ? i.description_zh : i.description}\n`)
+                documentation.appendMarkdown(`- ${isZh ? '默认值' : 'default'}: ${i.default}\n`)
               })
+            }
+
+            const snippet = item.params?.length
+              ? `:${item.name}="${JSON.stringify(item.params.reduce((acc, i) => {
+                const key = i.name
+                const type = i.type.toLocaleLowerCase()
+                const value = i.default || type === 'boolean' ? false : type === 'number' ? 0 : type === 'string' ? '' : ''
+                acc[key] = value
+                return acc
+              }, {} as Record<string, any>), null, 2).replace(/"([^"]+)":/g, '$1:').replace(/"/g, '`')}"`
+              : item.name
+
+            return createCompletionItem({
+              content,
+              detail,
+              sortText: '0',
+              type: vscode.CompletionItemKind.Enum,
+              snippet,
+              params: [uiName, item.name],
+              preselect: true,
+              documentation,
             })
-          : []
-        const _events = events[0](isVue)
-        eventCallbacks.set(key, _events)
-        completionsCallbacks.set(key, [...completions[0](isVue), ...(isVue ? [] : _events), ...directivesCompletions])
-      }
+          })
+        : []
+      eventCallback = events[0](isVue) || []
+      completionsCallback = [...completions[0](isVue), ...(isVue ? [] : eventCallback), ...directivesCompletions]
 
-      if (!eventCallbacks.has(key))
-        eventCallbacks.set(key, events[0](isVue))
-
-      completionsCallback = completionsCallbacks.get(key)
       const hasProps = result.props
         ? result.props.map((item: any) => {
             if (item.name === 'on' && item.arg)
@@ -461,12 +454,12 @@ export async function activate(context: vscode.ExtensionContext) {
           }).filter(Boolean)
         : []
       if (propName === 'on') {
-        return (eventCallbacks.get(key) || []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+        return (eventCallback).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
       }
       else if (propName) {
         const r: any[] = []
         if (isValue) {
-          (completionsCallback ?? []).filter((item: any) => hasProps.find((prop: any) => item?.params?.[1] === prop)).filter((item: any) => {
+          completionsCallback.filter((item: any) => hasProps.find((prop: any) => item?.params?.[1] === prop)).filter((item: any) => {
             const reg = propName === 'bind'
               ? new RegExp('^:')
               : new RegExp(`^:?${propName}`)
@@ -501,7 +494,7 @@ export async function activate(context: vscode.ExtensionContext) {
           ? []
           : isValue
             ? []
-            : (eventCallbacks.get(key) || []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+            : eventCallback.filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
         if (propName === 'o')
           return [...events, ...r]
 
@@ -728,7 +721,11 @@ export async function activate(context: vscode.ExtensionContext) {
         // 这个实现有些问题，要从底层去修改 propName 上的信息，才能拿到准确的数据
         const findBind = () => result.props.find((p: any) => p.name === 'bind')
         const findOn = () => result.props.find((p: any) => p.name === 'on')
-        const propName = result.propName === true && result.props[0].name === 'on' ? findOn().arg.content : result.propName === 'bind' ? findBind().arg.content : result.propName
+        const propName = result.propName === true ? result.props[0].name === 'on' ? findOn().arg.content : findBind().arg.content : result.propName
+
+        if (typeof propName !== 'string')
+          return
+
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
         const tag = toCamel(result.tag)[0].toUpperCase() + toCamel(result.tag).slice(1)
@@ -738,6 +735,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const completions = result.isEvent ? r.events[0]?.() : r.completions[0]?.()
         if (!completions)
           return
+
         const detail = getHoverAttribute(completions, propName)
         if (!detail)
           return
