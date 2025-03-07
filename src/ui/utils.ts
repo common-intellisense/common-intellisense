@@ -83,8 +83,10 @@ export function propsReducer(options: PropsOptions) {
     const exposed: SubCompletionItem[] = []
     const slots: SubCompletionItem[] = []
     const isZh = getLocale().includes('zh')
-    if (!localVersion)
-      localVersion = await getLibVersion(lib, cwd)
+    if (!localVersion) {
+      // 从本地安装去获取版本号，如果获取不到根据 uiName 后缀获取版本号，再找不到就是 0.0.0
+      localVersion = await getLibVersion(lib, cwd) || uiName.match(/\d+(\.\d+\.\d+)?/)?.[0] || '0.0.0'
+    }
 
     if (item.version) {
       // 过滤在某个版本才增加的新组件
