@@ -319,6 +319,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
                   : prop.value?.value !== undefined
               : false,
             parent,
+            isDynamicFlag: prop.value?.type === 'JSXExpressionContainer',
             isEvent: prop.type === 'EventHandler' || (prop.type === 'JSXAttribute' && prop.name.name.startsWith('on')),
           }
         }

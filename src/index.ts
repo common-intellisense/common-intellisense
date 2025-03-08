@@ -518,6 +518,10 @@ export async function activate(context: vscode.ExtensionContext) {
     else if (!result.isInTemplate || isPreEmpty || !optionsComponents) {
       return
     }
+    else if (isValue && (isVue || !result.isDynamicFlag)) {
+      return
+    }
+
     const prefix = lineText.trim().split(' ').slice(-1)[0]
     if (prefix.toLowerCase() === prefix ? optionsComponents.prefix.some((reg: string) => prefix.startsWith(reg) || reg.startsWith(prefix)) : true) {
       const parent = result.parent
