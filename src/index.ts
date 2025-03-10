@@ -119,10 +119,11 @@ export async function activate(context: vscode.ExtensionContext) {
     const uiComponents = getImportUiComponents(code)
     let deps = data.suggestions?.length === 1
       ? data.suggestions.map((i: any) => {
+          const name = i.split('.')[0]
           if (i.includes('-'))
-            return toCamel(i).slice(prefix.length)
+            return name.slice(prefix.length)
 
-          return i
+          return name
         })
       : []
 
