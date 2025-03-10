@@ -14,6 +14,7 @@ import {
 
 import * as vscode from 'vscode'
 import { hyphenate, isVine, isVue, toCamel } from './ui/utils'
+import { logger } from './ui-find'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -302,25 +303,30 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
         if (!prop.loc)
           prop.loc = convertPositionToLoc(prop)
         if (isInPosition(prop.loc, position)) {
-          return {
-            tag: openingElement.name.type === 'JSXMemberExpression'
-              ? `${openingElement.name.object.name}.${openingElement.name.property.name}`
-              : openingElement.name.name,
-            propName: typeof prop.name === 'string' ? prop.type === 'EventHandler' ? 'on' : prop.name : prop.name.name,
-            props: openingElement.attributes,
-            propType: prop.type,
-            type: 'props',
-            isInTemplate,
-            isValue: prop.value
-              ? Array.isArray(prop.value)
-                ? prop.value[0]?.raw !== undefined
-                : prop.value.type === 'JSXExpressionContainer'
-                  ? prop.value?.expression !== undefined
-                  : prop.value?.value !== undefined
-              : false,
-            parent,
-            isDynamicFlag: prop.value?.type === 'JSXExpressionContainer',
-            isEvent: prop.type === 'EventHandler' || (prop.type === 'JSXAttribute' && prop.name.name.startsWith('on')),
+          if (prop.value.type === 'JSXExpressionContainer') {
+            children = prop.value.expression
+          }
+          else {
+            return {
+              tag: openingElement.name.type === 'JSXMemberExpression'
+                ? `${openingElement.name.object.name}.${openingElement.name.property.name}`
+                : openingElement.name.name,
+              propName: typeof prop.name === 'string' ? prop.type === 'EventHandler' ? 'on' : prop.name : prop.name.name,
+              props: openingElement.attributes,
+              propType: prop.type,
+              type: 'props',
+              isInTemplate,
+              isValue: prop.value
+                ? Array.isArray(prop.value)
+                  ? prop.value[0]?.raw !== undefined
+                  : prop.value.type === 'JSXExpressionContainer'
+                    ? prop.value?.expression !== undefined
+                    : prop.value?.value !== undefined
+                : false,
+              parent,
+              isDynamicFlag: prop.value?.type === 'JSXExpressionContainer',
+              isEvent: prop.type === 'EventHandler' || (prop.type === 'JSXAttribute' && prop.name.name.startsWith('on')),
+            }
           }
         }
       }
@@ -329,7 +335,10 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
     if (type === 'JSXElement' || type === 'Element' || (type === 'ReturnStatement' && (argument.type === 'JSXElement' || argument.type === 'JSXFragment')))
       isInTemplate = true
 
-    if (child.children) { children = child.children }
+    if (children) {
+      // skip
+    }
+    else if (child.children) { children = child.children }
     else if (type === 'ExportNamedDeclaration') { children = child.declaration }
     else if (type === 'ObjectExpression') { children = child.properties }
     else if (type === 'Property' && child.value.type === 'FunctionExpression') { children = child.value.body.body }
@@ -410,7 +419,15 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
               : target.name.name
             : '',
           propType: target.type,
+          isDynamicFlag: target.value?.type === 'JSXExpressionContainer',
           isInTemplate,
+          isValue: target.value
+            ? Array.isArray(target.value)
+              ? target.value[0]?.raw !== undefined
+              : target.value.type === 'JSXExpressionContainer'
+                ? target.value?.expression !== undefined
+                : target.value?.value !== undefined
+            : false,
           parent,
         }
       }
@@ -840,28 +857,36 @@ async function findUiTag(children: any, UiCompletions: any, result: any[] = [], 
 }
 
 function findAllJsxElements(code: string) {
-  const ast = tsParser(code, { jsx: true, loc: true, range: true }) as any
   const results: any = []
-  traverse(ast, (node) => {
-    if (node.type === 'JSXElement') {
-      results.push(node)
-    }
-    else if (node.type === 'ObjectExpression') {
-      const _node: any = node.properties?.find((p: any) => p?.key?.name === 'render')
-        || node.properties?.find((p: any) => p?.key?.name === 'setup')
-      const t = _node?.value
-      if (t) {
-        traverse(t, (nextNode) => {
-          if (nextNode.type === 'JSXElement') {
-            const tag = (nextNode.openingElement.name as any)?.name
-            if (tag && !originTag.includes(tag))
-              results.push(nextNode)
-          }
-        })
+  try {
+    const ast = tsParser(code, { jsx: true, loc: true, range: true }) as any
+    traverse(ast, (node) => {
+      if (node.type === 'JSXElement') {
+        results.push(node)
       }
-    }
-  })
-  return results
+      else if (node.type === 'ObjectExpression') {
+        const _node: any = node.properties?.find((p: any) => p?.key?.name === 'render')
+          || node.properties?.find((p: any) => p?.key?.name === 'setup')
+        const t = _node?.value
+        if (t) {
+          traverse(t, (nextNode) => {
+            if (nextNode.type === 'JSXElement') {
+              const tag = (nextNode.openingElement.name as any)?.name
+              if (tag && !originTag.includes(tag))
+                results.push(nextNode)
+            }
+          })
+        }
+      }
+    })
+  }
+  catch (error) {
+    logger.error(JSON.stringify(error))
+  }
+  finally {
+  // eslint-disable-next-line no-unsafe-finally
+    return results
+  }
 }
 
 export function parserVine(code: string, position: vscode.Position) {

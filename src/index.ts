@@ -337,7 +337,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }
 
-    if (UiCompletions && result?.type === 'props' && (!result.propType || result.propType && result.propType !== 'JSXAttribute')) {
+    if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
       const name = result.tag[0].toUpperCase() + result.tag.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
       if (result.propName === 'icon')
         return UiCompletions.icons
@@ -516,7 +516,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return completionsCallback
       }
     }
-    else if (!result.isInTemplate || isPreEmpty || !optionsComponents) {
+    else if (!result.isInTemplate || !optionsComponents) {
       return
     }
     else if (isValue && (isVue || !result.isDynamicFlag)) {
