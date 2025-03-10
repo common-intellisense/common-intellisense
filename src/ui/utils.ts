@@ -110,14 +110,14 @@ export function propsReducer(options: PropsOptions) {
       // 过滤 props 中有 version 并且当前版本小于组件版本的属性
       const filterProps = localVersion
         ? Object.keys(item.props || {}).reduce((result, key) => {
-            const value = (item.props as any)[key]
-            // value.version 只提取版本号
-            const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            if (version && compareVersion(version, localVersion!) === -1) {
-              return result
-            }
-            return { ...result, [key]: value }
-          }, {})
+          const value = (item.props as any)[key]
+          // value.version 只提取版本号
+          const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
+          if (version && compareVersion(version, localVersion!) === -1) {
+            return result
+          }
+          return { ...result, [key]: value }
+        }, {})
         : item.props
 
       Object.keys(filterProps).forEach((key) => {
@@ -309,9 +309,9 @@ export function propsReducer(options: PropsOptions) {
         // 过滤在某个版本才增加的新事件
         const filterEvents = localVersion
           ? item.events.filter((event) => {
-              const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
-              return !(version && compareVersion(version, localVersion!) === -1)
-            })
+            const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            return !(version && compareVersion(version, localVersion!) === -1)
+          })
           : item.events
 
         return filterEvents.map((events: any) => {
@@ -366,9 +366,9 @@ export function propsReducer(options: PropsOptions) {
       const filterMethods = localVersion
         ? item.methods.filter((item) => {
           // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === -1)
-          })
+          const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+          return !(version && compareVersion(version, localVersion!) === -1)
+        })
         : item.methods
       methods.push(...filterMethods.map((method) => {
         const documentation = new vscode.MarkdownString()
@@ -402,9 +402,9 @@ export function propsReducer(options: PropsOptions) {
       const filterExposed = localVersion
         ? item.exposed.filter((item) => {
           // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === -1)
-          })
+          const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+          return !(version && compareVersion(version, localVersion!) === -1)
+        })
         : item.exposed
       exposed.push(...filterExposed.map((expose) => {
         const documentation = new vscode.MarkdownString()
@@ -438,9 +438,9 @@ export function propsReducer(options: PropsOptions) {
       const filterSlots = localVersion
         ? item.slots.filter((item) => {
           // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === -1)
-          })
+          const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+          return !(version && compareVersion(version, localVersion!) === -1)
+        })
         : item.slots
       filterSlots.forEach((slot) => {
         const { name, description, description_zh } = slot
@@ -647,7 +647,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib,
             importWay,
           }
-          return createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
+          return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
       },
       {
@@ -752,7 +752,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         dynamicLib,
         importWay,
       }
-      const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
+      const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
       return completionItem
     }),
   }]
@@ -1010,8 +1010,10 @@ async function getTemplateStr(map: any, content: any, index: number, isVue: bool
   const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
   if (tags.has(tag))
     return `$${++index}`
+
   let [requiredProps, __index] = await getRequireProp(content, index, isVue, parent)
   tags.add(tag)
+
   const isFirst = tags.size > 1
   return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, map, __index, isVue, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
 }
@@ -1028,7 +1030,7 @@ async function getSuggestionsTemplateStr(content: any, map: any, index: number, 
       return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index}>${chilren}</${suggestionTag}>\n`
     }
     else {
-      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>$${++_index}</${suggestionTag}>\n  </${suggestionTag}>\n`
+      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>$${++_index}</${suggestionTag}>\n`
     }
   }
   return `$${++index}`
