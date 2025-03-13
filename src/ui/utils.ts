@@ -110,14 +110,14 @@ export function propsReducer(options: PropsOptions) {
       // 过滤 props 中有 version 并且当前版本小于组件版本的属性
       const filterProps = localVersion
         ? Object.keys(item.props || {}).reduce((result, key) => {
-          const value = (item.props as any)[key]
-          // value.version 只提取版本号
-          const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
-          if (version && compareVersion(version, localVersion!) === -1) {
-            return result
-          }
-          return { ...result, [key]: value }
-        }, {})
+            const value = (item.props as any)[key]
+            // value.version 只提取版本号
+            const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            if (version && compareVersion(version, localVersion!) === -1) {
+              return result
+            }
+            return { ...result, [key]: value }
+          }, {})
         : item.props
 
       Object.keys(filterProps).forEach((key) => {
@@ -309,9 +309,9 @@ export function propsReducer(options: PropsOptions) {
         // 过滤在某个版本才增加的新事件
         const filterEvents = localVersion
           ? item.events.filter((event) => {
-            const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === -1)
-          })
+              const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
+              return !(version && compareVersion(version, localVersion!) === -1)
+            })
           : item.events
 
         return filterEvents.map((events: any) => {
@@ -366,9 +366,9 @@ export function propsReducer(options: PropsOptions) {
       const filterMethods = localVersion
         ? item.methods.filter((item) => {
           // 过滤在某个版本才增加的新方法
-          const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-          return !(version && compareVersion(version, localVersion!) === -1)
-        })
+            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            return !(version && compareVersion(version, localVersion!) === -1)
+          })
         : item.methods
       methods.push(...filterMethods.map((method) => {
         const documentation = new vscode.MarkdownString()
@@ -402,9 +402,9 @@ export function propsReducer(options: PropsOptions) {
       const filterExposed = localVersion
         ? item.exposed.filter((item) => {
           // 过滤在某个版本才增加的新方法
-          const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-          return !(version && compareVersion(version, localVersion!) === -1)
-        })
+            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            return !(version && compareVersion(version, localVersion!) === -1)
+          })
         : item.exposed
       exposed.push(...filterExposed.map((expose) => {
         const documentation = new vscode.MarkdownString()
@@ -438,9 +438,9 @@ export function propsReducer(options: PropsOptions) {
       const filterSlots = localVersion
         ? item.slots.filter((item) => {
           // 过滤在某个版本才增加的新方法
-          const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-          return !(version && compareVersion(version, localVersion!) === -1)
-        })
+            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            return !(version && compareVersion(version, localVersion!) === -1)
+          })
         : item.slots
       filterSlots.forEach((slot) => {
         const { name, description, description_zh } = slot
@@ -609,6 +609,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
               dynamicLib = content.dynamicLib
             if (content.importWay)
               importWay = content.importWay
+
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
             snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
             _content = `${tag}  ${content.tag || detail}`
@@ -897,10 +898,10 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
   for (const e of content.events) {
     if (!e.required)
       continue
-    const [snippetEventNameOptions] = generateScriptNames(e.name)
-    const snippetVue = `@${e.name}="\${${requiredProps.length + 1}|${snippetEventNameOptions.join(',')}|}"`
-    const snippetJsx = `${e.name}={\${${requiredProps.length + 1}|${snippetEventNameOptions.join(',')}|}}`
     index++
+    const [snippetEventNameOptions] = generateScriptNames(e.name)
+    const snippetVue = `@${e.name}="\${${index}|${snippetEventNameOptions.join(',')}|}"`
+    const snippetJsx = `${e.name}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
     requiredProps.push(isVue ? snippetVue : snippetJsx)
   }
 
@@ -1026,8 +1027,8 @@ async function getSuggestionsTemplateStr(content: any, map: any, index: number, 
     let [childRequiredProps, _index] = await getRequireProp(suggestion, index, isVue, parent)
 
     if (suggestion) {
-      const chilren = await getTemplateStr(map, suggestion, ++_index, isVue, isSeperatorByHyphen, parent, tags)
-      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index}>${chilren}</${suggestionTag}>\n`
+      const children = await getTemplateStr(map, suggestion, ++_index, isVue, isSeperatorByHyphen, parent, tags)
+      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index}>${children}</${suggestionTag}>\n`
     }
     else {
       return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>$${++_index}</${suggestionTag}>\n`
