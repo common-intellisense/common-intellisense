@@ -90,7 +90,7 @@ export function propsReducer(options: PropsOptions) {
 
     if (item.version) {
       // 过滤在某个版本才增加的新组件
-      if (localVersion && compareVersion(item.version, localVersion) === -1) {
+      if (localVersion && compareVersion(localVersion, item.version) === -1) {
         return result
       }
     }
