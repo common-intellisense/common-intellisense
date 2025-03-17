@@ -485,9 +485,11 @@ export function propsReducer(options: PropsOptions) {
           tableDivider,
           ...Object.keys(item.props).map((name) => {
             const { default: defaultValue = '', type, description, description_zh } = item.props[name]
-            let value = String(defaultValue).replace(/\s+/g, ' ').replace(/\|/g, ' \\| ').trim()
+            let value = String(defaultValue).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()
             value = String(defaultValue).length > 20 ? '...' : value
-            return `| \`${name}\` | \`${isZh ? description_zh : description}\` | \`${type}\` | \`${value}\` |`
+            const safeType = String(type).replace(/\|/g, '\\|')
+            const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
+            return `| \`${name}\` | \`${safeDescription}\` | \`${safeType}\` | \`${value}\` |`
           }),
         ].join('\n')
 
@@ -508,7 +510,10 @@ export function propsReducer(options: PropsOptions) {
           tableDivider,
           ...item.methods.map((m) => {
             const { name, params, description, description_zh } = m
-            return `| ${name} | ${isZh ? description_zh : description} | ${params} |`
+            const safeName = String(name).replace(/\|/g, '\\|')
+            const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
+            const safeParams = params ? String(params).replace(/\|/g, '\\|') : ''
+            return `| ${safeName} | ${safeDescription} | ${safeParams} |`
           }),
         ].join('\n')
 
@@ -529,7 +534,10 @@ export function propsReducer(options: PropsOptions) {
           tableDivider,
           ...item.events.map((m) => {
             const { name, params, description, description_zh } = m
-            return `| ${name} | ${isZh ? description_zh : description} | ${params || '-'} |`
+            const safeName = String(name).replace(/\|/g, '\\|')
+            const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
+            const safeParams = params ? String(params).replace(/\|/g, '\\|') : '-'
+            return `| ${safeName} | ${safeDescription} | ${safeParams} |`
           }),
         ].join('\n')
 
@@ -621,7 +629,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           }
           if (!demo)
             demo = snippet
-          const documentation = createMarkdownString()
+          const documentation = new vscode.MarkdownString()
           documentation.isTrusted = true
           documentation.supportHtml = true
 
