@@ -121,7 +121,7 @@ export async function activate(context: vscode.ExtensionContext) {
       ? data.suggestions.map((i: any) => {
           const name = i.split('.')[0]
           if (i.includes('-'))
-            return name.slice(prefix.length)
+            return toCamel(name.slice(prefix.length))
 
           return name
         })
