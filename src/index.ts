@@ -40,7 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(registerCommand('common-intellisense.cleanCache', () => {
     fsp.rmdir(localCacheUri)
     cacheFetch.clear()
-    findUI(context, detectSlots)
+    findUI(context, detectSlots, true)
   }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
@@ -105,7 +105,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(addEventListener('config-change', (e) => {
     if (e.affectsConfiguration('common-intellisense.ui'))
-      findUI(context, detectSlots)
+      findUI(context, detectSlots, true)
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.import', async (params, loc, _lineOffset) => {

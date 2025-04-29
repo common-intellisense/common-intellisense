@@ -29,6 +29,9 @@ importers:
       '@simon_he/translate':
         specifier: ^0.0.9
         version: 0.0.9
+      '@types/js-yaml':
+        specifier: ^4.0.9
+        version: 4.0.9
       '@types/node':
         specifier: ^18.19.79
         version: 18.19.79
@@ -71,6 +74,9 @@ importers:
       get-lib-version:
         specifier: ^0.0.2
         version: 0.0.2
+      js-yaml:
+        specifier: ^4.1.0
+        version: 4.1.0
       lazy-js-utils:
         specifier: ^0.1.31
         version: 0.1.31
@@ -685,6 +691,9 @@ packages:
 
   '@types/http-cache-semantics@4.0.3':
     resolution: {integrity: sha512-V46MYLFp08Wf2mmaBhvgjStM3tPa+2GAdy/iqoX+noX1//zje2x4XmrIU0cAwyClATsTmahbtoQ2EwP7I5WSiA==}
+
+  '@types/js-yaml@4.0.9':
+    resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
 
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
@@ -3888,6 +3897,8 @@ snapshots:
   '@types/estree@1.0.6': {}
 
   '@types/http-cache-semantics@4.0.3': {}
+
+  '@types/js-yaml@4.0.9': {}
 
   '@types/json-schema@7.0.15': {}
 
