@@ -6,8 +6,8 @@ import { findUp } from 'find-up'
 import { UINames as configUINames } from './constants'
 import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
 import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
-import yaml from 'js-yaml'
 import path from 'node:path'
+import { getLibVersion } from 'get-lib-version'
 
 export interface OptionsComponents {
   prefix: string[]
@@ -191,105 +191,15 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   const aliasUiNames = Object.keys(alias)
   const deps = { ...dependencies, ...peerDependencies, ...devDependencies }
 
-  // workspace version map
-  const workspaceVersionMap: Record<string, string> = {}
-  async function getWorkspaceVersion(pkgName: string): Promise<string | undefined> {
-    if (Object.keys(workspaceVersionMap).length === 0) {
-      // 查找 pnpm-workspace.yaml
-      const workspaceYamlPath = await findUp('pnpm-workspace.yaml', { cwd: path.dirname(pkg!) })
-      if (workspaceYamlPath) {
-        try {
-          const yamlContent = await fsp.readFile(workspaceYamlPath, 'utf-8')
-          const workspaceConfig = yaml.load(yamlContent) as any
-          // 这里假设你有 monorepo 的 packages 目录，实际情况可能需要更复杂的逻辑
-          if (workspaceConfig?.packages && Array.isArray(workspaceConfig.packages)) {
-            for (const pattern of workspaceConfig.packages) {
-              // 查找所有匹配的 package.json
-              const dirs = await findWorkspaceDirs(pattern, path.dirname(workspaceYamlPath))
-              for (const dir of dirs) {
-                try {
-                  const pkgJsonPath = path.join(dir, 'package.json')
-                  const pkgJson = JSON.parse(await fsp.readFile(pkgJsonPath, 'utf-8'))
-                  if (pkgJson.name && pkgJson.version)
-                    workspaceVersionMap[pkgJson.name] = pkgJson.version
-                }
-                catch { }
-              }
-            }
-          }
-        }
-        catch { }
-      }
-    }
-    return workspaceVersionMap[pkgName]
-  }
-
-  async function getCatalogVersion(catalogName: string, pkgName: string): Promise<string | undefined> {
-    const workspaceYamlPath = await findUp('pnpm-workspace.yaml', { cwd: path.dirname(pkg!) })
-    if (workspaceYamlPath) {
-      try {
-        const yamlContent = await fsp.readFile(workspaceYamlPath, 'utf-8')
-        const workspaceConfig = yaml.load(yamlContent) as any
-        if (workspaceConfig?.catalogs && workspaceConfig.catalogs[catalogName]) {
-          return typeof workspaceConfig.catalogs[catalogName] === 'string' ? workspaceConfig.catalogs[catalogName] : workspaceConfig.catalogs[catalogName][pkgName]
-        }
-      }
-      catch { }
-    }
-    return undefined
-  }
-
-  // 简单 glob 匹配 workspace packages
-  async function findWorkspaceDirs(pattern: string, root: string): Promise<string[]> {
-    // 这里只处理最常见的 packages/* 形式
-    if (pattern.endsWith('/*')) {
-      const dir = path.join(root, pattern.slice(0, -2))
-      try {
-        const entries = await fsp.readdir(dir, { withFileTypes: true })
-        return entries.filter(e => e.isDirectory()).map(e => path.join(dir, e.name))
-      }
-      catch {
-        return []
-      }
-    }
-    // 其他情况可扩展
-    return []
-  }
-
   for (const key in deps) {
     if (configUINames.includes(key) || aliasUiNames.includes(key)) {
-      let version = deps[key]
+      const version = deps[key]
       // 处理 workspace:、catelog:、npm:、catalog: 等前缀
       const matched = version.match(/^(workspace:|catelog:|npm:|catalog:)(.*)$/)
-      if (matched) {
-        let realVersion = matched[2].trim()
-        // 如果 realVersion 已经包含了 @ 或 ^ 或 ~ 之类的版本号，则直接用，不再查 pnpm-workspace.yaml
-        if (
-          realVersion
-          && /[@~^0-9]/.test(realVersion)
-        ) {
-          // 直接使用 realVersion
-          realVersion = realVersion.match(/[@~^](\d.+)/)[1]
-        }
-        else if (matched[1] === 'catalog:') {
-          // catalog:frontend 需要查找 pnpm-workspace.yaml 的 catalogs
-          const catalogName = realVersion || key
-          const catalogVersion = await getCatalogVersion(catalogName, key)
-          if (catalogVersion)
-            realVersion = catalogVersion
-        }
-        else if (!realVersion) {
-          // 没有指定版本，尝试从 workspace 里查找
-          const wsVersion = await getWorkspaceVersion(key)
-          if (wsVersion)
-            realVersion = wsVersion
-        }
-        if (!realVersion) {
-          logger.error(`Not found ${key} version`)
-        }
-        version = realVersion || version
-      }
-      result.push([key, version])
+
+      result.push([key, matched
+        ? await getLibVersion(key, path.resolve(pkg, '..'))
+        : version])
     }
   }
   return { pkg, uis: result }
