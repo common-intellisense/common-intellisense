@@ -12,8 +12,8 @@ importers:
         specifier: ^3.16.0
         version: 3.16.0(@typescript-eslint/utils@8.24.0(eslint@8.57.1)(typescript@5.8.3))(@vue/compiler-sfc@3.3.4)(eslint@8.57.1)(typescript@5.8.3)(vitest@0.29.8)
       '@babel/types':
-        specifier: ^7.27.0
-        version: 7.27.0
+        specifier: ^7.27.1
+        version: 7.27.1
       '@rollup/pluginutils':
         specifier: ^5.1.4
         version: 5.1.4(rollup@3.29.4)
@@ -33,8 +33,8 @@ importers:
         specifier: ^4.0.9
         version: 4.0.9
       '@types/node':
-        specifier: ^18.19.87
-        version: 18.19.87
+        specifier: ^18.19.100
+        version: 18.19.100
       '@types/vscode':
         specifier: 1.75.1
         version: 1.75.1
@@ -78,8 +78,8 @@ importers:
         specifier: ^4.1.0
         version: 4.1.0
       lazy-js-utils:
-        specifier: ^0.1.42
-        version: 0.1.42
+        specifier: ^0.1.44
+        version: 0.1.44
       ofetch:
         specifier: ^1.4.1
         version: 1.4.1
@@ -87,8 +87,8 @@ importers:
         specifier: ^3.5.3
         version: 3.5.3
       svelte:
-        specifier: ^5.28.2
-        version: 5.28.2
+        specifier: ^5.28.6
+        version: 5.28.6
       tsup:
         specifier: ^6.7.0
         version: 6.7.0(postcss@8.4.39)(typescript@5.8.3)
@@ -213,12 +213,16 @@ packages:
     resolution: {integrity: sha512-iAXqUn8IIeBTNd72xsFlgaXHkMBMt6y4HJp1tIaK465CWLT/fG1aqB7ykr95gHHmlBdGbFeWWfyB4NJJ0nmeIg==}
     engines: {node: '>=6.9.0'}
 
-  '@babel/helper-string-parser@7.25.9':
-    resolution: {integrity: sha512-4A/SCr/2KLd5jrtOMFzaKjVtAei3+2r/NChoBNoZ3EyP/+GlhoaEGoWOZUmFmoITP7zOJyHIMm+DYRd8o3PvHA==}
+  '@babel/helper-string-parser@7.27.1':
+    resolution: {integrity: sha512-qMlSxKbpRlAridDExk92nSobyDdpPijUq2DW6oDnUqd0iOGxmQjyqhMIihI9+zv4LPyZdRje2cavWPbCbWm3eA==}
     engines: {node: '>=6.9.0'}
 
   '@babel/helper-validator-identifier@7.25.9':
     resolution: {integrity: sha512-Ed61U6XJc3CVRfkERJWDz4dJwKe7iLmmJsbOGu9wSloNSFttHV0I8g6UAgb7qnK5ly5bGLPd4oXZlxCdANBOWQ==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/helper-validator-identifier@7.27.1':
+    resolution: {integrity: sha512-D2hP9eA+Sqx1kBZgzxZh0y1trbuU+JoDkiEwqhQ36nodYqJwyEIhPSdMNd7lOm/4io72luTPWH20Yda0xOuUow==}
     engines: {node: '>=6.9.0'}
 
   '@babel/highlight@7.16.10':
@@ -235,8 +239,8 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
-  '@babel/types@7.27.0':
-    resolution: {integrity: sha512-H45s8fVLYjbhFH62dIJ3WtmJ6RSPt/3DRO0ZcT2SUiYiQyz3BLVb9ADEnLl91m74aQPS3AzzeajZHYOalWe3bg==}
+  '@babel/types@7.27.1':
+    resolution: {integrity: sha512-+EzkxvLNfiUeKMgy/3luqfsCWFRXLb7U6wNQTk60tovuckwB15B191tJWvpp4HjiQWdJkCxO3Wbvc6jlk3Xb2Q==}
     engines: {node: '>=6.9.0'}
 
   '@clack/core@0.4.1':
@@ -707,8 +711,8 @@ packages:
   '@types/ms@0.7.34':
     resolution: {integrity: sha512-nG96G3Wp6acyAgJqGasjODb+acrI7KltPiRxzHPXnP3NgI28bpQDRv53olbqGXbfcgF5aiiHmO3xpwEpS5Ld9g==}
 
-  '@types/node@18.19.87':
-    resolution: {integrity: sha512-OIAAu6ypnVZHmsHCeJ+7CCSub38QNBS9uceMQeg7K5Ur0Jr+wG9wEOEvvMbhp09pxD5czIUy/jND7s7Tb6Nw7A==}
+  '@types/node@18.19.100':
+    resolution: {integrity: sha512-ojmMP8SZBKprc3qGrGk8Ujpo80AXkrP7G2tOT4VWr5jlr5DHjsJF+emXJz+Wm0glmy4Js62oKMdZZ6B9Y+tEcA==}
 
   '@types/normalize-package-data@2.4.0':
     resolution: {integrity: sha512-f5j5b/Gf71L+dbqxIpQ4Z2WlmI/mPJ0fOkGGmFgtb6sAu97EPczzbS3/tJKxmcYDj55OX6ssqwDAWOHIYDRDGA==}
@@ -2072,8 +2076,8 @@ packages:
     resolution: {integrity: sha512-eTIzlVOSUR+JxdDFepEYcBMtZ9Qqdef+rnzWdRZuMbOywu5tO2w2N7rqjoANZ5k9vywhL6Br1VRjUIgTQx4E8w==}
     engines: {node: '>=6'}
 
-  lazy-js-utils@0.1.42:
-    resolution: {integrity: sha512-Tl5sk2CGoftSiBwNoh3SfBcfnejEha9pvnFRBZ4TZmyWPFp2u0wTb8mYVhsUwFMdQSA9X4lqRHeBCusMHfGyoA==}
+  lazy-js-utils@0.1.44:
+    resolution: {integrity: sha512-EDzPyLaM2AdT/GGSwd6mkN1JvhsICbpnTMB4+HxweBI6S2rjQjSu31qEU6nTccfZ432DWxFgRrvsqYxrksqsog==}
 
   leven@3.1.0:
     resolution: {integrity: sha512-qsda+H8jTaUaN/x5vzW2rzc+8Rw4TAQ/4KjB46IwK5VH+IlVeeeje/EoZRpiXvIqjFgK84QffqPztGI3VBLG1A==}
@@ -3011,8 +3015,8 @@ packages:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
 
-  svelte@5.28.2:
-    resolution: {integrity: sha512-FbWBxgWOpQfhKvoGJv/TFwzqb4EhJbwCD17dB0tEpQiw1XyUEKZJtgm4nA4xq3LLsMo7hu5UY/BOFmroAxKTMg==}
+  svelte@5.28.6:
+    resolution: {integrity: sha512-9qqr7mw8YR9PAnxGFfzCK6PUlNGtns7wVavrhnxyf3fpB1mP/Ol55Z2UnIapsSzNNl3k9qw7cZ22PdE8+xT/jQ==}
     engines: {node: '>=18'}
 
   synckit@0.6.2:
@@ -3538,9 +3542,11 @@ snapshots:
     dependencies:
       '@babel/highlight': 7.16.10
 
-  '@babel/helper-string-parser@7.25.9': {}
+  '@babel/helper-string-parser@7.27.1': {}
 
   '@babel/helper-validator-identifier@7.25.9': {}
+
+  '@babel/helper-validator-identifier@7.27.1': {}
 
   '@babel/highlight@7.16.10':
     dependencies:
@@ -3550,16 +3556,16 @@ snapshots:
 
   '@babel/parser@7.24.7':
     dependencies:
-      '@babel/types': 7.27.0
+      '@babel/types': 7.27.1
 
   '@babel/parser@7.25.6':
     dependencies:
-      '@babel/types': 7.27.0
+      '@babel/types': 7.27.1
 
-  '@babel/types@7.27.0':
+  '@babel/types@7.27.1':
     dependencies:
-      '@babel/helper-string-parser': 7.25.9
-      '@babel/helper-validator-identifier': 7.25.9
+      '@babel/helper-string-parser': 7.27.1
+      '@babel/helper-validator-identifier': 7.27.1
 
   '@clack/core@0.4.1':
     dependencies:
@@ -3871,7 +3877,7 @@ snapshots:
     dependencies:
       '@types/http-cache-semantics': 4.0.3
       '@types/keyv': 3.1.4
-      '@types/node': 18.19.87
+      '@types/node': 18.19.100
       '@types/responselike': 1.0.2
 
   '@types/chai-subset@1.3.3':
@@ -3901,7 +3907,7 @@ snapshots:
 
   '@types/keyv@3.1.4':
     dependencies:
-      '@types/node': 18.19.87
+      '@types/node': 18.19.100
 
   '@types/mdast@4.0.4':
     dependencies:
@@ -3909,7 +3915,7 @@ snapshots:
 
   '@types/ms@0.7.34': {}
 
-  '@types/node@18.19.87':
+  '@types/node@18.19.100':
     dependencies:
       undici-types: 5.26.5
 
@@ -3917,7 +3923,7 @@ snapshots:
 
   '@types/responselike@1.0.2':
     dependencies:
-      '@types/node': 18.19.87
+      '@types/node': 18.19.100
 
   '@types/unist@3.0.3': {}
 
@@ -4169,7 +4175,7 @@ snapshots:
   '@vue-vine/compiler@0.1.42':
     dependencies:
       '@babel/parser': 7.25.6
-      '@babel/types': 7.27.0
+      '@babel/types': 7.27.1
       '@vue/compiler-dom': 3.5.4
       '@vue/compiler-ssr': 3.5.4
       '@vue/shared': 3.5.13
@@ -5226,7 +5232,7 @@ snapshots:
 
   get-lib-version@0.0.2:
     dependencies:
-      lazy-js-utils: 0.1.42
+      lazy-js-utils: 0.1.44
 
   get-stream@5.2.0:
     dependencies:
@@ -5544,7 +5550,7 @@ snapshots:
 
   kleur@3.0.3: {}
 
-  lazy-js-utils@0.1.42:
+  lazy-js-utils@0.1.44:
     dependencies:
       htmlparser2: 8.0.2
       qrcode: 1.5.4
@@ -6625,7 +6631,7 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  svelte@5.28.2:
+  svelte@5.28.6:
     dependencies:
       '@ampproject/remapping': 2.3.0
       '@jridgewell/sourcemap-codec': 1.5.0
@@ -6836,14 +6842,14 @@ snapshots:
       spdx-correct: 3.1.1
       spdx-expression-parse: 3.0.1
 
-  vite-node@0.29.8(@types/node@18.19.87):
+  vite-node@0.29.8(@types/node@18.19.100):
     dependencies:
       cac: 6.7.14
       debug: 4.3.4
       mlly: 1.2.0
       pathe: 1.1.0
       picocolors: 1.1.1
-      vite: 4.5.3(@types/node@18.19.87)
+      vite: 4.5.3(@types/node@18.19.100)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -6854,20 +6860,20 @@ snapshots:
       - supports-color
       - terser
 
-  vite@4.5.3(@types/node@18.19.87):
+  vite@4.5.3(@types/node@18.19.100):
     dependencies:
       esbuild: 0.18.20
       postcss: 8.4.39
       rollup: 3.29.4
     optionalDependencies:
-      '@types/node': 18.19.87
+      '@types/node': 18.19.100
       fsevents: 2.3.2
 
   vitest@0.29.8:
     dependencies:
       '@types/chai': 4.3.4
       '@types/chai-subset': 1.3.3
-      '@types/node': 18.19.87
+      '@types/node': 18.19.100
       '@vitest/expect': 0.29.8
       '@vitest/runner': 0.29.8
       '@vitest/spy': 0.29.8
@@ -6886,8 +6892,8 @@ snapshots:
       tinybench: 2.4.0
       tinypool: 0.4.0
       tinyspy: 1.1.1
-      vite: 4.5.3(@types/node@18.19.87)
-      vite-node: 0.29.8(@types/node@18.19.87)
+      vite: 4.5.3(@types/node@18.19.100)
+      vite-node: 0.29.8(@types/node@18.19.100)
       why-is-node-running: 2.2.2
     transitivePeerDependencies:
       - less
