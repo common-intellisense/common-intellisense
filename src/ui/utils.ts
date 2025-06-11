@@ -903,7 +903,7 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
     requiredProps.push(attr)
   }
 
-  for (const e of content.events) {
+  for (const e of content.events || []) {
     if (!e.required)
       continue
     index++
