@@ -351,11 +351,12 @@ export function propsReducer(options: PropsOptions) {
           }
 
           content += `  ${isZh ? (description_zh || description) : description}${params ? `  ${isZh ? '参数' : 'params'}：${params}` : ''}`
+          const details = `${isZh ? '***属性***' : '***prop***'}: ${content}\n-  ${isZh ? `***描述***: ${description_zh || description}` : `***description***: ${description}`}\n-  ${typeof params === 'string' ? `  ${isZh ? '***参数***' : '***params***'}: ${params?.replace(/\n/g, '')}` : ''}`
           const documentation = new vscode.MarkdownString()
           documentation.isTrusted = true
           documentation.supportHtml = true
           documentation.appendMarkdown(detail.join('\n\n'))
-          return proxyCreateCompletionItem({ content, snippet, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
+          return proxyCreateCompletionItem({ content, snippet, details, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
         },
         )
       }

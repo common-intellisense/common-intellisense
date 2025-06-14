@@ -729,7 +729,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // 这个实现有些问题，要从底层去修改 propName 上的信息，才能拿到准确的数据
         const findBind = () => result.props.find((p: any) => p.name === 'bind')
         const findOn = () => result.props.find((p: any) => p.name === 'on')
-        const propName = result.propName === true ? result.props[0].name === 'on' ? findOn().arg.content : findBind().arg.content : result.propName
+        const propName = result.propName === true ? result.props[0].name === 'on' ? findOn()?.arg.content : findBind()?.arg.content : result.propName
 
         if (typeof propName !== 'string')
           return
