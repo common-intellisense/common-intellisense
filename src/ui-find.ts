@@ -77,17 +77,17 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
 }
 
 export interface UpdateCompletionsOptions {
-  selectedUIs: string[];
-  alias: Record<string, string>;
-  detectSlots: any;
-  prefix: Record<string, string>;
+  selectedUIs: string[]
+  alias: Record<string, string>
+  detectSlots: any
+  prefix: Record<string, string>
 }
 
 export async function updateCompletions(
   uis: Uis,
-  options: UpdateCompletionsOptions
+  options: UpdateCompletionsOptions,
 ) {
-  const { selectedUIs, alias, detectSlots, prefix: userPrefix } = options;
+  const { selectedUIs, alias, detectSlots, prefix: userPrefix } = options
   if (!preUis) {
     preUis = uis
   }
@@ -138,7 +138,7 @@ export async function updateCompletions(
     }
     else {
       try {
-          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
+        Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
         componentsNames = UI[key]?.()
         cacheMap.set(key, componentsNames)
       }

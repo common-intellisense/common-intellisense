@@ -7,7 +7,7 @@ import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
-import { generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
+import { convertPrefixedComponentName, findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
 import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
@@ -326,46 +326,38 @@ export async function activate(context: vscode.ExtensionContext) {
       return
     }
 
-    if (result.parent && result.tag === 'template') {
-      const parentTag = result.parent.tag || result.parent.name
+    if (
+      (result.parent && result.tag === 'template')
+      || result.type === 'slot' || result.isSlot || result.type === 'slots' || (typeof result.propName === 'string' && result.propName.startsWith('#'))
+    ) {
+      const parentTag = result.parent?.tag || result.parent?.name || result.parentTag
       if (parentTag) {
-        let matchedComponent = null
-        for (const prefix of componentsPrefix) {
-          if (parentTag.startsWith(prefix)) {
-            const compName = parentTag.slice(prefix.length)
-            const tag = compName[0]?.toUpperCase() + toCamel(compName.slice(1))
-            if (UiCompletions[tag]) {
-              matchedComponent = UiCompletions[tag]
-              break
-            }
-          }
+        let matchedComponent = findPrefixedComponent(parentTag, componentsPrefix, UiCompletions)
+        if (!matchedComponent) {
+          const name = toCamel(parentTag)
+          const fallbackTag = name[0].toUpperCase() + name.slice(1)
+          matchedComponent = UiCompletions[fallbackTag]
         }
-        if (matchedComponent && matchedComponent.slots)
-          return matchedComponent.slots
-        const name = toCamel(parentTag)
-        const component = UiCompletions[name[0].toUpperCase() + name.slice(1)]
-        const slots = component?.slots
+        const slots = matchedComponent?.slots
         if (slots)
           return slots
       }
     }
 
-    let matchedComponent = null
-    for (const prefix of componentsPrefix) {
-      if (result.tag && result.tag.startsWith(prefix)) {
-        const compName = result.tag.slice(prefix.length)
-        const tag = compName[0]?.toUpperCase() + toCamel(compName.slice(1))
-        if (UiCompletions[tag]) {
-          matchedComponent = UiCompletions[tag]
-          break
-        }
-      }
+    let matchedComponent = findPrefixedComponent(result.tag, componentsPrefix, UiCompletions)
+    if (!matchedComponent && result.tag) {
+      const name = toCamel(result.tag)
+      const fallbackTag = name[0].toUpperCase() + name.slice(1)
+      matchedComponent = UiCompletions[fallbackTag]
     }
     if (matchedComponent) {
       if (result.propName === 'icon')
         return matchedComponent.icons
       if (result.isEvent)
         return matchedComponent.events?.[0]?.(isVue) || []
+      // slot suggestions for all slot-related scenarios
+      if (matchedComponent.slots && (result.type === 'slots' || result.type === 'slot' || result.isSlot || (typeof result.propName === 'string' && result.propName.startsWith('#'))))
+        return matchedComponent.slots
       return matchedComponent.completions?.[0]?.(isVue) || []
     }
 
@@ -887,18 +879,8 @@ export async function activate(context: vscode.ExtensionContext) {
           return target.hover
         }
       }
-      
-      let matchedComponent = null
-      for (const prefix of componentsPrefix) {
-        if (word.startsWith(prefix)) {
-          const compName = word.slice(prefix.length)
-          const tag = compName[0]?.toUpperCase() + toCamel(compName.slice(1))
-          if (UiCompletions[tag]) {
-            matchedComponent = UiCompletions[tag]
-            break
-          }
-        }
-      }
+
+      const matchedComponent = findPrefixedComponent(word, componentsPrefix, UiCompletions)
       if (matchedComponent && matchedComponent.tableDocument) {
         return createHover(matchedComponent.tableDocument)
       }

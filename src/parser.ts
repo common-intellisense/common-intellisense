@@ -13,7 +13,7 @@ import {
 } from '@vue-vine/compiler'
 
 import * as vscode from 'vscode'
-import { hyphenate, isVine, isVue, toCamel } from './ui/utils'
+import { convertPrefixedComponentName, findPrefixedComponent, hyphenate, isVine, isVue, toCamel } from './ui/utils'
 import { logger } from './ui-find'
 
 const { parse: svelteParser } = require('svelte/compiler')
@@ -828,7 +828,22 @@ async function findUiTag(children: any, UiCompletions: any, result: any[] = [], 
       continue
     if (originTag.includes(tag))
       continue
-    const tagName = toCamel(`-${tag}`)
+
+    // Use utility function to handle prefix matching
+    const matchedComponent = findPrefixedComponent(tag, prefix.filter(Boolean), UiCompletions)
+    if (matchedComponent) {
+      if (!matchedComponent.rawSlots?.length)
+        continue
+      cacheMap.add(range)
+      result.push({
+        child,
+        slots: matchedComponent.rawSlots,
+      })
+      continue
+    }
+
+    // Fallback to standard conversion if no prefix match
+    const tagName = tag[0]?.toUpperCase() + toCamel(tag.slice(1))
     let target = UiCompletions[tagName] || await findDynamicComponent(tagName, {}, UiCompletions, prefix)
     const importUiSource = uiDeps[tagName]
     if (!target)
@@ -993,19 +1008,41 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
   else if (UiCompletions[hyphenate(tag[0].toLocaleLowerCase() + tag.slice(1))]) {
     target = UiCompletions[hyphenate(tag[0].toLocaleLowerCase() + tag.slice(1))]
   }
+
   if (!target) {
     for (const p of prefix) {
       if (!p)
         continue
-      const t = UiCompletions[p[0].toUpperCase() + p.slice(1) + tag]
-      if (from && t && t.lib === from) {
-        target = t
+
+      // Try prefix + PascalCase: P + Button = PButton
+      const prefixedPascalCase = p[0].toUpperCase() + p.slice(1) + tag
+      const t1 = UiCompletions[prefixedPascalCase]
+      if (from && t1 && t1.lib === from) {
+        target = t1
         break
       }
-      // else if (t) {
-      //   target = t
-      //   break
-      // }
+      else if (!from && t1) {
+        target = t1
+        break
+      }
+
+      // Try prefix + kebab-case component: if tag is "button", try p + "button" = "p-button"
+      // Then convert "p-button" to PascalCase "PButton" for lookup
+      if (tag.toLowerCase() === tag) { // if tag is lowercase like "button"
+        const kebabWithPrefix = `${p}-${tag}`
+        const standardName = convertPrefixedComponentName(kebabWithPrefix, p)
+        if (standardName) {
+          const t2 = UiCompletions[standardName]
+          if (from && t2 && t2.lib === from) {
+            target = t2
+            break
+          }
+          else if (!from && t2) {
+            target = t2
+            break
+          }
+        }
+      }
     }
   }
   return target
