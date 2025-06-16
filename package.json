@@ -220,7 +220,7 @@
     "lazy-js-utils": "^0.1.44",
     "ofetch": "^1.4.1",
     "prettier": "^3.5.3",
-    "svelte": "^5.34.1",
+    "svelte": "^5.34.3",
     "tsup": "^6.7.0",
     "typescript": "^5.8.3",
     "vitest": "^0.29.8"

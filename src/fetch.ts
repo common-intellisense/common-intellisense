@@ -117,7 +117,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
         const userPrefix = getPrefix?.() as Record<string, string> | undefined
         let components = componentsReducer(v(isZh))
 
-        if (validateUserPrefix(userPrefix) && userPrefix[lib]) {
+        if (userPrefix && userPrefix[lib]) {
           const customPrefix = userPrefix[lib]
           components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
         }

@@ -230,7 +230,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const pos = lastChild.loc.end
         const endColumn = Math.max(pos.column - 1, 0)
         if (isVine())
-          await insertText(`\n<template ${slotName}>$1</template>`, getPosition(pos.offset + offset).position)
+          await insertText(`\n<template ${slotName}></template>`, getPosition(pos.offset + offset).position)
         else
           await insertText(`\n<template ${slotName}>$1</template>`, createPosition(pos.line - 1, endColumn))
       }
@@ -334,9 +334,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (parentTag) {
         let matchedComponent = findPrefixedComponent(parentTag, componentsPrefix, UiCompletions)
         if (!matchedComponent) {
-          const name = toCamel(parentTag)
-          const fallbackTag = name[0].toUpperCase() + name.slice(1)
-          matchedComponent = UiCompletions[fallbackTag]
+          matchedComponent = UiCompletions[fixedTagName(parentTag)]
         }
         const slots = matchedComponent?.slots
         if (slots)
@@ -346,9 +344,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     let matchedComponent = findPrefixedComponent(result.tag, componentsPrefix, UiCompletions)
     if (!matchedComponent && result.tag) {
-      const name = toCamel(result.tag)
-      const fallbackTag = name[0].toUpperCase() + name.slice(1)
-      matchedComponent = UiCompletions[fallbackTag]
+      matchedComponent = UiCompletions[fixedTagName(result.tag)]
     }
     if (matchedComponent) {
       if (result.propName === 'icon')
@@ -362,12 +358,9 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
-      const name = result.tag.includes('-')
-        ? result.tag[0].toUpperCase() + result.tag.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
-        : toCamel(result.tag)
       if (result.propName === 'icon')
         return UiCompletions.icons
-
+      const name = fixedTagName(result.tag)
       const propName = result.propName
       const from = uiDeps?.[name]
       const cacheMap = getCacheMap()
@@ -559,7 +552,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (parent) {
         const parentTag = parent.tag || parent.name
         if (UiCompletions) {
-          const suggestions = UiCompletions[parentTag[0].toUpperCase() + toCamel(parentTag).slice(1)]?.suggestions
+          const suggestions = UiCompletions[fixedTagName(parentTag)]?.suggestions
           if (suggestions && suggestions.length) {
             data.forEach((child) => {
               const label = typeof child.label === 'string' ? child.label.split(' ')[0] : child.label.label.split(' ')[0]
@@ -696,9 +689,7 @@ export async function activate(context: vscode.ExtensionContext) {
           const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
           if (!data?.length || !word)
             return createHover('')
-          const tag = result.tag.includes('-')
-            ? result.tag[0].toUpperCase() + toCamel(result.tag).slice(1)
-            : toCamel(result.tag)
+          const tag = fixedTagName(result.tag)
           const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
           if (!target)
             return
@@ -713,7 +704,7 @@ export async function activate(context: vscode.ExtensionContext) {
           if (!parentTag)
             return
 
-          const name = parentTag[0].toUpperCase() + toCamel(parentTag).slice(1)
+          const name = fixedTagName(parentTag)
           const slotName = result.props.find((item: any) => item.name === 'slot')?.arg?.content
 
           if (!slotName)
@@ -754,7 +745,7 @@ export async function activate(context: vscode.ExtensionContext) {
         else if (!result.propName) {
           return
         }
-        // 这个实现有些问题，要从底层去修改 propName 上的信息，才能拿到准确的数据
+        // 这个实现有些问题,要从底层去修改 propName 上的信息,才能拿到准确的数据
         const findBind = () => result.props.find((p: any) => p.name === 'bind')
         const findOn = () => result.props.find((p: any) => p.name === 'on')
         const propName = result.propName === true ? result.props[0].name === 'on' ? findOn()?.arg.content : findBind()?.arg.content : result.propName
@@ -764,7 +755,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
-        const tag = toCamel(result.tag)[0].toUpperCase() + toCamel(result.tag).slice(1)
+        const tag = fixedTagName(result.tag)
         const r = UiCompletions[tag] || await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
         if (!r)
           return
@@ -777,7 +768,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return
         return createHover(`## Details \n\n${detail}`)
       }
-      // todo: 优化这里的条件，在 react 中， 也可以减少更多的处理步骤
+      // todo: 优化这里的条件,在 react 中, 也可以减少更多的处理步骤
       if (isVue()) {
         const r = transformVue(code, position)
         if (r) {
@@ -938,4 +929,12 @@ function getImportUiComponents(text: string) {
     }
   }
   return deps
+}
+
+function fixedTagName(tagname: string) {
+  // 修正 tag 名称
+  if (tagname.includes('-')) {
+    return tagname[0].toUpperCase() + tagname.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
+  }
+  return toCamel(tagname)
 }
