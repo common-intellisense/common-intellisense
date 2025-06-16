@@ -29,7 +29,7 @@ export type SubCompletionItem = CompletionItem & {
   propType?: string
 }
 export interface PropsConfigItem {
-  icons: SubCompletionItem[] | CompletionList<SubCompletionItem> | PromiseLike<SubCompletionItem[] | CompletionList<SubCompletionItem> | null | undefined> | null | undefined
+  icons?: SubCompletionItem[] | vscode.CompletionList<SubCompletionItem> | PromiseLike<SubCompletionItem[] | vscode.CompletionList<SubCompletionItem> | null | undefined> | null | undefined
   completions: ((isVue?: boolean) => SubCompletionItem[])[]
   events: ((isVue?: boolean) => SubCompletionItem[])[]
   methods: SubCompletionItem[]

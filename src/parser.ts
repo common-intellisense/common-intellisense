@@ -6,6 +6,7 @@ import path from 'node:path'
 import { traverse } from '@babel/types'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
 import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
+// @ts-expect-error no problem
 import { parse } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import {
   compileVineTypeScriptFile,
