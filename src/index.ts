@@ -338,7 +338,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
-      const name = result.tag[0].toUpperCase() + result.tag.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
+      const name = toCamel(result.tag)
       if (result.propName === 'icon')
         return UiCompletions.icons
 
@@ -858,7 +858,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
       if (!data?.length || !word)
         return createHover('')
-      word = toCamel(word)[0].toUpperCase() + toCamel(word).slice(1)
+      word = toCamel(word)
       const from = uiDeps?.[word]
       const cacheMap = getCacheMap()
       if (from && cacheMap.size > 2) {
