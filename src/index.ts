@@ -338,7 +338,9 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
-      const name = toCamel(result.tag)
+      const name = result.tag.includes('-')
+        ? result.tag[0].toUpperCase() + result.tag.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
+        : toCamel(result.tag)
       if (result.propName === 'icon')
         return UiCompletions.icons
 
@@ -670,7 +672,9 @@ export async function activate(context: vscode.ExtensionContext) {
           const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
           if (!data?.length || !word)
             return createHover('')
-          const tag = result.tag[0].toUpperCase() + toCamel(result.tag).slice(1)
+          const tag = result.tag.includes('-')
+            ? result.tag[0].toUpperCase() + toCamel(result.tag).slice(1)
+            : toCamel(result.tag)
           const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
           if (!target)
             return
@@ -858,7 +862,9 @@ export async function activate(context: vscode.ExtensionContext) {
       const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
       if (!data?.length || !word)
         return createHover('')
-      word = toCamel(word)
+      word = word.includes('-')
+        ? toCamel(word)[0].toUpperCase() + toCamel(word).slice(1)
+        : toCamel(word)
       const from = uiDeps?.[word]
       const cacheMap = getCacheMap()
       if (from && cacheMap.size > 2) {
