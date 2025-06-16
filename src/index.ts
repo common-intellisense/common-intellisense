@@ -329,12 +329,44 @@ export async function activate(context: vscode.ExtensionContext) {
     if (result.parent && result.tag === 'template') {
       const parentTag = result.parent.tag || result.parent.name
       if (parentTag) {
+        let matchedComponent = null
+        for (const prefix of componentsPrefix) {
+          if (parentTag.startsWith(prefix)) {
+            const compName = parentTag.slice(prefix.length)
+            const tag = compName[0]?.toUpperCase() + toCamel(compName.slice(1))
+            if (UiCompletions[tag]) {
+              matchedComponent = UiCompletions[tag]
+              break
+            }
+          }
+        }
+        if (matchedComponent && matchedComponent.slots)
+          return matchedComponent.slots
         const name = toCamel(parentTag)
         const component = UiCompletions[name[0].toUpperCase() + name.slice(1)]
         const slots = component?.slots
         if (slots)
           return slots
       }
+    }
+
+    let matchedComponent = null
+    for (const prefix of componentsPrefix) {
+      if (result.tag && result.tag.startsWith(prefix)) {
+        const compName = result.tag.slice(prefix.length)
+        const tag = compName[0]?.toUpperCase() + toCamel(compName.slice(1))
+        if (UiCompletions[tag]) {
+          matchedComponent = UiCompletions[tag]
+          break
+        }
+      }
+    }
+    if (matchedComponent) {
+      if (result.propName === 'icon')
+        return matchedComponent.icons
+      if (result.isEvent)
+        return matchedComponent.events?.[0]?.(isVue) || []
+      return matchedComponent.completions?.[0]?.(isVue) || []
     }
 
     if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
@@ -855,25 +887,23 @@ export async function activate(context: vscode.ExtensionContext) {
           return target.hover
         }
       }
-      const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
-      if (!data?.length || !word)
-        return createHover('')
-      word = toCamel(word)[0].toUpperCase() + toCamel(word).slice(1)
-      const from = uiDeps?.[word]
-      const cacheMap = getCacheMap()
-      if (from && cacheMap.size > 2) {
-        // 存在多个 UI 库
-        let fixedFrom = nameMap[from] || from
-        if (fixedFrom in alias) {
-          const v = alias[fixedFrom]
-          fixedFrom = v.replace(/\d+$/, '')
+      
+      let matchedComponent = null
+      for (const prefix of componentsPrefix) {
+        if (word.startsWith(prefix)) {
+          const compName = word.slice(prefix.length)
+          const tag = compName[0]?.toUpperCase() + toCamel(compName.slice(1))
+          if (UiCompletions[tag]) {
+            matchedComponent = UiCompletions[tag]
+            break
+          }
         }
-
-        const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
-        const keys = Array.from(cacheMap.keys())
-        const targetKey = keys.find(k => nameReg.test(k))!
-        const targetValue = cacheMap.get(targetKey)! as PropsConfig
-        UiCompletions = targetValue
+      }
+      if (matchedComponent && matchedComponent.tableDocument) {
+        return createHover(matchedComponent.tableDocument)
+      }
+      if (UiCompletions[word] && UiCompletions[word].tableDocument) {
+        return createHover(UiCompletions[word].tableDocument)
       }
       const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix, uiDeps?.[word])
       if (!target)

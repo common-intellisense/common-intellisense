@@ -23,6 +23,10 @@ export const getIsShowSlots = () => getConfiguration('common-intellisense.showSl
  */
 export const getAlias = () => getConfiguration('common-intellisense.alias') as Record<string, string>
 /**
+ * @description 获取组件前缀配置
+ */
+export const getPrefix = () => getConfiguration('common-intellisense.prefix') as Record<string, string>
+/**
  * @description 获取运行组件配置
  */
 export const getSelectedUIs = () => getConfiguration('common-intellisense.ui') as string[]

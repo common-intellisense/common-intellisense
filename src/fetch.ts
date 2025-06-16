@@ -8,6 +8,7 @@ import { ofetch } from 'ofetch'
 import { componentsReducer, propsReducer } from './ui/utils'
 import { logger } from './ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
+import { getPrefix } from './ui-utils'
 
 const prefix = '@common-intellisense/'
 
@@ -112,7 +113,15 @@ export async function fetchFromCommonIntellisense(tag: string) {
     for (const key in moduleExports) {
       const v = moduleExports[key]
       if (key.endsWith('Components')) {
-        result[key] = () => componentsReducer(v(isZh))
+        const lib = key.slice(0, -'Components'.length)
+        const userPrefix = getPrefix?.() as Record<string, string> | undefined
+        let components = componentsReducer(v(isZh))
+
+        if (userPrefix && userPrefix[lib]) {
+          const customPrefix = userPrefix[lib]
+          components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
+        }
+        result[key] = () => components
       }
       else {
         result[key] = () => propsReducer(v())

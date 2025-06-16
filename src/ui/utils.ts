@@ -29,6 +29,7 @@ export type SubCompletionItem = CompletionItem & {
   propType?: string
 }
 export interface PropsConfigItem {
+  icons: SubCompletionItem[] | CompletionList<SubCompletionItem> | PromiseLike<SubCompletionItem[] | CompletionList<SubCompletionItem> | null | undefined> | null | undefined
   completions: ((isVue?: boolean) => SubCompletionItem[])[]
   events: ((isVue?: boolean) => SubCompletionItem[])[]
   methods: SubCompletionItem[]
@@ -61,6 +62,9 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
 const cwd = getRootPath()
 export function propsReducer(options: PropsOptions) {
   const { uiName, lib, map, prefix = '', dynamicLib } = options
+
+  console.log('options', prefix);
+  
   const result: PropsConfig = {}
   // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
   // let icons

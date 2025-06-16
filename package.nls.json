@@ -5,6 +5,7 @@
   "uiDescription": "Select the UI framework to use",
   "showSlotsDescription": "Whether to show slots",
   "useTranslateDescription": "Whether to use translation",
+  "prefixDescription": "Configure prefixes",
   "aliasDescription": "Configure aliases",
   "excludeDescription": "Files or folders to exclude",
   "pickUITitle": "Select UI Framework",
