@@ -7,7 +7,7 @@ import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
-import { convertPrefixedComponentName, findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
+import { findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
 import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
@@ -362,7 +362,9 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
-      const name = result.tag[0].toUpperCase() + result.tag.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
+      const name = result.tag.includes('-')
+        ? result.tag[0].toUpperCase() + result.tag.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
+        : toCamel(result.tag)
       if (result.propName === 'icon')
         return UiCompletions.icons
 
@@ -694,7 +696,9 @@ export async function activate(context: vscode.ExtensionContext) {
           const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
           if (!data?.length || !word)
             return createHover('')
-          const tag = result.tag[0].toUpperCase() + toCamel(result.tag).slice(1)
+          const tag = result.tag.includes('-')
+            ? result.tag[0].toUpperCase() + toCamel(result.tag).slice(1)
+            : toCamel(result.tag)
           const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
           if (!target)
             return
