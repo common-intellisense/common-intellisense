@@ -5,7 +5,7 @@ import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFil
 import { findUp } from 'find-up'
 import { UINames as configUINames } from './constants'
 import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
-import { formatUIName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui-utils'
+import { formatUIName, getAlias, getIsShowSlots, getPrefix, getSelectedUIs, getUiDeps } from './ui-utils'
 import path from 'node:path'
 import { getLibVersion } from 'get-lib-version'
 
@@ -41,6 +41,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
     urlCache.clear()
   const selectedUIs = getSelectedUIs()
   const alias = getAlias()
+  const prefix = getPrefix()
 
   const cwd = getCurrentFileUrl()
   if (!cwd || cwd === 'exthhost')
@@ -50,7 +51,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
     await getOthers()
     const uis = urlCache.get(cwd)
     if (uis && uis.length)
-      updateCompletions(uis)
+      await updateCompletions(uis, { selectedUIs, alias, detectSlots, prefix })
     return
   }
   const OnChange = () => findUI(extensionContext, detectSlots)
@@ -65,7 +66,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
     if (!uis || !uis.length)
       return
 
-    return updateCompletions(uis).then(() => {
+    return updateCompletions(uis, { selectedUIs, alias, detectSlots, prefix }).then(() => {
       logger.info(`findUI: ${uis.map(ui => ui.join('@')).join(' | ')}`)
     }).catch((error) => {
       logger.info(`updateCompletions获取失败${error?.message || error}`)
@@ -73,106 +74,123 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
   }).catch((error) => {
     logger.info(`findPkgUI获取失败${error?.message || error}`)
   })
-  async function updateCompletions(uis: Uis) {
-    if (!preUis) {
-      preUis = uis
-    }
-    else if (UiCompletions && (preUis.join('') === uis.join(''))) {
-      return
+}
+
+export interface UpdateCompletionsOptions {
+  selectedUIs: string[]
+  alias: Record<string, string>
+  detectSlots: any
+  prefix: Record<string, string>
+}
+
+export async function updateCompletions(
+  uis: Uis,
+  options: UpdateCompletionsOptions,
+) {
+  const { selectedUIs, alias, detectSlots, prefix: userPrefix } = options
+  if (!preUis) {
+    preUis = uis
+  }
+  else if (UiCompletions && (preUis.join('') === uis.join(''))) {
+    return
+  }
+  else {
+    preUis = uis
+  }
+  // 读取本地缓存
+  await getLocalCache
+  // 获取远程的 UI 库
+  const uisName: string[] = []
+  const originUisName: string[] = []
+  for await (let [uiName, version] of uis) {
+    let _version = version.match(/[^~]?(\d+)./)![1]
+    if (uiName in alias) {
+      const v = alias[uiName]
+      const m = v.match(/([^1-9^]+)\^?(\d)/)!
+      _version = m[2] || _version
+      originUisName.push(`${uiName}${_version}`)
+      uiName = m[1]
     }
     else {
-      preUis = uis
+      originUisName.push(`${uiName}${_version}`)
     }
-    // 读取本地缓存
-    await getLocalCache
-    // 获取远程的 UI 库
-    const uisName: string[] = []
-    const originUisName: string[] = []
-    for await (let [uiName, version] of uis) {
-      let _version = version.match(/[^~]?(\d+)./)![1]
-      if (uiName in alias) {
-        const v = alias[uiName]
-        const m = v.match(/([^1-9^]+)\^?(\d)/)!
-        _version = m[2] || _version
-        originUisName.push(`${uiName}${_version}`)
-        uiName = m[1]
-      }
-      else {
-        originUisName.push(`${uiName}${_version}`)
-      }
-      const formatName = `${formatUIName(uiName)}${_version}`
-      uisName.push(formatName)
-    }
+    const formatName = `${formatUIName(uiName)}${_version}`
+    uisName.push(formatName)
+  }
 
-    if (selectedUIs && selectedUIs.length && !selectedUIs.includes('auto')) {
-      UINames.push(...selectedUIs.filter(item => uisName.includes(item)))
-      if (!UINames.length)
-        setConfiguration('common-intellisense.ui', [])
-    }
-
+  if (selectedUIs && selectedUIs.length && !selectedUIs.includes('auto')) {
+    UINames.push(...selectedUIs.filter(item => uisName.includes(item)))
     if (!UINames.length)
-      UINames.push(...uisName)
+      setConfiguration('common-intellisense.ui', [])
+  }
 
-    currentPkgUiNames = uisName
-    optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
+  if (!UINames.length)
+    UINames.push(...uisName)
 
-    await Promise.all(UINames.map(async (name: string) => {
-      let componentsNames
-      const key = `${name}Components`
-      if (cacheMap.has(key)) {
-        componentsNames = cacheMap.get(key)
-      }
-      else {
-        try {
-          Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
-          componentsNames = UI[key]?.()
-          cacheMap.set(key, componentsNames)
-        }
-        catch (error) {
-          logger.error(`fetch fetchFromCommonIntellisense [${name}] error： ${String(error)}`)
-        }
-      }
-      if (componentsNames) {
-        for (const componentsName of componentsNames) {
-          const { prefix, data, directives, lib } = componentsName
-          if (optionsComponents.libs.includes(lib) && optionsComponents.prefix.includes(prefix))
-            continue
-          optionsComponents.libs.push(lib)
-          if (!optionsComponents.prefix.includes(prefix))
-            optionsComponents.prefix.push(prefix)
-          optionsComponents.data.push(data)
-          const libWithVersion = originUisName.find(item => item.startsWith(lib))!
-          optionsComponents.directivesMap[libWithVersion] = directives
-        }
-      }
-      let completion
-      if (cacheMap.has(name)) {
-        completion = cacheMap.get(name)
-      }
-      else {
-        completion = await UI[name]?.()
-        cacheMap.set(name, completion)
-      }
-      if (!UiCompletions)
-        UiCompletions = {}
+  currentPkgUiNames = uisName
+  optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
 
-      Object.assign(UiCompletions, completion)
-    }))
-
-    try {
-      fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
+  await Promise.all(UINames.map(async (name: string) => {
+    let componentsNames
+    const key = `${name}Components`
+    if (cacheMap.has(key)) {
+      componentsNames = cacheMap.get(key)
     }
-    catch (error) {
-      logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
+    else {
+      try {
+        Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
+        componentsNames = UI[key]?.()
+        cacheMap.set(key, componentsNames)
+      }
+      catch (error) {
+        logger.error(`fetch fetchFromCommonIntellisense [${name}] error： ${String(error)}`)
+      }
     }
+    if (componentsNames) {
+      for (const componentsName of componentsNames) {
+        let { prefix, data, directives, lib } = componentsName
+        // use custom prefix first
+        if (userPrefix && userPrefix[lib]) {
+          prefix = userPrefix[lib]
+        }
+        if (optionsComponents.libs.includes(lib) && optionsComponents.prefix.includes(prefix))
+          continue
+        optionsComponents.libs.push(lib)
+        if (!optionsComponents.prefix.includes(prefix))
+          optionsComponents.prefix.push(prefix)
+        optionsComponents.data.push(data)
+        const libWithVersion = originUisName.find(item => item.startsWith(lib))!
+        optionsComponents.directivesMap[libWithVersion] = directives
+      }
+    }
+    let completion
+    if (cacheMap.has(name)) {
+      completion = cacheMap.get(name)
+    }
+    else {
+      completion = await UI[name]?.()
+      cacheMap.set(name, completion)
+    }
+    if (!UiCompletions)
+      UiCompletions = {}
 
-    if (getIsShowSlots()) {
-      const activeText = getActiveText()
-      if (activeText)
-        detectSlots(UiCompletions, getUiDeps(activeText), optionsComponents.prefix)
-    }
+    Object.assign(UiCompletions, completion)
+  }))
+
+  try {
+    fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
+  }
+  catch (error) {
+    logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
+  }
+
+  if (getIsShowSlots()) {
+    const activeText = getActiveText()
+    if (activeText)
+      detectSlots(UiCompletions, getUiDeps(activeText), optionsComponents.prefix)
   }
 }
+
 // TODO: 找到依赖包的package.json里面带有本插件相关的配置文件并且读取
 export async function findPkgUI(cwd?: string, onChange?: () => void) {
   const alias = getAlias()

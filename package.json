@@ -136,6 +136,11 @@
           "default": true,
           "description": "%showSlotsDescription%"
         },
+        "common-intellisense.prefix": {
+          "type": "object",
+          "default": {},
+          "description": "%prefixDescription%"
+        },
         "common-intellisense.alias": {
           "type": "object",
           "default": {},

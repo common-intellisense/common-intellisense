@@ -5,6 +5,7 @@
   "uiDescription": "选择UI框架 (Select the UI framework)",
   "useTranslateDescription": "使用翻译功能 (Use translation)",
   "showSlotsDescription": "显示插槽 (Show slots)",
+  "prefixDescription": "配置前缀 (Configure prefixes)",
   "aliasDescription": "配置别名 (Configure aliases)",
   "excludeDescription": "排除文件或文件夹 (Exclude files or folders)",
   "pickUITitle": "选择 UI 框架 (Select UI Framework)",

@@ -29,6 +29,7 @@ export type SubCompletionItem = CompletionItem & {
   propType?: string
 }
 export interface PropsConfigItem {
+  icons: SubCompletionItem[] | CompletionList<SubCompletionItem> | PromiseLike<SubCompletionItem[] | CompletionList<SubCompletionItem> | null | undefined> | null | undefined
   completions: ((isVue?: boolean) => SubCompletionItem[])[]
   events: ((isVue?: boolean) => SubCompletionItem[])[]
   methods: SubCompletionItem[]
@@ -61,6 +62,7 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
 const cwd = getRootPath()
 export function propsReducer(options: PropsOptions) {
   const { uiName, lib, map, prefix = '', dynamicLib } = options
+
   const result: PropsConfig = {}
   // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
   // let icons
@@ -778,6 +780,52 @@ export function hyphenate(s: string): string {
 
 export function toCamel(s: string) {
   return s.replace(/-(\w)/g, (_, v) => v.toUpperCase())
+}
+
+/**
+ * Convert component name with prefix to standard component name
+ * Handles both PascalCase (PButton) and kebab-case (p-button) formats
+ * @param componentName - The full component name (e.g., "PButton", "p-button")
+ * @param prefix - The prefix to strip (e.g., "P", "p")
+ * @returns Standard component name (e.g., "Button")
+ */
+export function convertPrefixedComponentName(componentName: string, prefix: string): string | null {
+  // Handle kebab-case: p-button -> Button
+  if (componentName.includes('-')) {
+    const kebabPrefix = `${prefix.toLowerCase()}-`
+    if (componentName.startsWith(kebabPrefix)) {
+      const compName = componentName.slice(kebabPrefix.length)
+      return compName[0]?.toUpperCase() + toCamel(compName).slice(1)
+    }
+    return null
+  }
+
+  // Handle PascalCase: PButton -> Button
+  const pascalPrefix = prefix[0]?.toUpperCase() + prefix.slice(1).toLowerCase()
+  if (componentName.startsWith(pascalPrefix)) {
+    const compName = componentName.slice(pascalPrefix.length)
+    return compName[0]?.toUpperCase() + compName.slice(1)
+  }
+
+  return null
+}
+
+/**
+ * Find matched component from UiCompletions using prefix-aware matching
+ * @param componentName - The component name to search for
+ * @param prefixes - Array of prefixes to try
+ * @param UiCompletions - The UI completions object
+ * @returns Matched component or null
+ */
+export function findPrefixedComponent(componentName: string, prefixes: string[], UiCompletions: any): any {
+  // Try each prefix
+  for (const prefix of prefixes) {
+    const standardName = convertPrefixedComponentName(componentName, prefix)
+    if (standardName && UiCompletions[standardName]) {
+      return UiCompletions[standardName]
+    }
+  }
+  return null
 }
 
 export async function getRequireProp(content: any, index = 0, isVue: boolean, parent: any = null): Promise<[string[], number]> {

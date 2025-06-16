@@ -7,7 +7,7 @@ import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
-import { generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
+import { findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
 import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
 import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
@@ -326,15 +326,39 @@ export async function activate(context: vscode.ExtensionContext) {
       return
     }
 
-    if (result.parent && result.tag === 'template') {
-      const parentTag = result.parent.tag || result.parent.name
+    if (
+      (result.parent && result.tag === 'template')
+      || result.type === 'slot' || result.isSlot || result.type === 'slots' || (typeof result.propName === 'string' && result.propName.startsWith('#'))
+    ) {
+      const parentTag = result.parent?.tag || result.parent?.name || result.parentTag
       if (parentTag) {
-        const name = toCamel(parentTag)
-        const component = UiCompletions[name[0].toUpperCase() + name.slice(1)]
-        const slots = component?.slots
+        let matchedComponent = findPrefixedComponent(parentTag, componentsPrefix, UiCompletions)
+        if (!matchedComponent) {
+          const name = toCamel(parentTag)
+          const fallbackTag = name[0].toUpperCase() + name.slice(1)
+          matchedComponent = UiCompletions[fallbackTag]
+        }
+        const slots = matchedComponent?.slots
         if (slots)
           return slots
       }
+    }
+
+    let matchedComponent = findPrefixedComponent(result.tag, componentsPrefix, UiCompletions)
+    if (!matchedComponent && result.tag) {
+      const name = toCamel(result.tag)
+      const fallbackTag = name[0].toUpperCase() + name.slice(1)
+      matchedComponent = UiCompletions[fallbackTag]
+    }
+    if (matchedComponent) {
+      if (result.propName === 'icon')
+        return matchedComponent.icons
+      if (result.isEvent)
+        return matchedComponent.events?.[0]?.(isVue) || []
+      // slot suggestions for all slot-related scenarios
+      if (matchedComponent.slots && (result.type === 'slots' || result.type === 'slot' || result.isSlot || (typeof result.propName === 'string' && result.propName.startsWith('#'))))
+        return matchedComponent.slots
+      return matchedComponent.completions?.[0]?.(isVue) || []
     }
 
     if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
@@ -859,27 +883,13 @@ export async function activate(context: vscode.ExtensionContext) {
           return target.hover
         }
       }
-      const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
-      if (!data?.length || !word)
-        return createHover('')
-      word = word.includes('-')
-        ? toCamel(word)[0].toUpperCase() + toCamel(word).slice(1)
-        : toCamel(word)
-      const from = uiDeps?.[word]
-      const cacheMap = getCacheMap()
-      if (from && cacheMap.size > 2) {
-        // 存在多个 UI 库
-        let fixedFrom = nameMap[from] || from
-        if (fixedFrom in alias) {
-          const v = alias[fixedFrom]
-          fixedFrom = v.replace(/\d+$/, '')
-        }
 
-        const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
-        const keys = Array.from(cacheMap.keys())
-        const targetKey = keys.find(k => nameReg.test(k))!
-        const targetValue = cacheMap.get(targetKey)! as PropsConfig
-        UiCompletions = targetValue
+      const matchedComponent = findPrefixedComponent(word, componentsPrefix, UiCompletions)
+      if (matchedComponent && matchedComponent.tableDocument) {
+        return createHover(matchedComponent.tableDocument)
+      }
+      if (UiCompletions[word] && UiCompletions[word].tableDocument) {
+        return createHover(UiCompletions[word].tableDocument)
       }
       const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix, uiDeps?.[word])
       if (!target)
