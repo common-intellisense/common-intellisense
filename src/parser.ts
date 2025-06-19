@@ -473,7 +473,7 @@ function findJsxRefs(childrens: any, map: any = {}, refs: any = []) {
     }
     else if (type === 'VariableDeclarator') {
       children = init
-      if (init.callee && init.callee.name === 'useRef') {
+      if (init && init.callee && init.callee.name === 'useRef') {
         refs.push(id.name)
         continue
       }
