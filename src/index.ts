@@ -342,9 +342,10 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }
 
-    let matchedComponent = findPrefixedComponent(result.tag, componentsPrefix, UiCompletions)
-    if (!matchedComponent && result.tag) {
-      matchedComponent = UiCompletions[fixedTagName(result.tag)]
+    let matchedComponent = result.tag ? findPrefixedComponent(result.tag, componentsPrefix, UiCompletions) : null
+    if (result.tag) {
+      if (!matchedComponent)
+        matchedComponent = UiCompletions[fixedTagName(result.tag)]
     }
     if (matchedComponent) {
       if (result.propName === 'icon')
