@@ -547,6 +547,29 @@ export function propsReducer(options: PropsOptions) {
         details.push(tableContent)
       }
 
+      if (item.slots && item.slots.length) {
+        if (isZh)
+          details.push('## 插槽:')
+        else
+          details.push('## Slots:')
+
+        const tableHeader = `| ${isZh ? '插槽名' : 'Slot Name'} | ${isZh ? '描述' : 'Description'} |`
+        const tableDivider = '| --- | --- |'
+
+        const tableContent = [
+          tableHeader,
+          tableDivider,
+          ...item.slots.map((m) => {
+            const { name, description, description_zh } = m
+            const safeName = String(name).replace(/\|/g, '\\|')
+            const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
+            return `| \`${safeName}\` | ${safeDescription} |`
+          }),
+        ].join('\n')
+
+        details.push(tableContent)
+      }
+
       if (item.link)
         details.push(`[🔗 ${isZh ? '文档链接' : 'Documentation link'}](command:intellisense.openDocument?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D)\`        \` [🔗 ${isZh ? '外部链接' : 'External document links'}](command:intellisense.openDocumentExternal?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D)`)
 
