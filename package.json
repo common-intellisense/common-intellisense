@@ -195,7 +195,7 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "^3.16.0",
-    "@babel/types": "^7.27.7",
+    "@babel/types": "^7.28.0",
     "@rollup/pluginutils": "^5.2.0",
     "@simon_he/fetch-npm": "^0.0.22",
     "@simon_he/fetch-npm-cjs": "^0.0.26",
@@ -220,7 +220,7 @@
     "lazy-js-utils": "^0.1.47",
     "ofetch": "^1.4.1",
     "prettier": "^3.6.2",
-    "svelte": "^5.34.9",
+    "svelte": "^5.35.2",
     "tsup": "^6.7.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
