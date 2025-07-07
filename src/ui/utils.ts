@@ -814,6 +814,7 @@ export function toCamel(s: string) {
  */
 export function convertPrefixedComponentName(componentName: string, prefix: string): string | null {
   // Handle kebab-case: p-button -> Button
+  componentName = componentName || ''
   if (componentName.includes('-')) {
     const kebabPrefix = `${prefix.toLowerCase()}-`
     if (componentName.startsWith(kebabPrefix)) {
