@@ -491,8 +491,8 @@ export function propsReducer(options: PropsOptions) {
             let value = String(defaultValue).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()
             value = String(defaultValue).length > 20 ? '...' : value
             const safeType = String(type).replace(/\|/g, '\\|')
-            const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
-            return `| \`${name}\` | \`${safeDescription}\` | \`${safeType}\` | \`${value}\` |`
+            const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|').replace(/\n/g, ' ')
+            return `| \`${name}\` | \`${safeDescription}\` | \`${safeType || ''}\` | \`${value || ''}\` |`
           }),
         ].join('\n')
 

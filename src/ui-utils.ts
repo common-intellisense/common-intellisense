@@ -42,7 +42,7 @@ export function getUiDeps(text: string) {
     if (!match)
       continue
     const from = match[2]
-    const _deps = match[1].trim().replace(/\s+/g, ' ').split(/,\s*/)
+    const _deps = match[1].trim().replace(/\s+/g, ' ').split(/,\s*/).filter(Boolean)
     _deps.forEach((d) => {
       deps[d] = from
     })
