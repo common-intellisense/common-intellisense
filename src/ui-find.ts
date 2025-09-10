@@ -214,10 +214,20 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
       const version = deps[key]
       // 处理 workspace:、catelog:、npm:、catalog: 等前缀
       const matched = version.match(/^(workspace:|catelog:|npm:|catalog:)(.*)$/)
-
-      result.push([key, matched
-        ? await getLibVersion(key, path.resolve(pkg, '..'))
-        : version])
+      let fixedVersion = version
+      if (matched) {
+        const suffix = (matched[2] || '').trim()
+        // 如果后缀本身就是语义化版本（例如 workspace:^2.0.0 或 workspace:2.0.0），直接使用后缀
+        const isSemverLike = !!suffix && /^[~^]?\d.*$/.test(suffix)
+        fixedVersion = isSemverLike
+          ? suffix.match(/^[~^]?(\d+(?:\.\d+){0,2})/)[1]
+          : await getLibVersion(key, path.resolve(pkg, '..'))
+      }
+      if (!fixedVersion) {
+        logger.error(`${key} version is wrong: ${version}`)
+        return
+      }
+      result.push([key, fixedVersion])
     }
   }
   return { pkg, uis: result }
