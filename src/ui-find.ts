@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode'
 import type { ComponentsConfig, Directives, PropsConfig } from './ui/utils'
 import fsp from 'node:fs/promises'
-import { createLog, getActiveText, getCurrentFileUrl, setConfiguration, watchFile } from '@vscode-use/utils'
+import { createLog, getActiveText, getCurrentFileUrl, getRootPath, watchFile } from '@vscode-use/utils'
 import { findUp } from 'find-up'
 import { UINames as configUINames } from './constants'
 import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
@@ -26,9 +26,14 @@ const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
 const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
 let currentPkgUiNames: null | string[] = null
 // const filters = ['js', 'ts', 'jsx', 'tsx', 'vue', 'svelte']
-export const urlCache = new Map<string, Uis>()
+export const urlCache = new Map<string, { uis: Uis, pkg: string }>()
 let stop: any = null
 let preUis: Uis | null = null
+
+// cache monorepo/root package info per workspace rootPath to avoid repeatedly
+// reading the root package.json in monorepo scenarios. Each entry may also
+// hold a single shared watcher for the root package.json.
+const rootPkgCache: Map<string, { rootPkgPath: string, rootPkg: any, isMonorepo: boolean, stopRoot?: () => void }> = new Map()
 
 export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: any, cleanCache?: boolean) {
   UINames.length = 0
@@ -39,9 +44,10 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
   pkgUIConfigMap.clear()
   if (cleanCache)
     urlCache.clear()
-  const selectedUIs = getSelectedUIs()
-  const alias = getAlias()
-  const prefix = getPrefix()
+  // defer reading user settings until we locate the package.json for this cwd
+  let selectedUIs: string[] = []
+  let alias: Record<string, string> = {}
+  let prefix: Record<string, string> = {}
 
   const cwd = getCurrentFileUrl()
   if (!cwd || cwd === 'exthhost')
@@ -49,9 +55,14 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
 
   if (urlCache.has(cwd)) {
     await getOthers()
-    const uis = urlCache.get(cwd)
-    if (uis && uis.length)
-      await updateCompletions(uis, { selectedUIs, alias, detectSlots, prefix })
+    const cached = urlCache.get(cwd)
+    if (cached && cached.uis.length) {
+      // 从缓存中获取对应的 package.json 路径来读取正确的配置
+      selectedUIs = getSelectedUIs(cached.pkg)
+      alias = getAlias(cached.pkg)
+      prefix = getPrefix(cached.pkg)
+      await updateCompletions(cached.uis, { selectedUIs, alias, detectSlots, prefix })
+    }
     return
   }
   const OnChange = () => findUI(extensionContext, detectSlots)
@@ -59,8 +70,13 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
   findPkgUI(cwd, OnChange).then(async (res) => {
     if (!res)
       return
-    const { uis } = res
-    urlCache.set(cwd, uis)
+    const { uis, pkg } = res
+    // read per-package settings using the package.json path so monorepo subpackages
+    // can have independent configuration (common-intellisense.ui/keyed by path)
+    selectedUIs = getSelectedUIs(pkg)
+    alias = getAlias(pkg)
+    prefix = getPrefix(pkg)
+    urlCache.set(cwd, { uis, pkg })
     await getOthers()
 
     if (!uis || !uis.length)
@@ -93,7 +109,6 @@ export async function updateCompletions(
   }
   else if (UiCompletions && (preUis.join('') === uis.join(''))) {
     currentPkgUiNames = uis.map(([name]) => name)
-    return
   }
   else {
     preUis = uis
@@ -105,11 +120,18 @@ export async function updateCompletions(
   const originUisName: string[] = []
   for await (let [uiName, version] of uis) {
     let _version = version.match(/[^~]?(\d+)./)![1]
+
     if (uiName in alias) {
       const v = alias[uiName]
       const m = v.match(/([^1-9^]+)\^?(\d)/)!
       _version = m[2] || _version
-      originUisName.push(`${uiName}${_version}`)
+      const originName = `${uiName}${_version}`
+      if (selectedUIs.length) {
+        // 如果 selectedUIs 有值
+        if (!(originName in selectedUIs))
+          continue
+      }
+      originUisName.push(originName)
       uiName = m[1]
     }
     else {
@@ -121,8 +143,7 @@ export async function updateCompletions(
 
   if (selectedUIs && selectedUIs.length && !selectedUIs.includes('auto')) {
     UINames.push(...selectedUIs.filter(item => uisName.includes(item)))
-    if (!UINames.length)
-      setConfiguration('common-intellisense.ui', [])
+    // if no selected UI names match, don't overwrite user's config here; leave existing selection intact
   }
 
   if (!UINames.length)
@@ -197,18 +218,96 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   const alias = getAlias()
   if (!cwd)
     return
+
   const pkg = await findUp('package.json', { cwd })
   if (!pkg)
     return
   if (stop)
     stop()
-  if (onChange)
-    stop = watchFile(pkg, { onChange })
+  // watch package.json (and root package.json when in monorepo)
+  // We'll set `stop` to a function that stops all watchers
+  // Read package.json for the current package
+  const pkgDir = path.resolve(pkg, '..')
+
+  // determine if repository root should be included (monorepo)
+  let isMonorepo = false
+  let rootPkgPath = ''
+  let rootPkg: any = null
+  const rootPath = getRootPath()
+  // Use cache per rootPath to avoid re-reading root package.json repeatedly.
+  if (rootPath) {
+    const cached = rootPkgCache.get(rootPath)
+    if (cached) {
+      ({ rootPkgPath, rootPkg, isMonorepo } = cached)
+    }
+    else {
+      try {
+        rootPkgPath = path.resolve(rootPath || '', 'package.json')
+        if (rootPkgPath && rootPkgPath !== pkg) {
+          try {
+            rootPkg = JSON.parse(await fsp.readFile(rootPkgPath, 'utf-8'))
+            if (rootPkg && (rootPkg.workspaces || (rootPkg.pnpm && rootPkg.pnpm.workspaces))) {
+              isMonorepo = true
+            }
+            else {
+              try {
+                await fsp.access(path.resolve(rootPath, 'pnpm-workspace.yaml'))
+                isMonorepo = true
+              }
+              catch { }
+            }
+          }
+          catch { }
+        }
+      }
+      catch { }
+
+      rootPkgCache.set(rootPath, { rootPkgPath, rootPkg, isMonorepo })
+    }
+  }
+
+  if (onChange) {
+    const stopMain = watchFile(pkg, { onChange })
+    // if monorepo and we have a distinct root package, ensure there's a single
+    // watcher for the root package.json shared across calls for this rootPath.
+    if (isMonorepo && rootPkgPath && rootPkgPath !== pkg && rootPath) {
+      const cached = (rootPkgCache.get(rootPath) ?? {}) as { rootPkgPath?: string, rootPkg?: any, isMonorepo?: boolean, stopRoot?: () => void }
+      if (!cached.stopRoot) {
+        const stopRoot = watchFile(rootPkgPath, { onChange })
+        cached.stopRoot = stopRoot
+        rootPkgCache.set(rootPath, { rootPkgPath: rootPkgPath || '', rootPkg: rootPkg || null, isMonorepo: !!isMonorepo, stopRoot: cached.stopRoot })
+      }
+
+      stop = () => {
+        try { stopMain && stopMain() }
+        catch { }
+        // do not stop the shared root watcher here; it lives in the cache until
+        // the extension deactivates or the workspace changes. This prevents
+        // installing/removing watchers on repeated calls inside the same root.
+      }
+    }
+    else {
+      stop = stopMain
+    }
+  }
+
   const p = JSON.parse(await fsp.readFile(pkg, 'utf-8'))
   const { dependencies = {}, devDependencies = {}, peerDependencies = {} } = p
   const result: Uis = []
   const aliasUiNames = Object.keys(alias)
-  const deps = { ...dependencies, ...peerDependencies, ...devDependencies }
+  // build deps map; include root deps when monorepo. local package deps override root deps.
+  const rootDependencies = (rootPkg && (rootPkg.dependencies || rootPkg.devDependencies || rootPkg.peerDependencies)) ? { ...(rootPkg.dependencies || {}), ...(rootPkg.peerDependencies || {}), ...(rootPkg.devDependencies || {}) } : {}
+  const deps = { ...rootDependencies, ...dependencies, ...peerDependencies, ...devDependencies }
+  // record source dir for each dependency so getLibVersion can resolve correctly
+  const depSource: Record<string, string> = {}
+  for (const k in rootDependencies)
+    depSource[k] = path.resolve(rootPath || '', '.')
+  for (const k in dependencies)
+    depSource[k] = pkgDir
+  for (const k in peerDependencies)
+    depSource[k] = pkgDir
+  for (const k in devDependencies)
+    depSource[k] = pkgDir
 
   for (const key in deps) {
     if (configUINames.includes(key) || aliasUiNames.includes(key)) {
@@ -220,9 +319,14 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
         const suffix = (matched[2] || '').trim()
         // 如果后缀本身就是语义化版本（例如 workspace:^2.0.0 或 workspace:2.0.0），直接使用后缀
         const isSemverLike = !!suffix && /^[~^]?\d.*$/.test(suffix)
-        fixedVersion = isSemverLike
-          ? suffix.match(/^[~^]?(\d+(?:\.\d+){0,2})/)[1]
-          : await getLibVersion(key, path.resolve(pkg, '..'))
+        if (isSemverLike) {
+          fixedVersion = suffix.match(/^[~^]?(\d+(?:\.\d+){0,2})/)[1]
+        }
+        else {
+          // resolve from the package that declares the dependency if possible
+          const resolveFrom = depSource[key] || pkgDir || path.resolve(pkg, '..')
+          fixedVersion = await getLibVersion(key, resolveFrom)
+        }
       }
       if (!fixedVersion) {
         logger.error(`${key} version is wrong: ${version}`)

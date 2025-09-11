@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import { createFilter } from '@rollup/pluginutils'
 import { CreateWebview } from '@vscode-use/createwebview'
 import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
+import { findUp } from 'find-up'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { cacheFetch, localCacheUri } from './fetch'
@@ -62,7 +63,7 @@ export async function activate(context: vscode.ExtensionContext) {
     message.info('copy successfully')
   }))
 
-  context.subscriptions.push(registerCommand('common-intellisense.pickUI', () => {
+  context.subscriptions.push(registerCommand('common-intellisense.pickUI', async () => {
     const currentPkgUiNames = getCurrentPkgUiNames()
     if (currentPkgUiNames && currentPkgUiNames.length) {
       if (currentPkgUiNames.some(i => i.includes('bitsUi'))) {
@@ -71,30 +72,45 @@ export async function activate(context: vscode.ExtensionContext) {
             currentPkgUiNames!.push(i)
         })
       }
-      const currentSelect = getConfiguration('common-intellisense.ui') as (string[] | undefined)
-      let options: ({ label: string, picked?: boolean })[] = []
-      if (currentSelect) {
-        options = currentPkgUiNames.map((label) => {
-          if (currentSelect.includes(label)) {
-            return {
-              label,
-              picked: true,
-            }
-          }
-          else {
-            return {
-              label,
-            }
-          }
-        })
-      }
-      createSelect(options, {
+
+      const rawCfg = getConfiguration('common-intellisense.ui') as any
+      const options: ({ label: string, picked?: boolean })[] = currentPkgUiNames.map((label: string) => {
+        const picked = Array.isArray(rawCfg)
+          ? rawCfg.includes(label)
+          : (rawCfg && typeof rawCfg === 'object')
+              ? Object.values(rawCfg).flat().includes(label)
+              : false
+        return picked ? { label, picked: true } : { label }
+      })
+
+      const data = await createSelect(options, {
         canSelectMany: true,
         placeHolder: isZh ? '请指定你需要提示的 UI 库' : 'Please specify the UI library you need to prompt.',
         title: 'common intellisense',
-      }).then((data: string[]) => {
-        setConfiguration('common-intellisense.ui', data)
       })
+      if (!data)
+        return
+
+      // find package.json for current file and save selection keyed by its path
+      const cwd = getCurrentFileUrl()
+      let pkgPath: string | undefined
+      try {
+        if (cwd && cwd !== 'exthhost')
+          pkgPath = await findUp('package.json', { cwd })
+      }
+      catch {}
+
+      let newCfg: any
+      if (pkgPath) {
+        if (rawCfg && typeof rawCfg === 'object' && !Array.isArray(rawCfg))
+          newCfg = { ...rawCfg, [pkgPath]: data }
+        else
+          newCfg = { [pkgPath]: data }
+      }
+      else {
+        newCfg = data
+      }
+      setConfiguration('common-intellisense.ui', newCfg)
     }
     else {
       message.error(isZh
