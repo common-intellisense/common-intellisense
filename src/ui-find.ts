@@ -92,6 +92,7 @@ export async function updateCompletions(
     preUis = uis
   }
   else if (UiCompletions && (preUis.join('') === uis.join(''))) {
+    currentPkgUiNames = uis.map(([name]) => name)
     return
   }
   else {
