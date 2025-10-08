@@ -223,6 +223,8 @@
     "svelte": "^5.39.10",
     "tsup": "^6.7.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@babel/parser": "^7.23.0",
+    "@babel/traverse": "^7.23.0"
   }
 }

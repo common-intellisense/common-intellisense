@@ -3,7 +3,8 @@ import type { VineCompilerHooks, VineDiagnostic, VineFileCtx } from '@vue-vine/c
 import type { PropsConfig, PropsConfigItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { traverse } from '@babel/types'
+import { parse as babelParse } from '@babel/parser'
+import traverse from '@babel/traverse'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
 import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 // @ts-expect-error no problem
@@ -961,19 +962,84 @@ export function isSamePrefix(label: string, key: string) {
   return labelName === key
 }
 
-const IMPORT_REG = /import\s+(\S+)\s+from\s+['"]([^"']+.vue)['"]/g
+const IMPORT_VUE_REG = /import\s+(\S+)\s+from\s+['"]([^"']+.vue)['"]/g
 
 export function getImportDeps(text: string) {
-  text = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
   const deps: Record<string, string> = {}
-  for (const match of text.matchAll(IMPORT_REG)) {
-    if (!match)
-      continue
-    const from = match[2]
-    if (!/^[./@]/.test(from))
-      continue
-    deps[match[1]] = from
+  try {
+    const { descriptor: { script, scriptSetup } } = parse(text)
+    let scriptContent = ''
+    if (script && script.content)
+      scriptContent += script.content
+    if (scriptSetup && scriptSetup.content)
+      scriptContent += '\n' + scriptSetup.content
+
+    if (!scriptContent)
+      return deps
+
+    const ast = babelParse(scriptContent, {
+      sourceType: 'module',
+      plugins: ['typescript', 'jsx'],
+    })
+
+    traverse(ast as any, {
+      ImportDeclaration(p: any) {
+        const source = p.node.source.value
+        if (!/^[./@]/.test(source))
+          return
+        for (const spec of p.node.specifiers) {
+          if (spec.type === 'ImportDefaultSpecifier')
+            deps[spec.local.name] = source
+          else if (spec.type === 'ImportSpecifier')
+            deps[spec.local.name] = source
+          else if (spec.type === 'ImportNamespaceSpecifier')
+            deps[spec.local.name] = source
+        }
+      },
+      ExportDefaultDeclaration(p: any) {
+        const decl = p.node.declaration
+        if (!decl || decl.type !== 'ObjectExpression')
+          return
+        for (const prop of decl.properties) {
+          if (prop.type !== 'ObjectProperty')
+            continue
+          const keyName = prop.key && (prop.key.name || prop.key.value)
+          if (keyName !== 'components')
+            continue
+          const val = prop.value
+          if (val.type === 'ObjectExpression') {
+            for (const entry of val.properties) {
+              if (entry.type !== 'ObjectProperty')
+                continue
+              const localName = entry.key.name || entry.key.value
+              if (entry.value.type === 'Identifier') {
+                const ref = entry.value.name
+                if (deps[ref])
+                  deps[localName] = deps[ref]
+                else
+                  deps[localName] = ref
+              }
+              else if (entry.value.type === 'ObjectExpression') {
+                deps[localName] = localName
+              }
+              else {
+                deps[localName] = localName
+              }
+            }
+          }
+        }
+      }
+    })
   }
+  catch (error) {
+    const clean = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
+    for (const match of clean.matchAll(IMPORT_VUE_REG)) {
+      if (!match)
+        continue
+      deps[match[1]] = match[2]
+    }
+  }
+
   return deps
 }
 
