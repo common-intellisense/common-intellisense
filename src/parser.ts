@@ -974,8 +974,32 @@ export function getImportDeps(text: string) {
     if (scriptSetup && scriptSetup.content)
       scriptContent += '\n' + scriptSetup.content
 
-    if (!scriptContent)
+    if (!scriptContent) {
+      // If there's no <script> or <script setup> (e.g., plain .tsx/.jsx files),
+      // attempt to parse the raw text to extract import declarations.
+      const astRaw = babelParse(text, {
+        sourceType: 'module',
+        plugins: ['typescript', 'jsx'],
+      })
+
+      traverse(astRaw as any, {
+        ImportDeclaration(p: any) {
+          const source = p.node.source.value
+          if (!/^[./@]/.test(source))
+            return
+          for (const spec of p.node.specifiers) {
+            if (spec.type === 'ImportDefaultSpecifier')
+              deps[spec.local.name] = source
+            else if (spec.type === 'ImportSpecifier')
+              deps[spec.local.name] = source
+            else if (spec.type === 'ImportNamespaceSpecifier')
+              deps[spec.local.name] = source
+          }
+        },
+      })
+
       return deps
+    }
 
     const ast = babelParse(scriptContent, {
       sourceType: 'module',
