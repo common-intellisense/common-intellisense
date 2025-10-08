@@ -5,7 +5,7 @@ import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from
 import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, getRootPath, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { translate } from '../translate'
-import { logger } from '../ui-find'
+import { logger } from '../ui/ui-find'
 import { getLibVersion } from 'get-lib-version'
 
 export interface PropsOptions {
@@ -849,6 +849,28 @@ export function findPrefixedComponent(componentName: string, prefixes: string[],
       return UiCompletions[standardName]
     }
   }
+  // direct exact match (e.g., componentName already matches a completion key)
+  if (UiCompletions && UiCompletions[componentName])
+    return UiCompletions[componentName]
+
+  // Fallback: try suffix-based matching (case-insensitive) so tags injected
+  // without prefix (e.g. "Pagination" or "pagination") can match prefixed
+  // completion keys like "ElPagination".
+  if (UiCompletions) {
+    const want = componentName.toLowerCase()
+    let bestKey: string | null = null
+    for (const key of Object.keys(UiCompletions)) {
+      const k = key.toLowerCase()
+      if (!k.endsWith(want))
+        continue
+      // prefer longer key (more specific prefix), e.g. ElPagination over Pagination
+      if (!bestKey || key.length > bestKey.length)
+        bestKey = key
+    }
+    if (bestKey)
+      return UiCompletions[bestKey]
+  }
+
   return null
 }
 

@@ -113,8 +113,8 @@ export class CreateWebview {
     try {
       const uris = typeof scriptUri === 'string' ? [scriptUri] : scriptUri
       this.scriptsPromises.push(...uris.map(uri => fsp.readFile(
-        `${this._extensionUri.path}/media/${uri}`
-        , 'utf-8',
+        `${this._extensionUri.path}/media/${uri}`,
+        'utf-8',
       )))
     }
     catch (error: any) {

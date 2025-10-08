@@ -21,9 +21,10 @@ vi.mock('@vscode-use/utils', () => ({
     return undefined
   },
   getLocale: () => 'en',
-  getRootPath: () => process.cwd(),
+  getRootPath: () => require('node:process').cwd(),
   message: { error: () => {} },
   getConfigurationBy: () => undefined,
+  createLog: (_name: string) => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
 }))
 
 describe('fetch service (mocked)', () => {

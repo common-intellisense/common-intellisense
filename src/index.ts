@@ -6,11 +6,11 @@ import { addEventListener, createCompletionItem, createHover, createMarkdownStri
 import { findUp } from 'find-up'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
-import { cacheFetch, localCacheUri } from './fetch'
+import { cacheFetch, localCacheUri } from './services/fetch'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
-import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
-import { fixedTagName, getAlias, getImportUiComponents, getIsShowSlots, getUiDeps } from './ui-utils'
+import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui/ui-find'
+import { fixedTagName, getAlias, getImportUiComponents, getIsShowSlots, getUiDeps } from './ui/ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
 
 const defaultExclude = getConfiguration('common-intellisense.exclude')

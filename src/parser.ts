@@ -15,7 +15,7 @@ import {
 
 import * as vscode from 'vscode'
 import { convertPrefixedComponentName, findPrefixedComponent, hyphenate, isVine, isVue, toCamel } from './ui/utils'
-import { logger } from './ui-find'
+import { logger } from './ui/ui-find'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -1045,6 +1045,29 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
         }
       }
     }
+  }
+  // Final fallback: try suffix-based matching on completion keys. This lets
+  // tags like "Pagination" match keys such as "ElPagination" when prefix
+  // lookup didn't find a direct match.
+  if (!target && UiCompletions) {
+    const want = tag.toLowerCase()
+    let bestKey: string | null = null
+    for (const key of Object.keys(UiCompletions)) {
+      const k = key.toLowerCase()
+      if (!k.endsWith(want))
+        continue
+      // prefer matches with same lib when `from` specified
+      const candidate = UiCompletions[key]
+      if (from && candidate && candidate.lib === from) {
+        // immediate winner
+        target = candidate
+        break
+      }
+      if (!bestKey || key.length > bestKey.length)
+        bestKey = key
+    }
+    if (!target && bestKey)
+      target = UiCompletions[bestKey]
   }
   return target
 }

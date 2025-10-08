@@ -5,9 +5,14 @@ module.exports = antfu(
   {
     ignores: [
       // eslint ignore globs here
+      'node_modules',
+      'dist',
+      'pnpm-lock.yaml',
+      '.history',
+      '*.md',
+      '.eslintcache',
       'scripts',
       'media',
-      'dist',
     ],
   },
   {

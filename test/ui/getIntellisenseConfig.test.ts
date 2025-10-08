@@ -10,6 +10,7 @@ vi.mock('@vscode-use/utils', () => ({
   getRootPath: () => undefined,
   createFakeProgress: () => undefined,
   message: { error: () => {} },
+  createLog: (_name: string) => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
 }))
 
 vi.mock('vscode', () => ({
