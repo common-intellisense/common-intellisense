@@ -1,4 +1,7 @@
+#!/usr/bin/env node
+'use strict'
 const fsp = require('node:fs/promises')
+const fs = require('node:fs')
 const path = require('node:path')
 const fg = require('fast-glob')
 
@@ -9,7 +12,7 @@ const VERBOSE = process.argv.includes('--verbose')
 // When --report is passed, write a JSON report of planned changes to this file
 const REPORT_PATH = process.argv.includes('--report') ? path.resolve(root, 'translate-directives-report.json') : null
 let processedCount = 0
-const reportEntries: any[] = []
+const reportEntries = []
 // Optional override for directory containing src/ui/varlet (useful for tests)
 const CLI_DIR = (() => {
   const idx = process.argv.indexOf('--dir')
@@ -17,18 +20,15 @@ const CLI_DIR = (() => {
     return path.resolve(root, process.argv[idx + 1])
   return null
 })()
+
 let stack = 0
 const limit = 10
 const hasDone = new Set()
+
 async function setup() {
-  const cwd = path.resolve(root, 'src/ui/varlet')
+  const cwd = CLI_DIR || path.resolve(root, 'src/ui/varlet')
   const entry = await fg(['**/directives.json'], { dot: true, cwd })
-  // entry.forEach(async (url: string) => {
-  //   const _url = path.resolve(cwd, url)
-  //   const content = JSON.parse(await fsp.readFile(_url, 'utf-8'))
-  //   console.log(content.name)
-  // })
-  const rest = entry.map((url: string) => {
+  const rest = entry.map((url) => {
     const newUrl = path.resolve(cwd, url)
     if (hasDone.has(newUrl))
       return
@@ -43,7 +43,7 @@ async function setup() {
   stack--
   console.log(rest)
 
-  await Promise.all(rest.map(async (newUrl: string) => {
+  await Promise.all(rest.map(async (newUrl) => {
     if (hasDone.has(newUrl))
       return
     const content = await fsp.readFile(newUrl, 'utf8')
@@ -116,7 +116,7 @@ async function setup() {
         }
       }
     }
-    for (const key in obj.props) {
+    for (const key in obj.props || {}) {
       const value = obj.props[key]
       if (!value.description)
         value.description = ''
@@ -182,43 +182,50 @@ async function setup() {
   }))
 }
 
-setup()
-
-process.on('beforeExit', () => {
-  console.log(`translate-directives: processed ${processedCount} file(s). mode: ${DRY_RUN ? 'dry-run' : 'apply'}`)
-  if (REPORT_PATH && reportEntries.length) {
-    try {
-      fsp.writeFile(REPORT_PATH, JSON.stringify(reportEntries, null, 2))
-      console.log(`Wrote report to ${REPORT_PATH}`)
+if (require.main === module) {
+  // CLI execution: require lib and run with parsed options
+  const { runTranslate } = require('./translate-directives.lib')
+  const dirIdx = process.argv.indexOf('--dir')
+  const dir = dirIdx !== -1 ? process.argv[dirIdx + 1] : undefined
+  const apply = process.argv.includes('--apply')
+  const verbose = process.argv.includes('--verbose')
+  const report = process.argv.includes('--report')
+  const diff = process.argv.includes('--diff')
+  const reportPathIdx = process.argv.indexOf('--report-path')
+  const reportPath = reportPathIdx !== -1 && process.argv[reportPathIdx + 1] ? process.argv[reportPathIdx + 1] : undefined
+  runTranslate({ dir, apply, verbose, report, diff, reportPath }).then((res) => {
+    console.log(`translate-directives: processed ${res.processedCount} file(s). mode: ${apply ? 'apply' : 'dry-run'}`)
+    if (report && res.report && res.report.length) {
+      console.log(`Wrote report to ${path.resolve(process.cwd(), 'translate-directives-report.json')}`)
     }
-    catch (err) {
-      console.error(`Failed to write report: ${err}`)
-    }
-  }
-})
+    process.exit(0)
+  }).catch((err) => {
+    console.error('translate-directives failed', err)
+    process.exit(1)
+  })
+}
 
-let translate: (text: string, from?: string | null, to?: string) => Promise<any>
+let translate
 try {
   // prefer the package export if available
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const mod = require('bing-translate-api')
   translate = mod.translate || mod
 }
 catch (err) {
   console.warn('bing-translate-api not available; translations will be a no-op')
   // keep the same (text, from, to) signature as the real library for safety
-  translate = (text: string, _from?: string | null, _to?: string) => Promise.resolve({ translation: text })
+  translate = (text, _from, _to) => Promise.resolve({ translation: text })
 }
 
-const cacheMap: Map<string, Promise<string>> = new Map()
-function fanyi(text: string): Promise<string> {
+const cacheMap = new Map()
+function fanyi(text) {
   if (!text)
     return Promise.resolve('')
   if (cacheMap.has(text))
-    return cacheMap.get(text) as Promise<string>
+    return cacheMap.get(text)
 
-  const p = new Promise<string>((resolve, reject) => {
-    const doResolve = (res: any) => {
+  const p = new Promise((resolve, reject) => {
+    const doResolve = (res) => {
       // normalize translation result
       const result = (res && (res.translation || res) || '') + ''
       if (VERBOSE)
@@ -226,7 +233,7 @@ function fanyi(text: string): Promise<string> {
       resolve(result)
     }
 
-    const doReject = (err: any) => {
+    const doReject = (err) => {
       // remove cache entry so future retries can happen
       cacheMap.delete(text)
       reject(err)
@@ -249,7 +256,7 @@ function fanyi(text: string): Promise<string> {
   return p
 }
 
-function hasChineseCharacters(str: string) {
+function hasChineseCharacters(str) {
   const pattern = /[\u4E00-\u9FA5]/ // 匹配中文字符的正则表达式范围
   return pattern.test(str)
 }

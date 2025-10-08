@@ -5,10 +5,10 @@ import { fetchAndExtractPackage } from '@simon_he/fetch-npm'
 import { latestVersion } from '@simon_he/latest-version'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
 import { ofetch } from 'ofetch'
-import { componentsReducer, propsReducer } from './ui/utils'
-import { logger } from './ui-find'
+import { componentsReducer, propsReducer } from '../ui/utils'
+import { logger } from '../ui/ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
-import { getPrefix } from './ui-utils'
+import { getPrefix } from '../ui/ui-utils'
 
 const prefix = '@common-intellisense/'
 
@@ -38,7 +38,7 @@ export const getLocalCache = new Promise((resolve) => {
       resolve('done reading')
       // 列出已有的 key
       const cacheKey = Array.from(cacheFetch.keys()).join(' | ')
-      logger.info(isZh ? `缓存读取完毕, 已缓存的 key: ${cacheKey}` : `Cache read complete, cached keys: ${cacheKey}`)
+      logger.info(isZh ? `缓存读取完成, 已缓存的 key: ${cacheKey}` : `Cache read complete, cached keys: ${cacheKey}`)
     })
   }
   else {
@@ -66,7 +66,7 @@ export async function fetchFromCommonIntellisense(tag: string) {
   }
   logger.info(isZh ? `找到 ${name} 的最新版本: ${version}` : `Found the latest version of ${name}: ${version}`)
   const key = `${name}@${version}`
-  // 当版本修改是否要删除相同 name 下的其它版本缓存？
+  // 当版本变更是否要删除相同 name 下的其它版本缓存？
   if (isCommonIntellisenseInProgress)
     return
 
@@ -239,7 +239,6 @@ export async function fetchFromRemoteNpmUrls() {
     }
     catch (error: any) {
       if (error.message.includes('404 Not Found')) {
-        // 说明这个版本还未支持, 可以通过 issue 提出
         logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
       }
       else {
@@ -328,7 +327,7 @@ export async function fetchFromLocalUris() {
       uri = path.resolve(getRootPath()!, uri)
 
     if (existsSync(uri)) {
-      // 如果缓存中已存在，比对内容是否改变，没改变则不再处理，直接过滤
+      // 如果缓存中已存在, 比较内容是否改变, 没改变则不再处理, 直接通过
       const scriptContent = await fsp.readFile(uri, 'utf-8')
       if (cacheFetch.has(uri) && cacheFetch.get(uri) === scriptContent && localUrisMap.has(uri)) {
         const temp = localUrisMap.get(uri)!

@@ -1,41 +1,30 @@
 import type * as vscode from 'vscode'
-import type { ComponentsConfig, Directives, PropsConfig } from './ui/utils'
+import type { OptionsComponents, PropsConfig, Uis } from './types'
 import fsp from 'node:fs/promises'
 import { createLog, getActiveText, getCurrentFileUrl, getRootPath, watchFile } from '@vscode-use/utils'
 import { findUp } from 'find-up'
-import { UINames as configUINames } from './constants'
-import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from './fetch'
+import { UINames as configUINames } from '../constants'
+import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from '../services/fetch'
 import { formatUIName, getAlias, getIsShowSlots, getPrefix, getSelectedUIs, getUiDeps } from './ui-utils'
+import { cacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../services/ui-cache'
 import path from 'node:path'
 import { getLibVersion } from 'get-lib-version'
-
-export interface OptionsComponents {
-  prefix: string[]
-  data: ((parent?: any) => vscode.CompletionItem[])[]
-  directivesMap: Record<string, Directives | undefined>
-  libs: string[]
-}
-export type Uis = [string, string][]
 
 export const logger = createLog('common-intellisense')
 const UI: Record<string, () => any> = {}
 const UINames: string[] = []
 let optionsComponents: OptionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
 let UiCompletions: PropsConfig | null = null
-const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
-const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
 let currentPkgUiNames: null | string[] = null
-// const filters = ['js', 'ts', 'jsx', 'tsx', 'vue', 'svelte']
-export const urlCache = new Map<string, { uis: Uis, pkg: string }>()
-let stop: any = null
+// urlCache is now provided by services/ui-cache
+let stop: (() => void) | null = null
 let preUis: Uis | null = null
 
 // cache monorepo/root package info per workspace rootPath to avoid repeatedly
 // reading the root package.json in monorepo scenarios. Each entry may also
-// hold a single shared watcher for the root package.json.
-const rootPkgCache: Map<string, { rootPkgPath: string, rootPkg: any, isMonorepo: boolean, stopRoot?: () => void }> = new Map()
+// hold a single shared watcher for the root package.json. rootPkgCache is provided by services/ui-cache
 
-export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: any, cleanCache?: boolean) {
+export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache?: boolean) {
   UINames.length = 0
   optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
   UiCompletions = null
@@ -95,7 +84,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
 export interface UpdateCompletionsOptions {
   selectedUIs: string[]
   alias: Record<string, string>
-  detectSlots: any
+  detectSlots: (...args: any[]) => void
   prefix: Record<string, string>
 }
 
@@ -200,7 +189,7 @@ export async function updateCompletions(
   }))
 
   try {
-    fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
+    await fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
   }
   catch (error) {
     logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
@@ -338,17 +327,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   return { pkg, uis: result }
 }
 
-export function deactivateUICache() {
-  UINames.length = 0
-  optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
-  UiCompletions = null
-  cacheMap.clear()
-  pkgUIConfigMap.clear()
-  urlCache.clear()
-  Object.entries(UI).forEach(([key]) => {
-    delete UI[key]
-  })
-}
+export { deactivateUICache, getCacheMap, urlCache } from '../services/ui-cache'
 
 export function getCurrentPkgUiNames() {
   return currentPkgUiNames
@@ -362,9 +341,7 @@ export function getUiCompletions() {
   return UiCompletions
 }
 
-export function getCacheMap() {
-  return cacheMap
-}
+// getCacheMap is re-exported from services/ui-cache
 
 async function getOthers() {
   try {
@@ -398,18 +375,11 @@ async function getOthers() {
           if (!UiCompletions)
             UiCompletions = {}
           cacheMap.set(key, completion)
-          Object.assign(UiCompletions, completion)
         }
       }
     }
-    try {
-      await fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
-    }
-    catch (error) {
-      logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
-    }
   }
   catch (error) {
-    logger.error(`fetch error： ${String(error)}`)
+    logger.error(`getOthers error: ${String(error)}`)
   }
 }
