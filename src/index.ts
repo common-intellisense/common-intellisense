@@ -10,7 +10,7 @@ import { cacheFetch, localCacheUri } from './fetch'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
 import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui-find'
-import { getAlias, getIsShowSlots, getUiDeps } from './ui-utils'
+import { fixedTagName, getAlias, getImportUiComponents, getIsShowSlots, getUiDeps } from './ui-utils'
 import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
 
 const defaultExclude = getConfiguration('common-intellisense.exclude')
@@ -929,29 +929,4 @@ function getHoverAttribute(attributeList: any[], attr: string) {
   return attributeList.filter(a =>
     toCamel(a?.params?.[1]?.replace('v-model:', '') || '') === toCamel(attr),
   ).map(i => `- ${i.details}`).join('\n\n')
-}
-
-const IMPORT_UI_REG = /import\s+\{([^}]+)\}\s+from\s+['"]([^"']+)['"]/g
-
-function getImportUiComponents(text: string) {
-  // 读取需要按需导入的ui库， 例如 antd, 拿出导入的 components
-  const deps: Record<string, any> = {}
-  for (const match of text.matchAll(IMPORT_UI_REG)) {
-    if (!match)
-      continue
-    const from = match[2]
-    deps[from] = {
-      match,
-      components: match[1].split(',').map(i => i.trim()),
-    }
-  }
-  return deps
-}
-
-function fixedTagName(tagname: string) {
-  // 修正 tag 名称
-  if (tagname.includes('-')) {
-    return tagname[0].toUpperCase() + tagname.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
-  }
-  return toCamel(tagname)
 }
