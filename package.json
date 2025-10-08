@@ -2,7 +2,7 @@
   "publisher": "simonhe",
   "name": "common-intellisense",
   "displayName": "%displayName%",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "packageManager": "pnpm@10.18.1",
   "description": "%description%",
   "author": "Simon He <https://github.com/Simon-He95>",
