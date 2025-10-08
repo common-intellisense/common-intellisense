@@ -1,0 +1,14 @@
+{
+  "directives": [
+    {
+      "name": "v-test",
+      "description": "测试指令",
+      "params": [
+        { "name": "arg", "description": "参数描述" }
+      ]
+    }
+  ],
+  "props": {
+    "propA": { "description": "属性描述", "value": "" }
+  }
+}

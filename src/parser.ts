@@ -274,7 +274,7 @@ export function parserJSX(code: string, position: vscode.Position) {
     }
   }
   catch (error) {
-    console.error(error)
+    logger.error(String(error))
   }
 }
 
@@ -877,7 +877,7 @@ function findAllJsxElements(code: string) {
   const results: any = []
   try {
     const ast = tsParser(code, { jsx: true, loc: true, range: true }) as any
-    traverse(ast, (node) => {
+    traverse(ast, (node: any) => {
       if (node.type === 'JSXElement') {
         results.push(node)
       }
@@ -886,7 +886,7 @@ function findAllJsxElements(code: string) {
           || node.properties?.find((p: any) => p?.key?.name === 'setup')
         const t = _node?.value
         if (t) {
-          traverse(t, (nextNode) => {
+          traverse(t, (nextNode: any) => {
             if (nextNode.type === 'JSXElement') {
               const tag = (nextNode.openingElement.name as any)?.name
               if (tag && !originTag.includes(tag))
@@ -972,7 +972,28 @@ export function getImportDeps(text: string) {
     if (script && script.content)
       scriptContent += script.content
     if (scriptSetup && scriptSetup.content)
-      scriptContent += '\n' + scriptSetup.content
+      scriptContent += `\n${scriptSetup.content}`
+
+    const findImportSource = (node: any): string | null => {
+      if (!node)
+        return null
+      if (node.type === 'CallExpression' && node.callee && node.callee.type === 'Import') {
+        return node.arguments?.[0]?.value || null
+      }
+      if (node.type === 'ImportExpression' || node.type === 'Import') {
+        return node.source?.value || (node.arguments && node.arguments[0]?.value) || null
+      }
+      if (node.type === 'MemberExpression')
+        return findImportSource(node.object)
+      if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') {
+        return findImportSource(node.body)
+      }
+      if (node.type === 'BlockStatement') {
+        const ret = node.body.find((n: any) => n.type === 'ReturnStatement')
+        return findImportSource(ret && ret.argument)
+      }
+      return null
+    }
 
     if (!scriptContent) {
       // If there's no <script> or <script setup> (e.g., plain .tsx/.jsx files),
@@ -994,6 +1015,73 @@ export function getImportDeps(text: string) {
               deps[spec.local.name] = source
             else if (spec.type === 'ImportNamespaceSpecifier')
               deps[spec.local.name] = source
+          }
+        },
+        VariableDeclarator(p: any) {
+          try {
+            const id = p.node.id
+            const init = p.node.init
+            if (!id || !init)
+              return
+
+            if (init.type === 'CallExpression' && init.callee && init.callee.type === 'Import') {
+              const source = init.arguments?.[0]?.value
+              if (source && id.name)
+                deps[id.name] = source
+              return
+            }
+
+            if (init.type === 'ImportExpression' || init.type === 'Import') {
+              const source = init.source?.value || (init.arguments && init.arguments[0]?.value)
+              if (source && id.name)
+                deps[id.name] = source
+              return
+            }
+
+            if (init.type === 'CallExpression' && init.callee && init.callee.name === 'defineAsyncComponent') {
+              const arg = init.arguments && init.arguments[0]
+              if (arg) {
+                const source = findImportSource(arg)
+                if (source && id.name)
+                  deps[id.name] = source
+              }
+            }
+          }
+          catch {
+            // ignore
+          }
+        },
+        ExportDefaultDeclaration(p: any) {
+          const decl = p.node.declaration
+          if (!decl || decl.type !== 'ObjectExpression')
+            return
+          for (const prop of decl.properties) {
+            if (prop.type !== 'ObjectProperty')
+              continue
+            const keyName = prop.key && (prop.key.name || prop.key.value)
+            if (keyName !== 'components')
+              continue
+            const val = prop.value
+            if (val.type === 'ObjectExpression') {
+              for (const entry of val.properties) {
+                if (entry.type !== 'ObjectProperty')
+                  continue
+                const localName = entry.key.name || entry.key.value
+                if (entry.value.type === 'Identifier') {
+                  const ref = entry.value.name
+                  if (deps[ref])
+                    deps[localName] = deps[ref]
+                  else
+                    deps[localName] = ref
+                }
+                else if (entry.value.type === 'ObjectExpression') {
+                  deps[localName] = localName
+                }
+                else {
+                  deps[localName] = localName
+                }
+              }
+            }
           }
         },
       })
@@ -1052,10 +1140,10 @@ export function getImportDeps(text: string) {
             }
           }
         }
-      }
+      },
     })
   }
-  catch (error) {
+  catch {
     const clean = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
     for (const match of clean.matchAll(IMPORT_VUE_REG)) {
       if (!match)

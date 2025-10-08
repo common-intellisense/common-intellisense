@@ -1,7 +1,7 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { getImportDeps, findDynamicComponent } from '../../src/parser'
+import { findDynamicComponent, getImportDeps } from '../../src/parser'
 import * as vsutils from '@vscode-use/utils'
 
 const fixturesDir = path.resolve(process.cwd(), 'test', 'fixtures')
@@ -33,7 +33,7 @@ afterAll(async () => {
   catch {}
 })
 
-describe('Vue2 end-to-end mapping', () => {
+describe('vue2 end-to-end mapping', () => {
   it('resolves template tag via components map and fixture file', async () => {
     const sfc = `
 <script>

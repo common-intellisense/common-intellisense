@@ -1,7 +1,7 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { getImportDeps, findDynamicComponent } from '../../src/parser'
+import { findDynamicComponent, getImportDeps } from '../../src/parser'
 
 const fixturesDir = path.resolve(process.cwd(), 'test', 'fixtures-vue3')
 const tsxFile = path.join(fixturesDir, 'Render.tsx')
@@ -31,7 +31,7 @@ afterAll(async () => {
   catch {}
 })
 
-describe('Vue3 TSX mapping', () => {
+describe('vue3 TSX mapping', () => {
   it('extracts imports from TSX and maps render-used components', async () => {
     const code = await fsp.readFile(tsxFile, 'utf8')
     const deps = getImportDeps(code)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getImportDeps } from '../../src/parser'
 
-describe('Vue2 components mapping in export default', () => {
+describe('vue2 components mapping in export default', () => {
   it('maps local component names to import sources', () => {
     const sfc = `
 <script>

@@ -16,16 +16,15 @@ const UINames: string[] = []
 let optionsComponents: OptionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
 let UiCompletions: PropsConfig | null = null
 let currentPkgUiNames: null | string[] = null
-// const filters = ['js', 'ts', 'jsx', 'tsx', 'vue', 'svelte']
 // urlCache is now provided by services/ui-cache
-let stop: any = null
+let stop: (() => void) | null = null
 let preUis: Uis | null = null
 
 // cache monorepo/root package info per workspace rootPath to avoid repeatedly
 // reading the root package.json in monorepo scenarios. Each entry may also
 // hold a single shared watcher for the root package.json. rootPkgCache is provided by services/ui-cache
 
-export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: any, cleanCache?: boolean) {
+export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache?: boolean) {
   UINames.length = 0
   optionsComponents = { prefix: [], data: [], directivesMap: {}, libs: [] }
   UiCompletions = null
@@ -85,7 +84,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
 export interface UpdateCompletionsOptions {
   selectedUIs: string[]
   alias: Record<string, string>
-  detectSlots: any
+  detectSlots: (...args: any[]) => void
   prefix: Record<string, string>
 }
 
@@ -190,7 +189,7 @@ export async function updateCompletions(
   }))
 
   try {
-    fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
+    await fsp.writeFile(localCacheUri, JSON.stringify(Array.from(cacheFetch.entries())))
   }
   catch (error) {
     logger.error(`写入${localCacheUri} 失败: ${String(error)}`)
