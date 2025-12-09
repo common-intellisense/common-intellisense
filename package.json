@@ -230,6 +230,7 @@
     "get-lib-version": "^0.0.2",
     "husky": "^8.0.3",
     "js-yaml": "^4.1.1",
+    "lazy-js-utils": "^0.1.49",
     "lint-staged": "^14.0.1",
     "ofetch": "^1.5.1",
     "prettier": "^3.7.4",
