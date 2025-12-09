@@ -200,9 +200,6 @@
     "typecheck": "tsc --noEmit",
     "release": "bumpp && pnpm run publish"
   },
-  "peerDependencies": {
-    "lazy-js-utils": "^0.1.49"
-  },
   "devDependencies": {
     "@antfu/eslint-config": "^5.4.1",
     "@babel/parser": "^7.28.5",
