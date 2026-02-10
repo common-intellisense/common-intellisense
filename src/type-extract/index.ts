@@ -21,6 +21,18 @@ interface ExtractedComponent {
   reactLike: boolean
 }
 
+interface ResolvedTypeInfo {
+  text?: string
+  literals?: string[]
+}
+
+type DeclTypeInfo = ResolvedTypeInfo & {
+  rawText?: string
+  expandedText?: string
+}
+
+type ResolvedModuleLike = ts.ResolvedModule | ts.ResolvedModuleFull
+
 const MAX_TYPE_DEPTH = 6
 const MAX_TYPE_DETAIL_DEPTH = 3
 const MAX_TYPE_DETAIL_MEMBERS = 60
@@ -107,7 +119,7 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
     lib: pkgName,
     isReact,
   })
-  const propsConfig = propsReducer({
+  const propsConfig = await propsReducer({
     uiName,
     lib: pkgName,
     map: components.map(c => c.component),
@@ -196,7 +208,7 @@ function resolveModuleFallback(
   return undefined
 }
 
-function preferDtsResolved(resolved?: ts.ResolvedModuleFull) {
+function preferDtsResolved(resolved?: ResolvedModuleLike) {
   if (!resolved?.resolvedFileName)
     return resolved
   const ext = path.extname(resolved.resolvedFileName)
@@ -209,7 +221,7 @@ function preferDtsResolved(resolved?: ts.ResolvedModuleFull) {
         ...resolved,
         resolvedFileName: candidate,
         extension: ts.Extension.Dts,
-      }
+      } as ts.ResolvedModuleFull
     }
   }
   return resolved
@@ -575,11 +587,32 @@ function extractStringLiterals(type: ts.Type) {
 
 function getArrayElementType(type: ts.Type, checker: ts.TypeChecker) {
   if (checker.isArrayType(type) || checker.isTupleType(type)) {
-    return checker.getIndexTypeOfType(type, ts.IndexKind.Number)
-      || checker.getElementTypeOfArrayType(type)
-      || null
+    const indexed = checker.getIndexTypeOfType(type, ts.IndexKind.Number)
+    if (indexed)
+      return indexed
+    const legacy = (checker as ts.TypeChecker & {
+      getElementTypeOfArrayType?: (type: ts.Type) => ts.Type | undefined
+    }).getElementTypeOfArrayType?.(type)
+    return legacy || null
   }
   return checker.getIndexTypeOfType(type, ts.IndexKind.Number) || null
+}
+
+function getTypeOfProperty(
+  checker: ts.TypeChecker,
+  type: ts.Type,
+  name: string,
+  context: ts.Node,
+) {
+  const compat = checker as ts.TypeChecker & {
+    getTypeOfPropertyOfType?: (type: ts.Type, propertyName: string) => ts.Type | undefined
+  }
+  if (compat.getTypeOfPropertyOfType)
+    return compat.getTypeOfPropertyOfType(type, name)
+  const symbol = checker.getPropertyOfType(type, name)
+  if (!symbol)
+    return undefined
+  return checker.getTypeOfSymbolAtLocation(symbol, symbol.valueDeclaration || context)
 }
 
 function getSymbolName(symbol: ts.Symbol) {
@@ -670,7 +703,7 @@ function typeToProps(type: ts.Type, checker: ts.TypeChecker, decl: ts.Node) {
       continue
 
     const contextNode = prop.valueDeclaration || decl
-    const directType = checker.getTypeOfPropertyOfType(normalizedType, name)
+    const directType = getTypeOfProperty(checker, normalizedType, name, contextNode)
     let propType = (directType && !(directType.flags & ts.TypeFlags.Never))
       ? directType
       : checker.getTypeOfSymbolAtLocation(prop, contextNode)
@@ -681,7 +714,7 @@ function typeToProps(type: ts.Type, checker: ts.TypeChecker, decl: ts.Node) {
     const declNode = resolvePropTypeNodeFromTypeDecls(normalizedType, checker, name)
     if (declNode && (!declInfo?.rawText || !declInfo?.expandedText || !declInfo?.literals?.length)) {
       const fallbackRaw = declNode.getText()
-      const fallbackExpanded = expandTypeNodeForDisplay(declNode, checker, declNode)
+      const fallbackExpanded = expandTypeNodeForDisplay(declNode, checker, declNode) || undefined
       const resolved = resolveTypeInfoFromNode(declNode, checker, declNode)
       declInfo = {
         ...declInfo,
@@ -1312,7 +1345,7 @@ function expandTypeNodeForDisplay(
   }
 
   if (ts.isTypeLiteralNode(node)) {
-    const members = node.members.filter(m => ts.isPropertySignature(m) && m.name)
+    const members = node.members.filter((m): m is ts.PropertySignature => ts.isPropertySignature(m) && !!m.name)
     if (!members.length || members.length > MAX_INLINE_TYPE_PROPS)
       return null
     const parts = members.map((member) => {
@@ -1519,7 +1552,7 @@ function formatPropType(
   type: ts.Type,
   checker: ts.TypeChecker,
   decl: ts.Node,
-  declInfo?: { text?: string, rawText?: string, literals?: string[], expandedText?: string },
+  declInfo?: DeclTypeInfo,
   stripUndefined = false,
 ) {
   const apparent = checker.getApparentType(type)
@@ -1530,8 +1563,8 @@ function formatPropType(
     : undefined
   const mergedInfo = (declInfo?.text || declInfo?.literals?.length) ? declInfo : aliasInfo
   const declText = mergedInfo?.text ? cleanTypeText(mergedInfo.text) : ''
-  const rawDeclText = mergedInfo?.rawText ? cleanTypeText(mergedInfo.rawText) : ''
-  const declExpanded = mergedInfo?.expandedText ? cleanTypeText(mergedInfo.expandedText) : ''
+  const rawDeclText = declInfo?.rawText ? cleanTypeText(declInfo.rawText) : ''
+  const declExpanded = declInfo?.expandedText ? cleanTypeText(declInfo.expandedText) : ''
   const expandedType = (!expandedFromType || expandedFromType === '{}' || expandedFromType === 'object')
     ? (declExpanded || expandedFromType)
     : expandedFromType
@@ -1809,7 +1842,7 @@ function isObjectLikeType(type: ts.Type, checker: ts.TypeChecker) {
   return apparent.getProperties().length > 0
 }
 
-function getTypeInfoFromDecl(symbol: ts.Symbol, checker: ts.TypeChecker) {
+function getTypeInfoFromDecl(symbol: ts.Symbol, checker: ts.TypeChecker): DeclTypeInfo {
   const candidates: ts.Declaration[] = []
   if (symbol.valueDeclaration)
     candidates.push(symbol.valueDeclaration)
@@ -1819,7 +1852,7 @@ function getTypeInfoFromDecl(symbol: ts.Symbol, checker: ts.TypeChecker) {
     if (decl && (ts.isPropertySignature(decl) || ts.isPropertyDeclaration(decl)) && decl.type) {
       const resolved = resolveTypeInfoFromNode(decl.type, checker, decl)
       const rawText = decl.type.getText()
-      const expandedText = expandTypeNodeForDisplay(decl.type, checker, decl)
+      const expandedText = expandTypeNodeForDisplay(decl.type, checker, decl) || undefined
       return {
         text: resolved.text || rawText,
         rawText,
@@ -1828,7 +1861,7 @@ function getTypeInfoFromDecl(symbol: ts.Symbol, checker: ts.TypeChecker) {
       }
     }
   }
-  return {} as { text?: string, rawText?: string, literals?: string[], expandedText?: string }
+  return {}
 }
 
 function resolveTypeInfoFromNode(
@@ -1837,9 +1870,9 @@ function resolveTypeInfoFromNode(
   context: ts.Node,
   depth = 0,
   seen = new Set<ts.Symbol>(),
-) {
+): ResolvedTypeInfo {
   if (depth > MAX_TYPE_DEPTH)
-    return {} as { text?: string, literals?: string[] }
+    return {}
 
   if (ts.isLiteralTypeNode(node)) {
     if (ts.isStringLiteral(node.literal))
@@ -1891,14 +1924,14 @@ function resolveIndexedAccessInfo(
   context: ts.Node,
   depth = 0,
   seen = new Set<ts.Symbol>(),
-) {
+): ResolvedTypeInfo {
   if (depth > MAX_TYPE_DEPTH)
-    return {} as { text?: string, literals?: string[] }
+    return {}
   const objectType = checker.getTypeFromTypeNode(node.objectType)
   const objectApparent = checker.getApparentType(objectType)
   const names = getIndexAccessNames(node.indexType)
   if (!names.length)
-    return {} as { text?: string, literals?: string[] }
+    return {}
 
   const texts: string[] = []
   const literals: string[] = []
@@ -1915,7 +1948,7 @@ function resolveIndexedAccessInfo(
   }
 
   if (!texts.length && !literals.length)
-    return {} as { text?: string, literals?: string[] }
+    return {}
 
   return {
     text: texts.length ? cleanTypeText([...new Set(texts)].join(' | ')) : undefined,
@@ -1943,19 +1976,19 @@ function resolveTypeAliasInfo(
   checker: ts.TypeChecker,
   depth = 0,
   seen = new Set<ts.Symbol>(),
-) {
+): ResolvedTypeInfo {
   if (depth > MAX_TYPE_DEPTH)
-    return {} as { text?: string, literals?: string[] }
+    return {}
   const symbol = checker.getSymbolAtLocation(node.typeName)
   if (!symbol)
-    return {} as { text?: string, literals?: string[] }
+    return {}
   const aliased = (symbol.flags & ts.SymbolFlags.Alias) ? checker.getAliasedSymbol(symbol) : symbol
   if (seen.has(aliased))
-    return {} as { text?: string, literals?: string[] }
+    return {}
   seen.add(aliased)
   const aliasDecl = aliased.declarations?.find(d => ts.isTypeAliasDeclaration(d)) as ts.TypeAliasDeclaration | undefined
   if (!aliasDecl)
-    return {} as { text?: string, literals?: string[] }
+    return {}
   return resolveTypeInfoFromNode(aliasDecl.type, checker, aliasDecl, depth + 1, seen)
 }
 
@@ -1965,9 +1998,9 @@ function resolveTypeInfoFromType(
   context: ts.Node,
   depth = 0,
   seen = new Set<ts.Symbol>(),
-) {
+): ResolvedTypeInfo {
   if (depth > MAX_TYPE_DEPTH)
-    return {} as { text?: string, literals?: string[] }
+    return {}
   const apparent = checker.getApparentType(type)
 
   if (apparent.isUnion() || apparent.isIntersection()) {
