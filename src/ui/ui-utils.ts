@@ -95,10 +95,27 @@ export function getImportUiComponents(text: string) {
 
 export function fixedTagName(tagname: string) {
   // 修正 tag 名称
+  if (tagname.includes('.')) {
+    const parts = tagname.split('.').filter(Boolean).map((part) => {
+      let value = part
+      if (value.includes('-'))
+        value = toCamel(value)
+      if (!value)
+        return ''
+      if (value[0] === value[0].toLowerCase())
+        value = value[0].toUpperCase() + value.slice(1)
+      return value
+    }).filter(Boolean)
+    if (parts.length)
+      return parts.join('')
+  }
   if (tagname.includes('-')) {
     return tagname[0].toUpperCase() + tagname.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
   }
-  return toCamel(tagname)
+  const camel = toCamel(tagname)
+  if (camel && /[A-Z]/.test(camel) && camel[0] === camel[0].toLowerCase())
+    return camel[0].toUpperCase() + camel.slice(1)
+  return camel
 }
 
 export function formatUIName(name: string) {

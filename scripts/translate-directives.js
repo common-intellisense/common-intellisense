@@ -205,16 +205,24 @@ if (require.main === module) {
   })
 }
 
+const isTestEnv = !!(process.env.VITEST || process.env.NODE_ENV === 'test')
+let warnedTranslateFailure = false
 let translate
-try {
-  // prefer the package export if available
-  const mod = require('bing-translate-api')
-  translate = mod.translate || mod
-}
-catch (err) {
-  console.warn('bing-translate-api not available; translations will be a no-op')
+if (isTestEnv) {
   // keep the same (text, from, to) signature as the real library for safety
   translate = (text, _from, _to) => Promise.resolve({ translation: text })
+}
+else {
+  try {
+    // prefer the package export if available
+    const mod = require('bing-translate-api')
+    translate = mod.translate || mod
+  }
+  catch (err) {
+    console.warn('bing-translate-api not available; translations will be a no-op')
+    // keep the same (text, from, to) signature as the real library for safety
+    translate = (text, _from, _to) => Promise.resolve({ translation: text })
+  }
 }
 
 const cacheMap = new Map()
@@ -234,9 +242,15 @@ function fanyi(text) {
     }
 
     const doReject = (err) => {
-      // remove cache entry so future retries can happen
-      cacheMap.delete(text)
-      reject(err)
+      if (!warnedTranslateFailure && !isTestEnv) {
+        console.warn('translate-directives: translation failed; falling back to original text')
+        warnedTranslateFailure = true
+      }
+      if (VERBOSE && err) {
+        const msg = err && (err.message || err.toString()) || err
+        console.warn(`[translate] failed for "${text}": ${msg}`)
+      }
+      resolve(text)
     }
 
     try {

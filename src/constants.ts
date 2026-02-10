@@ -3,6 +3,7 @@ export const UINames = [
   'element-plus',
   'antd',
   'ant-design-vue',
+  'antdv-next',
   '@varlet/ui',
   'vant',
   'naive-ui',

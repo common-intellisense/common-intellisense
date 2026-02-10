@@ -9,6 +9,7 @@ import { formatUIName, getAlias, getIsShowSlots, getPrefix, getSelectedUIs, getU
 import { cacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../services/ui-cache'
 import path from 'node:path'
 import { getLibVersion } from 'get-lib-version'
+import { clearTypeCache } from '../type-extract/cache'
 
 export const logger = createLog('common-intellisense')
 const UI: Record<string, () => any> = {}
@@ -33,6 +34,8 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
   pkgUIConfigMap.clear()
   if (cleanCache)
     urlCache.clear()
+  if (cleanCache)
+    clearTypeCache()
   // defer reading user settings until we locate the package.json for this cwd
   let selectedUIs: string[] = []
   let alias: Record<string, string> = {}
@@ -50,7 +53,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
       selectedUIs = getSelectedUIs(cached.pkg)
       alias = getAlias(cached.pkg)
       prefix = getPrefix(cached.pkg)
-      await updateCompletions(cached.uis, { selectedUIs, alias, detectSlots, prefix })
+      await updateCompletions(cached.uis, { selectedUIs, alias, detectSlots, prefix, pkgPath: cached.pkg })
     }
     return
   }
@@ -71,7 +74,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
     if (!uis || !uis.length)
       return
 
-    return updateCompletions(uis, { selectedUIs, alias, detectSlots, prefix }).then(() => {
+    return updateCompletions(uis, { selectedUIs, alias, detectSlots, prefix, pkgPath: pkg }).then(() => {
       logger.info(`findUI: ${uis.map(ui => ui.join('@')).join(' | ')}`)
     }).catch((error) => {
       logger.info(`updateCompletions获取失败${error?.message || error}`)
@@ -86,13 +89,14 @@ export interface UpdateCompletionsOptions {
   alias: Record<string, string>
   detectSlots: (...args: any[]) => void
   prefix: Record<string, string>
+  pkgPath?: string
 }
 
 export async function updateCompletions(
   uis: Uis,
   options: UpdateCompletionsOptions,
 ) {
-  const { selectedUIs, alias, detectSlots, prefix: userPrefix } = options
+  const { selectedUIs, alias, detectSlots, prefix: userPrefix, pkgPath } = options
   if (!preUis) {
     preUis = uis
   }
@@ -107,6 +111,7 @@ export async function updateCompletions(
   // 获取远程的 UI 库
   const uisName: string[] = []
   const originUisName: string[] = []
+  const formatToPkg = new Map<string, { pkgName: string, version: string }>()
   for await (let [uiName, version] of uis) {
     let _version = version.match(/[^~]?(\d+)./)![1]
 
@@ -127,6 +132,7 @@ export async function updateCompletions(
       originUisName.push(`${uiName}${_version}`)
     }
     const formatName = `${formatUIName(uiName)}${_version}`
+    formatToPkg.set(formatName, { pkgName: uiName, version: _version })
     uisName.push(formatName)
   }
 
@@ -149,7 +155,11 @@ export async function updateCompletions(
     }
     else {
       try {
-        Object.assign(UI, await fetchFromCommonIntellisense(name.replace(/([A-Z])/g, '-$1').toLowerCase()))
+        const pkgInfo = formatToPkg.get(name)
+        Object.assign(UI, await fetchFromCommonIntellisense(
+          name.replace(/([A-Z])/g, '-$1').toLowerCase(),
+          pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath } : { uiName: name, resolveFrom: pkgPath },
+        ))
         componentsNames = UI[key]?.()
         cacheMap.set(key, componentsNames)
       }

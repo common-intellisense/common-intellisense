@@ -2,6 +2,7 @@ export interface PropsItem {
   default: any
   value: any
   type?: string
+  typeDetail?: typeDetail
   version?: string
   description?: string
   description_zh?: string

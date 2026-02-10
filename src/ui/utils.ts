@@ -167,14 +167,15 @@ export function propsReducer(options: PropsOptions) {
 
         documentation.appendMarkdown(detail.join('\n\n'))
 
-        if (item.typeDetail && Object.keys(item.typeDetail).length) {
-          const data = `🌈 类型详情:\n${Object.keys(item.typeDetail).reduce((result, key) => {
-            if (Array.isArray(item.typeDetail![key])) {
+        const typeDetail = value.typeDetail || item.typeDetail
+        if (typeDetail && Object.keys(typeDetail).length) {
+          const data = `🌈 类型详情:\n${Object.keys(typeDetail).reduce((result, key) => {
+            if (Array.isArray(typeDetail[key])) {
               return result += key[0] === '$'
-                ? `\ntype ${key.slice(1).replace(/-(\w)/g, v => v.toUpperCase())} = \n${item.typeDetail![key].map((typeItem: any) => `${typeItem.name} /*${typeItem.description}*/`).join('\n| ')}\n\n`
-                : `\ninterface ${key} {\n  ${item.typeDetail![key].map((typeItem: any) => `${typeItem.name}${typeItem.optional ? '?' : ''}: ${typeItem.type} /*${typeItem.description}${String(typeItem.default) ? ` 默认值: ***${String(typeItem.default).replace(/\n/g, '')}***` : ''}*/`).join('\n  ')}\n}`
+                ? `\ntype ${key.slice(1).replace(/-(\w)/g, v => v.toUpperCase())} = \n${typeDetail[key].map((typeItem: any) => `${typeItem.name} /*${typeItem.description}*/`).join('\n| ')}\n\n`
+                : `\ninterface ${key} {\n  ${typeDetail[key].map((typeItem: any) => `${typeItem.name}${typeItem.optional ? '?' : ''}: ${typeItem.type} /*${typeItem.description}${String(typeItem.default) ? ` 默认值: ***${String(typeItem.default).replace(/\n/g, '')}***` : ''}*/`).join('\n  ')}\n}`
             }
-            return result += `\n${item.typeDetail![key].split('|').join('\n|')}`
+            return result += `\n${typeDetail[key].split('|').join('\n|')}`
           }, '')}`
           documentation.appendCodeblock(data, 'typescript')
         }
@@ -261,8 +262,29 @@ export function propsReducer(options: PropsOptions) {
           else
             snippet = `${key}="\${1}"`
         }
-        const details = `${isZh ? '***属性***' : '***prop***'}: ${content}\n-  ${isZh ? `***描述***: ${value.description_zh || value.description}` : `***description***: ${value.description}`}\n-  ${value.default ? `  ${isZh ? '***默认***' : '***default***'}: ${value.default.replace(/\n/g, '')}` : ''}\n-  ${value.type ? `  ${isZh ? '***类型***' : '***type***'}: ${value.type.replace(/\n/g, '')}` : ''}`
-        content += `  ${isZh ? (value.description_zh || value.description) : value.description}  ${value.default ? `  ${isZh ? '默认' : 'default'}：${value.default.replace(/\n/g, '')}` : ''}`
+        const detailsLines: string[] = []
+        detailsLines.push(`${isZh ? '***属性***' : '***prop***'}: ${content}`)
+        if (value.description_zh || value.description) {
+          detailsLines.push(isZh
+            ? `***描述***: ${value.description_zh || value.description}`
+            : `***description***: ${value.description}`)
+        }
+        if (value.default !== undefined && value.default !== '') {
+          detailsLines.push(isZh
+            ? `***默认***: ${value.default.replace(/\n/g, '')}`
+            : `***default***: ${value.default.replace(/\n/g, '')}`)
+        }
+        if (value.type) {
+          detailsLines.push(isZh
+            ? `***类型***: ${value.type.replace(/\n/g, '')}`
+            : `***type***: ${value.type.replace(/\n/g, '')}`)
+        }
+        const details = detailsLines.join('\n-  ')
+        const propDesc = isZh ? (value.description_zh || value.description) : value.description
+        if (propDesc)
+          content += `  ${propDesc}`
+        if (value.default)
+          content += `  ${isZh ? '默认' : 'default'}：${value.default.replace(/\n/g, '')}`
         data.push(createCompletionItem({
           content,
           details,
@@ -352,8 +374,24 @@ export function propsReducer(options: PropsOptions) {
             content = `${name}={${_name}}`
           }
 
-          content += `  ${isZh ? (description_zh || description) : description}${params ? `  ${isZh ? '参数' : 'params'}：${params}` : ''}`
-          const details = `${isZh ? '***属性***' : '***prop***'}: ${content}\n-  ${isZh ? `***描述***: ${description_zh || description}` : `***description***: ${description}`}\n-  ${typeof params === 'string' ? `  ${isZh ? '***参数***' : '***params***'}: ${params?.replace(/\n/g, '')}` : ''}`
+          const eventDesc = isZh ? (description_zh || description) : description
+          if (eventDesc)
+            content += `  ${eventDesc}`
+          if (params)
+            content += `  ${isZh ? '参数' : 'params'}：${params}`
+          const detailsLines: string[] = []
+          detailsLines.push(`${isZh ? '***属性***' : '***prop***'}: ${content}`)
+          if (eventDesc) {
+            detailsLines.push(isZh
+              ? `***描述***: ${description_zh || description}`
+              : `***description***: ${description}`)
+          }
+          if (typeof params === 'string' && params) {
+            detailsLines.push(isZh
+              ? `***参数***: ${params.replace(/\n/g, '')}`
+              : `***params***: ${params.replace(/\n/g, '')}`)
+          }
+          const details = detailsLines.join('\n-  ')
           const documentation = new vscode.MarkdownString()
           documentation.isTrusted = true
           documentation.supportHtml = true
@@ -845,8 +883,12 @@ export function findPrefixedComponent(componentName: string, prefixes: string[],
   // Try each prefix
   for (const prefix of prefixes) {
     const standardName = convertPrefixedComponentName(componentName, prefix)
-    if (standardName && UiCompletions[standardName]) {
-      return UiCompletions[standardName]
+    if (standardName) {
+      if (UiCompletions[standardName])
+        return UiCompletions[standardName]
+      const prefixed = prefix[0]?.toUpperCase() + prefix.slice(1) + standardName
+      if (UiCompletions[prefixed])
+        return UiCompletions[prefixed]
     }
   }
   // direct exact match (e.g., componentName already matches a completion key)

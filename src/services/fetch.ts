@@ -9,6 +9,7 @@ import { componentsReducer, propsReducer } from '../ui/utils'
 import { logger } from '../ui/ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
 import { getPrefix } from '../ui/ui-utils'
+import { fetchFromTypes } from '../type-extract'
 
 const prefix = '@common-intellisense/'
 
@@ -20,6 +21,32 @@ let isLocalUrisInProgress = false
 const retry = 3
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
 const isZh = getLocale()?.includes('zh')
+
+function mergeComponentsWithTypeFallback(remote: any[], fallback: any[]) {
+  if (!Array.isArray(remote) || !remote.length || !Array.isArray(fallback) || !fallback.length)
+    return remote
+  const fallbackMap = new Map<string, any>()
+  for (const item of fallback) {
+    if (item?.name)
+      fallbackMap.set(item.name, item)
+  }
+  return remote.map((item) => {
+    if (!item?.name)
+      return item
+    const fb = fallbackMap.get(item.name)
+    if (!fb?.props)
+      return item
+    const mergedProps: Record<string, any> = { ...(item.props || {}) }
+    for (const [key, value] of Object.entries(fb.props)) {
+      const current = mergedProps[key]
+      const currentType = typeof current?.type === 'string' ? current.type.trim() : ''
+      const isEmpty = !current || !currentType || currentType === '{}' || currentType === 'object'
+      if (isEmpty)
+        mergedProps[key] = value
+    }
+    return { ...item, props: mergedProps }
+  })
+}
 
 export const getLocalCache = new Promise((resolve) => {
   if (existsSync(localCacheUri)) {
@@ -47,7 +74,8 @@ export const getLocalCache = new Promise((resolve) => {
 })
 
 // todo: add result type replace any
-export async function fetchFromCommonIntellisense(tag: string) {
+export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string }) {
+  const uiName = options?.uiName || tag.replace(/-(\w)/g, (_, v) => v.toUpperCase())
   const name = prefix + tag
   let version = ''
   logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
@@ -58,9 +86,19 @@ export async function fetchFromCommonIntellisense(tag: string) {
     if (error.message.includes('404 Not Found')) {
       // 说明这个版本还未支持, 可以通过 issue 提出
       logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
+      const fallback = await fetchFromTypes({ pkgName: options?.pkgName || '', uiName, resolveFrom: options?.resolveFrom })
+      if (fallback) {
+        logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
+        return fallback
+      }
     }
     else {
       logger.error(`获取最新版本错误: ${String(error)}`)
+      const fallback = await fetchFromTypes({ pkgName: options?.pkgName || '', uiName, resolveFrom: options?.resolveFrom })
+      if (fallback) {
+        logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
+        return fallback
+      }
     }
     return
   }
@@ -108,8 +146,16 @@ export async function fetchFromCommonIntellisense(tag: string) {
       cacheFetch.set(key, scriptContent)
     runModule(module)
     const moduleExports = module.exports
-
     const result: any = {}
+    let fallbackRaw: any[] | undefined
+    if (options?.pkgName && options?.resolveFrom) {
+      try {
+        const fallback = await fetchFromTypes({ pkgName: options.pkgName, uiName, resolveFrom: options.resolveFrom })
+        const rawKey = `${uiName}Raw`
+        fallbackRaw = fallback?.[rawKey]?.()
+      }
+      catch {}
+    }
     for (const key in moduleExports) {
       const v = moduleExports[key]
       if (key.endsWith('Components')) {
@@ -124,7 +170,12 @@ export async function fetchFromCommonIntellisense(tag: string) {
         result[key] = () => components
       }
       else {
-        result[key] = () => propsReducer(v())
+        result[key] = () => {
+          let data = v()
+          if (Array.isArray(fallbackRaw) && fallbackRaw.length)
+            data = mergeComponentsWithTypeFallback(data, fallbackRaw)
+          return propsReducer(data)
+        }
       }
     }
     resolver()
@@ -137,6 +188,11 @@ export async function fetchFromCommonIntellisense(tag: string) {
     isCommonIntellisenseInProgress = false
     // 尝试从本地获取
     message.error(isZh ? `从远程拉取 UI 包失败 ☹️，请检查代理` : `Failed to pull UI package from remote ☹️, please check the proxy`)
+    const fallback = await fetchFromTypes({ pkgName: options?.pkgName || '', uiName, resolveFrom: options?.resolveFrom })
+    if (fallback) {
+      logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
+      return fallback
+    }
     return fetchFromLocalUris()
     // todo：增加重试机制
   }

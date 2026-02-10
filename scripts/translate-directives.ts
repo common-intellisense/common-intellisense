@@ -197,17 +197,25 @@ process.on('beforeExit', () => {
   }
 })
 
+const isTestEnv = !!(process.env.VITEST || process.env.NODE_ENV === 'test')
+let warnedTranslateFailure = false
 let translate: (text: string, from?: string | null, to?: string) => Promise<any>
-try {
-  // prefer the package export if available
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mod = require('bing-translate-api')
-  translate = mod.translate || mod
-}
-catch (err) {
-  console.warn('bing-translate-api not available; translations will be a no-op')
+if (isTestEnv) {
   // keep the same (text, from, to) signature as the real library for safety
   translate = (text: string, _from?: string | null, _to?: string) => Promise.resolve({ translation: text })
+}
+else {
+  try {
+    // prefer the package export if available
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('bing-translate-api')
+    translate = mod.translate || mod
+  }
+  catch (err) {
+    console.warn('bing-translate-api not available; translations will be a no-op')
+    // keep the same (text, from, to) signature as the real library for safety
+    translate = (text: string, _from?: string | null, _to?: string) => Promise.resolve({ translation: text })
+  }
 }
 
 const cacheMap: Map<string, Promise<string>> = new Map()
@@ -227,9 +235,15 @@ function fanyi(text: string): Promise<string> {
     }
 
     const doReject = (err: any) => {
-      // remove cache entry so future retries can happen
-      cacheMap.delete(text)
-      reject(err)
+      if (!warnedTranslateFailure && !isTestEnv) {
+        console.warn('translate-directives: translation failed; falling back to original text')
+        warnedTranslateFailure = true
+      }
+      if (VERBOSE && err) {
+        const msg = err && (err.message || err.toString()) || err
+        console.warn(`[translate] failed for "${text}": ${msg}`)
+      }
+      resolve(text)
     }
 
     try {

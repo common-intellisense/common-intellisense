@@ -38,8 +38,11 @@ export async function activate(context: vscode.ExtensionContext) {
     scripts: ['main.js'],
   })
 
-  context.subscriptions.push(registerCommand('common-intellisense.cleanCache', () => {
-    fsp.rmdir(localCacheUri)
+  context.subscriptions.push(registerCommand('common-intellisense.cleanCache', async () => {
+    try {
+      await fsp.rm(localCacheUri, { force: true })
+    }
+    catch {}
     cacheFetch.clear()
     findUI(context, detectSlots, true)
   }))
@@ -366,12 +369,17 @@ export async function activate(context: vscode.ExtensionContext) {
     if (matchedComponent) {
       if (result.propName === 'icon')
         return matchedComponent.icons
-      if (result.isEvent)
-        return matchedComponent.events?.[0]?.(isVue) || []
+      const existingPropsSet = new Set(getExistingPropNames(result, lineText))
+      const existingProps = existingPropsSet.size ? existingPropsSet : null
+      if (result.isEvent) {
+        const events = matchedComponent.events?.[0]?.(isVue) || []
+        return existingProps ? filterExistingCompletions(events, existingProps) : events
+      }
       // slot suggestions for all slot-related scenarios
       if (matchedComponent.slots && (result.type === 'slots' || result.type === 'slot' || result.isSlot || (typeof result.propName === 'string' && result.propName.startsWith('#'))))
         return matchedComponent.slots
-      return matchedComponent.completions?.[0]?.(isVue) || []
+      const completions = matchedComponent.completions?.[0]?.(isVue) || []
+      return existingProps ? filterExistingCompletions(completions, existingProps) : completions
     }
 
     if (UiCompletions && result?.type === 'props' && !result.isDynamicFlag) {
@@ -470,33 +478,18 @@ export async function activate(context: vscode.ExtensionContext) {
       eventCallback = events[0](isVue) || []
       completionsCallback = [...completions[0](isVue), ...(isVue ? [] : eventCallback), ...directivesCompletions]
 
-      const hasProps = result.props
-        ? result.props.map((item: any) => {
-            if (item.name === 'on' && item.arg)
-              return `${item.arg.content}`
-
-            if (typeof item.name === 'object' && item.name.name !== 'on')
-              return item.name.name
-
-            if (item.name === 'model' && item?.loc?.source?.startsWith('v-model'))
-              return item.loc.source.split('=')[0]
-
-            if (item.name === 'bind')
-              return item?.arg?.content
-
-            if (item.name !== 'on')
-              return item.name
-
-            return false
-          }).filter(Boolean)
-        : []
+      const hasProps = new Set(getExistingPropNames(result, lineText))
+      const hasProp = (item: any) => {
+        const key = normalizePropName(item?.params?.[1] ?? (typeof item?.label === 'string' ? item.label : ''))
+        return key ? hasProps.has(key) : false
+      }
       if (propName === 'on') {
-        return (eventCallback).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+        return eventCallback.filter((item: any) => !hasProp(item))
       }
       else if (propName) {
         const r: any[] = []
         if (isValue) {
-          completionsCallback.filter((item: any) => hasProps.find((prop: any) => item?.params?.[1] === prop)).filter((item: any) => {
+          completionsCallback.filter((item: any) => hasProp(item)).filter((item: any) => {
             const reg = propName === 'bind'
               ? new RegExp('^:')
               : new RegExp(`^:?${propName}`)
@@ -517,7 +510,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return r
         }
         else {
-          r.push(...(completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop)).map((item: any) => createCompletionItem(({
+          r.push(...(completionsCallback ?? []).filter((item: any) => !hasProp(item)).map((item: any) => createCompletionItem(({
             content: item.content,
             snippet: item.snippet,
             documentation: item.documentation,
@@ -531,7 +524,7 @@ export async function activate(context: vscode.ExtensionContext) {
           ? []
           : isValue
             ? []
-            : eventCallback.filter((item: any) => !hasProps.find((prop: any) => item?.params?.[1] === prop))
+            : eventCallback.filter((item: any) => !hasProp(item))
         if (propName === 'o')
           return [...events, ...r]
 
@@ -545,8 +538,8 @@ export async function activate(context: vscode.ExtensionContext) {
           }))
         }
       }
-      else if (hasProps.length) {
-        return (completionsCallback ?? []).filter((item: any) => !hasProps.find((prop: any) => item.params?.[1] === prop))
+      else if (hasProps.size) {
+        return (completionsCallback ?? []).filter((item: any) => !hasProp(item))
       }
       else {
         return completionsCallback
@@ -563,7 +556,9 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!prefix)
       return
 
-    if (prefix.toLowerCase() === prefix ? optionsComponents.prefix.some((reg: string) => reg && prefix.startsWith(reg) || reg.startsWith(prefix)) : true) {
+    if (prefix.toLowerCase() === prefix
+      ? optionsComponents.prefix.some((reg: string) => !reg || prefix.startsWith(reg) || reg.startsWith(prefix))
+      : true) {
       const parent = result.parent
       const data = await Promise.all(optionsComponents.data.map(c => c(parent)).flat())
       if (parent) {
@@ -708,13 +703,15 @@ export async function activate(context: vscode.ExtensionContext) {
             return createHover('')
           const tag = fixedTagName(result.tag)
           const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
-          if (!target)
-            return
+          if (target?.tableDocument)
+            return createHover(target.tableDocument)
 
-          const tableDocument = target.tableDocument
-
-          if (tableDocument)
-            return createHover(tableDocument)
+          const fixedWord = fixedTagName(word)
+          const direct = UiCompletions[fixedWord]
+            || findPrefixedComponent(fixedWord, componentsPrefix, UiCompletions)
+            || await findDynamicComponent(fixedWord, {}, UiCompletions, componentsPrefix, uiDeps?.[fixedWord])
+          if (direct?.tableDocument)
+            return createHover(direct.tableDocument)
         }
         else if (result.type === 'props' && result.tag === 'template') {
           const parentTag = result.parent.tag
@@ -900,13 +897,18 @@ export async function activate(context: vscode.ExtensionContext) {
         return createHover(UiCompletions[word].tableDocument)
       }
       const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix, uiDeps?.[word])
-      if (!target)
-        return
+      if (target?.tableDocument)
+        return createHover(target.tableDocument)
 
-      const tableDocument = target.tableDocument
-
-      if (tableDocument)
-        return createHover(tableDocument)
+      if (isVue()) {
+        const parsed = parser(code, position as any)
+        if (parsed?.type === 'tag' && parsed.tag) {
+          const tag = fixedTagName(parsed.tag)
+          const fallbackTarget = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
+          if (fallbackTarget?.tableDocument)
+            return createHover(fallbackTarget.tableDocument)
+        }
+      }
     },
   }))
 }
@@ -923,6 +925,86 @@ function getEffectWord(preText: string) {
     i--
   }
   return active
+}
+
+function normalizePropName(name: any) {
+  if (!name || typeof name !== 'string')
+    return ''
+  let value = name
+  if (value.startsWith('@'))
+    value = value.slice(1)
+  if (value.startsWith(':'))
+    value = value.slice(1)
+  if (value.startsWith('v-on:'))
+    value = value.slice('v-on:'.length)
+  if (value.startsWith('v-bind:'))
+    value = value.slice('v-bind:'.length)
+  return toCamel(value)
+}
+
+function getExistingPropNames(result: any, lineText?: string) {
+  const fromAst = result?.props
+    ? result.props.map((item: any) => {
+        if (item?.type === 'JSXAttribute' && item.name?.name)
+          return item.name.name
+        if (item?.type === 'JSXSpreadAttribute')
+          return false
+        if (item?.type === 'EventHandler' && item.name?.name)
+          return item.name.name
+
+        if (item.name === 'on' && item.arg)
+          return `${item.arg.content}`
+
+        if (typeof item.name === 'object' && item.name.name !== 'on')
+          return item.name.name
+
+        if (item.name === 'model' && item?.loc?.source?.startsWith('v-model'))
+          return item.loc.source.split('=')[0]
+
+        if (item.name === 'bind')
+          return item?.arg?.content
+
+        if (item.name !== 'on')
+          return item.name
+
+        return false
+      }).filter(Boolean)
+    : []
+  const fromLine = extractPropsFromLine(result, lineText)
+  return [...fromAst, ...fromLine].map(normalizePropName).filter(Boolean)
+}
+
+function extractPropsFromLine(result: any, lineText?: string) {
+  if (!lineText || !result?.tag)
+    return []
+  const tagIndex = lineText.indexOf(`<${result.tag}`)
+  if (tagIndex < 0)
+    return []
+  const afterTag = lineText.slice(tagIndex + result.tag.length + 1)
+  const attrText = (afterTag.split('>')[0] || '').trim()
+  if (!attrText)
+    return []
+  const names: string[] = []
+  const regex = /(?:^|\s)(@[\w:-]+|v-on:[\w:-]+|v-bind:[\w:-]+|:[\w-]+|[\w-]+)(?==)/g
+  for (const match of attrText.matchAll(regex)) {
+    const raw = match[1]
+    if (raw && raw !== '/' && raw !== result.tag)
+      names.push(raw)
+  }
+  return names
+}
+
+function filterExistingCompletions(items: SubCompletionItem[] | undefined, existing: Set<string>) {
+  if (!items?.length || !existing.size)
+    return items || []
+  return items.filter((item: any) => {
+    const label = typeof item?.label === 'string'
+      ? item.label
+      : item?.label?.label || ''
+    const raw = item?.params?.[1] ?? label
+    const key = normalizePropName(raw)
+    return !key || !existing.has(key)
+  })
 }
 
 function getHoverAttribute(attributeList: any[], attr: string) {

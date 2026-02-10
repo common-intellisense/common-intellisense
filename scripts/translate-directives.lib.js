@@ -42,14 +42,24 @@ async function runTranslate(options = {}) {
   const limit = 10
   const hasDone = new Set()
 
+  const isTestEnv = !!(process.env.VITEST || process.env.NODE_ENV === 'test')
+  let warnedTranslateFailure = false
   // translation backend (optional)
   let translate
-  try {
-    const mod = require('bing-translate-api')
-    translate = mod.translate || mod
+  if (typeof options.translate === 'function') {
+    translate = options.translate
   }
-  catch (err) {
+  else if (options.noTranslate || isTestEnv) {
     translate = (text, _from, _to) => Promise.resolve({ translation: text })
+  }
+  else {
+    try {
+      const mod = require('bing-translate-api')
+      translate = mod.translate || mod
+    }
+    catch (err) {
+      translate = (text, _from, _to) => Promise.resolve({ translation: text })
+    }
   }
 
   const cacheMap = new Map()
@@ -67,8 +77,15 @@ async function runTranslate(options = {}) {
         resolve(result)
       }
       const doReject = (err) => {
-        cacheMap.delete(text)
-        reject(err)
+        if (!warnedTranslateFailure && !isTestEnv) {
+          console.warn('translate-directives: translation failed; falling back to original text')
+          warnedTranslateFailure = true
+        }
+        if (VERBOSE && err) {
+          const msg = err && (err.message || err.toString()) || err
+          console.warn(`[translate] failed for "${text}": ${msg}`)
+        }
+        resolve(text)
       }
       try {
         if (hasChineseCharacters(text)) {

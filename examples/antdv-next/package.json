@@ -1,0 +1,9 @@
+{
+  "name": "antdv-next-example",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "antdv-next": "^1.0.0-beta.1",
+    "vue": "^3.5.0"
+  }
+}

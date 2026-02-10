@@ -194,7 +194,7 @@
     "pack": "vsce package --no-dependencies",
     "lint": "eslint . --cache",
     "prepare": "husky install",
-    "test:staged": "git diff --staged --name-only --relative | grep -E '\\.(ts|tsx|js)$' | xargs -r pnpm -s exec vitest run --findRelatedTests",
+    "test:staged": "git diff --staged --name-only --relative | grep -E '\\.(ts|tsx|js)$' | xargs -r pnpm -s exec vitest related",
     "lint:fix": "eslint . --fix",
     "publish": "vsce publish --no-dependencies",
     "typecheck": "tsc --noEmit",
