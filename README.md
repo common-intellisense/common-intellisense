@@ -81,10 +81,26 @@ Install the supported ui component library in your project and install the plug-
 
 - `cmd+shift+p` -> Select `Specify the UI library you need to prompt`
 
+## Need types for only one UI library?
+
+- Option 1: Use the command palette (it writes `common-intellisense.ui`)
+- Option 2: Set it directly in `settings.json` (make sure `auto` is not included)
+  - Single: `"common-intellisense.ui": ["antd5"]`
+  - Multiple: `"common-intellisense.ui": ["antd5", "elementPlus2"]`
+- If you use a wrapped library, map it to a supported UI version:
+  - `"common-intellisense.alias": { "@xxx/element": "elementUi2" }`
+- Monorepo: per-package config is supported by `package.json` path:
+  - `"common-intellisense.ui": { "${workspaceFolder}/packages/a/package.json": ["antd5"] }`
+
 ## configuration
 
 ```json
 {
+  "common-intellisense.ui": {
+    "type": "array",
+    "default": ["auto"],
+    "description": "Specify UI versions for completion (if auto is removed, only the specified list is used)."
+  },
   "common-intellisense.showSlots": {
     "type": "boolean",
     "default": true,

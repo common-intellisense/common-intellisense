@@ -81,9 +81,25 @@
 
 - `cmd+shift+p` -> 选择 `Specify the UI library you need to prompt`
 
+## 只需要某一个 UI 库的类型怎么办？
+
+- 方式一：使用命令面板选择 UI 库（会写入 `common-intellisense.ui`）
+- 方式二：在 `settings.json` 手动配置（注意不要包含 `auto`）
+  - 单个：`"common-intellisense.ui": ["antd5"]`
+  - 多个：`"common-intellisense.ui": ["antd5", "elementPlus2"]`
+- 如果是二次封装库，使用别名指向对应 UI 版本：
+  - `"common-intellisense.alias": { "@xxx/element": "elementUi2" }`
+- monorepo 场景支持按 `package.json` 路径区分配置：
+  - `"common-intellisense.ui": { "${workspaceFolder}/packages/a/package.json": ["antd5"] }`
+
 ## configuration 设置
 
 ```
+"common-intellisense.ui": {
+          "type": "array",
+          "default": ["auto"],
+          "description": "指定提示的 UI 版本（不包含 auto 时仅使用手动指定的列表）"
+},
 "common-intellisense.showSlots": {
           "type": "boolean",
           "default": true,
