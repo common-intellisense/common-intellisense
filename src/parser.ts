@@ -22,6 +22,40 @@ const { parse: svelteParser } = require('svelte/compiler')
 
 // 引入vue-parser只在template中才处理一些逻辑
 let isInTemplate = false
+interface VineFileCtxResult {
+  vineFileCtx: VineFileCtx
+  vineCompileErrs: VineDiagnostic[]
+  vineCompileWarns: VineDiagnostic[]
+}
+
+let vueSfcParseCache: { code: string, value: ReturnType<typeof parse> } | null = null
+let jsxAstCache: { code: string, value: any } | null = null
+let svelteHtmlCache: { code: string, value: any } | null = null
+let vineCtxCache: { key: string, value: VineFileCtxResult } | null = null
+
+function getVueSfcParseResult(code: string) {
+  if (vueSfcParseCache?.code === code)
+    return vueSfcParseCache.value
+  const value = parse(code)
+  vueSfcParseCache = { code, value }
+  return value
+}
+
+function getJsxAst(code: string) {
+  if (jsxAstCache?.code === code)
+    return jsxAstCache.value
+  const value = tsParser(code, { jsx: true, loc: true, range: true })
+  jsxAstCache = { code, value }
+  return value
+}
+
+function getSvelteHtml(code: string) {
+  if (svelteHtmlCache?.code === code)
+    return svelteHtmlCache.value
+  const { html } = svelteParser(code)
+  svelteHtmlCache = { code, value: html }
+  return html
+}
 
 export function parser(code: string, position: vscode.Position) {
   if (isVine()) {
@@ -59,7 +93,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
   const {
     descriptor: { template, script, scriptSetup },
     errors,
-  } = parse(code)
+  } = getVueSfcParseResult(code)
 
   if (errors.length)
     return
@@ -254,14 +288,21 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
 }
 
 export function getReactRefsMap() {
-  const ast = tsParser(getActiveText()!, { jsx: true, loc: true })
+  const code = getActiveText()
+  if (!code) {
+    return {
+      refsMap: {},
+      refs: [],
+    }
+  }
+  const ast = getJsxAst(code)
   const children = ast.body
   return findJsxRefs(children)
 }
 
 export function parserJSX(code: string, position: vscode.Position) {
   try {
-    const ast = tsParser(code, { jsx: true, loc: true })
+    const ast = getJsxAst(code)
     const children = ast.body
     const result = jsxDfs(children, null, position)
     const map = findJsxRefs(children)
@@ -547,7 +588,7 @@ function findRef(children: any, map: any, refsMap: (string | [string, string])[]
 }
 
 export function parserSvelte(code: string, position: vscode.Position) {
-  const { html } = svelteParser(code)
+  const html = getSvelteHtml(code)
   const result = jsxDfs([html], null, position)
   const map = {
     refsMap: {},
@@ -771,7 +812,7 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any, prefix: string[])
   if (isVue()) {
     const {
       descriptor: { template, script, scriptSetup },
-    } = parse(code)
+    } = getVueSfcParseResult(code)
     const _script = script || scriptSetup
     if (!template) {
       if (_script?.lang === 'tsx') {
@@ -793,7 +834,7 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any, prefix: string[])
     if (!vineFileCtx.vineCompFns)
       return []
 
-    return await Promise.all(vineFileCtx.vineCompFns.map(async (item) => {
+    return await Promise.all(vineFileCtx.vineCompFns.map(async (item: any) => {
       const r = {
         children: await findUiTag(item.templateAst?.children, UiCompletions, [], new Set(), uiDeps, prefix),
         offset: item.templateStringNode?.quasi.quasis[0].start || 0,
@@ -876,7 +917,7 @@ async function findUiTag(children: any, UiCompletions: any, result: any[] = [], 
 function findAllJsxElements(code: string) {
   const results: any = []
   try {
-    const ast = tsParser(code, { jsx: true, loc: true, range: true }) as any
+    const ast = getJsxAst(code) as any
     traverse(ast, (node: any) => {
       if (node.type === 'JSXElement') {
         results.push(node)
@@ -914,7 +955,11 @@ export function parserVine(code: string, position: vscode.Position) {
   return transformVine(vineFileCtx, position)
 }
 
-export function createVineFileCtx(sourceFileName: string, source: string) {
+export function createVineFileCtx(sourceFileName: string, source: string): VineFileCtxResult {
+  const key = `${sourceFileName}\0${source}`
+  if (vineCtxCache?.key === key)
+    return vineCtxCache.value
+
   const compilerCtx = createCompilerCtx({
     envMode: 'module',
     vueCompilerOptions: {
@@ -946,11 +991,13 @@ export function createVineFileCtx(sourceFileName: string, source: string) {
     },
   )
 
-  return {
+  const value = {
     vineFileCtx,
     vineCompileErrs,
     vineCompileWarns,
   }
+  vineCtxCache = { key, value }
+  return value
 }
 
 export function isSamePrefix(label: string, key: string) {
@@ -967,7 +1014,7 @@ const IMPORT_VUE_REG = /import\s+(\S+)\s+from\s+['"]([^"']+.vue)['"]/g
 export function getImportDeps(text: string) {
   const deps: Record<string, string> = {}
   try {
-    const { descriptor: { script, scriptSetup } } = parse(text)
+    const { descriptor: { script, scriptSetup } } = getVueSfcParseResult(text)
     let scriptContent = ''
     if (script && script.content)
       scriptContent += script.content
@@ -1255,7 +1302,7 @@ async function getTemplateParentElementName(url: string) {
   // 如果有defineProps或者props的忽律，交给v-component-prompter处理
   const {
     descriptor: { template, script, scriptSetup },
-  } = parse(code)
+  } = getVueSfcParseResult(code)
 
   if (script?.content && /^\s*props:\s*\{/.test(script.content))
     return

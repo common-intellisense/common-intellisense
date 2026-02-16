@@ -13,7 +13,7 @@ vi.mock('@vscode-use/utils', () => ({
   createFakeProgress: ({ callback }: any) => callback(() => {}, () => {}),
   getConfiguration: (k: string) => {
     if (k === 'common-intellisense.remoteUris')
-      return ['http://fake/remote.js']
+      return ['https://fake/remote.js']
     if (k === 'common-intellisense.localUris')
       return []
     if (k === 'common-intellisense.remoteNpmUris')

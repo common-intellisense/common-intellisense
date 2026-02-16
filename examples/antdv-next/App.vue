@@ -8,7 +8,7 @@ const size = ref<'small' | 'middle' | 'large'>('middle')
 
 <template>
   <a-space direction="vertical" :size="16">
-    <a-typography-title :level="4">
+    <a-typography-title level="any">
       Antdv Next Demo
     </a-typography-title>
     <a-button type="primary" @click="count++">

@@ -12,5 +12,6 @@
   "remoteUris": "远程 URI (Remote URIs)",
   "remoteNpmUris": "远程 NPM URI (Remote NPM URIs)",
   "localUris": "本地 URI (Local URIs)",
+  "trustedHosts": "HTTP 远程 URI 信任主机列表 (Trusted Hosts for HTTP remote URIs)",
   "cleanLocalCache": "清理本地 UI 缓存 (Clean Local UI Cache)"
 }

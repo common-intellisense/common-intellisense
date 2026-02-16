@@ -12,5 +12,6 @@
   "remoteUris": "Remote URIs",
   "remoteNpmUris": "Remote NPM URIs",
   "localUris": "Local URIs",
+  "trustedHosts": "Trusted Hosts for HTTP remote URIs",
   "cleanLocalCache": "Clean Local UI Cache"
 }

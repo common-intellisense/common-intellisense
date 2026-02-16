@@ -11,11 +11,46 @@ import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
 import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui/ui-find'
 import { fixedTagName, getAlias, getImportUiComponents, getIsShowSlots, getUiDeps } from './ui/ui-utils'
-import { detectSlots, findDynamicComponent, findRefs, getImportDeps, getReactRefsMap, parser, parserVine, registerCodeLensProviderFn, transformVue } from './parser'
+import { detectSlots, findDynamicComponent, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
 const defaultExclude = getConfiguration('common-intellisense.exclude')
 const filterId = createFilter(defaultExclude)
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
+let documentAnalysisCache: {
+  uri: string
+  version: number
+  code: string
+  uiDeps?: Record<string, string>
+  importDeps?: Record<string, string>
+} | null = null
+
+function getDocumentAnalysis(document: vscode.TextDocument) {
+  const uri = document.uri.toString()
+  const version = document.version
+  if (!documentAnalysisCache || documentAnalysisCache.uri !== uri || documentAnalysisCache.version !== version) {
+    documentAnalysisCache = {
+      uri,
+      version,
+      code: document.getText(),
+    }
+  }
+  return {
+    get code() {
+      return documentAnalysisCache!.code
+    },
+    getUiDeps() {
+      if (!documentAnalysisCache!.uiDeps)
+        documentAnalysisCache!.uiDeps = getUiDeps(documentAnalysisCache!.code) || {}
+      return documentAnalysisCache!.uiDeps
+    },
+    getImportDeps() {
+      if (!documentAnalysisCache!.importDeps)
+        documentAnalysisCache!.importDeps = getImportDeps(documentAnalysisCache!.code) || {}
+      return documentAnalysisCache!.importDeps
+    },
+  }
+}
+
 function isSkip() {
   const id = getActiveTextEditorLanguageId()
   return !id || !filter.includes(id)
@@ -317,11 +352,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const lan = getActiveTextEditorLanguageId()
     const isVue = (lan === 'vue' && result.template) || isVine()
-    const code = getActiveText()
-    if (!code)
-      return
-    const deps = isVue ? getImportDeps(code) : {}
-    const uiDeps = getUiDeps(code)
+    const analysis = getDocumentAnalysis(document)
+    const deps = isVue ? analysis.getImportDeps() : {}
+    const uiDeps = analysis.getUiDeps()
     const { character } = position
     const isPreEmpty = lineText[character - 1] === ' '
     const isValue = result.isValue
@@ -676,8 +709,18 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!lineText)
         return
 
-      const code = document.getText()
-      const uiDeps = getUiDeps(code)
+      const analysis = getDocumentAnalysis(document)
+      const code = analysis.code
+      const uiDeps = analysis.getUiDeps()
+      let parsedResult: any
+      let parsedResolved = false
+      const getParsedResult = () => {
+        if (!parsedResolved) {
+          parsedResolved = true
+          parsedResult = parser(code, position as any)
+        }
+        return parsedResult
+      }
       // word 修正
       if (lineText[range.end.character] === '.' || lineText[range.end.character] === '-') {
         let index = range.end.character
@@ -694,7 +737,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
       else if (lineText[range.start.character - 1] !== '<') {
-        const result = parser(code, position as any)
+        const result = getParsedResult()
         if (!result)
           return
         if (result.type === 'tag') {
@@ -784,12 +827,12 @@ export async function activate(context: vscode.ExtensionContext) {
       }
       // todo: 优化这里的条件,在 react 中, 也可以减少更多的处理步骤
       if (isVue()) {
-        const r = transformVue(code, position)
+        const r = getParsedResult()
         if (r) {
           if (!r.template)
             return
           if (word.includes('.value.') && r.type === 'script' && r.refs.length) {
-            const refsMap = findRefs(r.template, r.refs)
+            const refsMap = r.refsMap || {}
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = refsMap[key]
@@ -824,7 +867,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
       else if (isVine()) {
-        const r = parserVine(code, position)
+        const r = getParsedResult()
         if (r) {
           if (word.includes('.value.') && r.type === 'script' && Object.keys(r.refsMap || {}).length) {
             const index = word.indexOf('.value.')
@@ -859,10 +902,12 @@ export async function activate(context: vscode.ExtensionContext) {
       }
       else if (getActiveTextEditorLanguageId()?.includes('react')) {
         if (word.includes('.current.')) {
-          const r = getReactRefsMap()
+          const r = getParsedResult()
+          if (!r)
+            return
           const index = word.indexOf('.current.')
           const key = word.slice(0, index)
-          const refName = r.refsMap[key]
+          const refName = r.refsMap?.[key]
           if (!refName)
             return
 
@@ -901,7 +946,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return createHover(target.tableDocument)
 
       if (isVue()) {
-        const parsed = parser(code, position as any)
+        const parsed = getParsedResult()
         if (parsed?.type === 'tag' && parsed.tag) {
           const tag = fixedTagName(parsed.tag)
           const fallbackTarget = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])

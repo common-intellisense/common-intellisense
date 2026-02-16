@@ -122,7 +122,7 @@ export async function updateCompletions(
       const originName = `${uiName}${_version}`
       if (selectedUIs.length) {
         // 如果 selectedUIs 有值
-        if (!(originName in selectedUIs))
+        if (!selectedUIs.includes(originName))
           continue
       }
       originUisName.push(originName)

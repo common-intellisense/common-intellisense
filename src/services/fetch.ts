@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import vm from 'node:vm'
 import { fetchAndExtractPackage } from '@simon_he/fetch-npm'
 import { latestVersion } from '@simon_he/latest-version'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
@@ -15,11 +16,17 @@ const prefix = '@common-intellisense/'
 
 export const cacheFetch = new Map()
 export const localCacheUri = path.resolve(__dirname, 'mapping.json')
-let isCommonIntellisenseInProgress = false
-let isRemoteUrisInProgress = false
+const commonIntellisenseInFlight = new Map<string, Promise<any>>()
+let isRemoteHttpUrisInProgress = false
+let isRemoteNpmUrisInProgress = false
 let isLocalUrisInProgress = false
 const retry = 3
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
+const remoteUriCacheTTL = 5 * 60 * 1000
+const remoteExecTimeout = 1200
+const maxRemoteScriptSize = 8 * 1024 * 1024
+const blockedExportKeys = new Set(['__proto__', 'prototype', 'constructor'])
+const remoteUriFetchedAt = new Map<string, number>()
 const isZh = getLocale()?.includes('zh')
 
 function mergeComponentsWithTypeFallback(remote: any[], fallback: any[]) {
@@ -46,6 +53,68 @@ function mergeComponentsWithTypeFallback(remote: any[], fallback: any[]) {
     }
     return { ...item, props: mergedProps }
   })
+}
+
+function isTrustedRemoteUri(uri: string) {
+  try {
+    const target = new URL(uri)
+    if (target.protocol === 'https:')
+      return true
+    if (target.protocol !== 'http:')
+      return false
+
+    if (['localhost', '127.0.0.1', '::1'].includes(target.hostname))
+      return true
+
+    const trustedHosts = getConfiguration('common-intellisense.trustedHosts') as string[] | undefined
+    return Array.isArray(trustedHosts) && trustedHosts.includes(target.hostname)
+  }
+  catch {
+    return false
+  }
+}
+
+function evaluateRemoteModule(scriptContent: string, source: string) {
+  if (typeof scriptContent !== 'string' || !scriptContent.trim())
+    throw new Error(`Remote module is empty: ${source}`)
+  if (scriptContent.length > maxRemoteScriptSize)
+    throw new Error(`Remote module is too large: ${source}`)
+
+  const module = { exports: {} as Record<string, any> }
+  const sandbox: Record<string, any> = {
+    module,
+    exports: module.exports,
+    require: undefined,
+    process: undefined,
+    global: undefined,
+    Function: undefined,
+    eval: undefined,
+  }
+  const context = vm.createContext(sandbox)
+  const script = new vm.Script(scriptContent, { filename: source })
+  script.runInContext(context, { timeout: remoteExecTimeout })
+  return module.exports
+}
+
+function appendReducedExports(target: Record<string, any>, moduleExports: Record<string, any>, localeZh: boolean, source: string) {
+  for (const key in moduleExports) {
+    if (blockedExportKeys.has(key)) {
+      logger.error(isZh ? `已跳过不安全导出 key: ${key} (${source})` : `Skipped unsafe export key: ${key} (${source})`)
+      continue
+    }
+    const handler = moduleExports[key]
+    if (typeof handler !== 'function') {
+      logger.error(isZh ? `已跳过非函数导出 key: ${key} (${source})` : `Skipped non-function export: ${key} (${source})`)
+      continue
+    }
+
+    if (key.endsWith('Components')) {
+      target[key] = () => componentsReducer(handler(localeZh))
+    }
+    else {
+      target[key] = () => propsReducer(handler())
+    }
+  }
 }
 
 export const getLocalCache = new Promise((resolve) => {
@@ -104,97 +173,108 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
   }
   logger.info(isZh ? `找到 ${name} 的最新版本: ${version}` : `Found the latest version of ${name}: ${version}`)
   const key = `${name}@${version}`
-  // 当版本变更是否要删除相同 name 下的其它版本缓存？
-  if (isCommonIntellisenseInProgress)
-    return
+  const inFlightTask = commonIntellisenseInFlight.get(key)
+  if (inFlightTask)
+    return inFlightTask
 
-  let resolver: () => void = () => { }
-  let rejecter: (msg?: string) => void = () => { }
-  isCommonIntellisenseInProgress = true
-  if (!cacheFetch.has(key)) {
-    createFakeProgress({
-      title: isZh ? `正在拉取远程的 ${tag}` : `Pulling remote ${tag}`,
-      message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
-      callback: (resolve, reject) => {
-        resolver = resolve
-        rejecter = reject
-      },
-    })
-  }
+  const task = (async () => {
+    let resolver: () => void = () => { }
+    let rejecter: (msg?: string) => void = () => { }
+    if (!cacheFetch.has(key)) {
+      createFakeProgress({
+        title: isZh ? `正在拉取远程的 ${tag}` : `Pulling remote ${tag}`,
+        message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
+        callback: (resolve, reject) => {
+          resolver = resolve
+          rejecter = reject
+        },
+      })
+    }
 
-  try {
-    let scriptContent = ''
-    if (cacheFetch.has(key)) {
-      logger.info(isZh ? `已缓存的 ${key}` : `cachedKey: ${key}`)
-      scriptContent = cacheFetch.get(key)
-    }
-    else {
-      logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
-      scriptContent = await Promise.any([
-        fetchAndExtractPackage({
-          name,
-          dist: 'index.cjs',
-          retry,
-          logger,
-        }),
-        fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
-      ])
-    }
-    const module: any = {}
-    const runModule = new Function('module', scriptContent)
-    if (scriptContent)
-      cacheFetch.set(key, scriptContent)
-    runModule(module)
-    const moduleExports = module.exports
-    const result: any = {}
-    let fallbackRaw: any[] | undefined
-    if (options?.pkgName && options?.resolveFrom) {
-      try {
-        const fallback = await fetchFromTypes({ pkgName: options.pkgName, uiName, resolveFrom: options.resolveFrom })
-        const rawKey = `${uiName}Raw`
-        fallbackRaw = fallback?.[rawKey]?.()
-      }
-      catch {}
-    }
-    for (const key in moduleExports) {
-      const v = moduleExports[key]
-      if (key.endsWith('Components')) {
-        const lib = key.slice(0, -'Components'.length)
-        const userPrefix = getPrefix?.() as Record<string, string> | undefined
-        let components = componentsReducer(v(isZh))
-
-        if (userPrefix && userPrefix[lib]) {
-          const customPrefix = userPrefix[lib]
-          components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
-        }
-        result[key] = () => components
+    try {
+      let scriptContent = ''
+      if (cacheFetch.has(key)) {
+        logger.info(isZh ? `已缓存的 ${key}` : `cachedKey: ${key}`)
+        scriptContent = cacheFetch.get(key)
       }
       else {
-        result[key] = () => {
-          let data = v()
-          if (Array.isArray(fallbackRaw) && fallbackRaw.length)
-            data = mergeComponentsWithTypeFallback(data, fallbackRaw)
-          return propsReducer(data)
+        logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
+        scriptContent = await Promise.any([
+          fetchAndExtractPackage({
+            name,
+            dist: 'index.cjs',
+            retry,
+            logger,
+          }),
+          fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
+        ])
+      }
+      if (scriptContent)
+        cacheFetch.set(key, scriptContent)
+      const moduleExports = evaluateRemoteModule(scriptContent, key)
+      const result: any = {}
+      let fallbackRaw: any[] | undefined
+      if (options?.pkgName && options?.resolveFrom) {
+        try {
+          const fallback = await fetchFromTypes({ pkgName: options.pkgName, uiName, resolveFrom: options.resolveFrom })
+          const rawKey = `${uiName}Raw`
+          fallbackRaw = fallback?.[rawKey]?.()
+        }
+        catch {}
+      }
+      for (const key in moduleExports) {
+        if (blockedExportKeys.has(key)) {
+          logger.error(isZh ? `已跳过不安全导出 key: ${key} (${name})` : `Skipped unsafe export key: ${key} (${name})`)
+          continue
+        }
+        const v = moduleExports[key]
+        if (typeof v !== 'function') {
+          logger.error(isZh ? `已跳过非函数导出 key: ${key} (${name})` : `Skipped non-function export: ${key} (${name})`)
+          continue
+        }
+        if (key.endsWith('Components')) {
+          const lib = key.slice(0, -'Components'.length)
+          const userPrefix = getPrefix?.() as Record<string, string> | undefined
+          let components = componentsReducer(v(isZh))
+
+          if (userPrefix && userPrefix[lib]) {
+            const customPrefix = userPrefix[lib]
+            components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
+          }
+          result[key] = () => components
+        }
+        else {
+          result[key] = () => {
+            let data = v()
+            if (Array.isArray(fallbackRaw) && fallbackRaw.length)
+              data = mergeComponentsWithTypeFallback(data, fallbackRaw)
+            return propsReducer(data)
+          }
         }
       }
+      resolver()
+      return result
     }
-    resolver()
-    isCommonIntellisenseInProgress = false
-    return result
+    catch (error) {
+      rejecter(String(error))
+      logger.error(String(error))
+      // 尝试从本地获取
+      message.error(isZh ? `从远程拉取 UI 包失败 ☹️，请检查代理` : `Failed to pull UI package from remote ☹️, please check the proxy`)
+      const fallback = await fetchFromTypes({ pkgName: options?.pkgName || '', uiName, resolveFrom: options?.resolveFrom })
+      if (fallback) {
+        logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
+        return fallback
+      }
+      return fetchFromLocalUris()
+      // todo：增加重试机制
+    }
+  })()
+  commonIntellisenseInFlight.set(key, task)
+  try {
+    return await task
   }
-  catch (error) {
-    rejecter(String(error))
-    logger.error(String(error))
-    isCommonIntellisenseInProgress = false
-    // 尝试从本地获取
-    message.error(isZh ? `从远程拉取 UI 包失败 ☹️，请检查代理` : `Failed to pull UI package from remote ☹️, please check the proxy`)
-    const fallback = await fetchFromTypes({ pkgName: options?.pkgName || '', uiName, resolveFrom: options?.resolveFrom })
-    if (fallback) {
-      logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
-      return fallback
-    }
-    return fetchFromLocalUris()
-    // todo：增加重试机制
+  finally {
+    commonIntellisenseInFlight.delete(key)
   }
 }
 
@@ -207,23 +287,29 @@ export async function fetchFromRemoteUrls() {
 
   const result: any = {}
 
-  if (isRemoteUrisInProgress)
+  if (isRemoteHttpUrisInProgress)
     return
 
-  const fixedUris = (await Promise.all(uris.map(async (name) => {
-    const key = `remote-uri:${name}`
-    if (tempCache.has(key))
-      return ''
-    tempCache.set(key, true)
-    return name
-  }))).filter(Boolean)
+  const now = Date.now()
+  const plans = uris.map((uri) => {
+    if (!isTrustedRemoteUri(uri)) {
+      logger.error(isZh
+        ? `已跳过不受信任的 remoteUri: ${uri}（仅允许 https，或 localhost/127.0.0.1 的 http；可通过 trustedHosts 放行）`
+        : `Skipped untrusted remoteUri: ${uri} (only https, or localhost/127.0.0.1 http; use trustedHosts to allow)`)
+      return null
+    }
+    const cached = cacheFetch.has(uri) ? cacheFetch.get(uri) : ''
+    const lastFetchedAt = remoteUriFetchedAt.get(uri) || 0
+    const needsRefresh = !cached || now - lastFetchedAt >= remoteUriCacheTTL
+    return { uri, cached, needsRefresh }
+  }).filter(Boolean) as Array<{ uri: string, cached: string, needsRefresh: boolean }>
 
-  if (!fixedUris.length)
-    return
+  if (!plans.length)
+    return result
 
   let resolver: () => void = () => { }
   let rejecter: (msg?: string) => void = () => { }
-  isRemoteUrisInProgress = true
+  isRemoteHttpUrisInProgress = true
   createFakeProgress({
     title: isZh ? `正在拉取远程文件` : 'Pulling remote files',
     message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
@@ -234,29 +320,30 @@ export async function fetchFromRemoteUrls() {
   })
   logger.info(isZh ? '从 remoteUris 中拉取数据...' : 'Fetching data from remoteUris...')
   try {
-    const scriptContents = await Promise.all(fixedUris.map(async (uri) => {
+    const scriptContents = await Promise.all(plans.map(async ({ uri, cached, needsRefresh }) => {
+      if (!needsRefresh && cached)
+        return [uri, cached] as const
+
       logger.info(isZh ? `正在加载 ${uri}` : `Loading ${uri}`)
-      return [uri, cacheFetch.has(uri) ? cacheFetch.get(uri) : await ofetch(uri, { responseType: 'text', retry, timeout })]
+      try {
+        const fetched = await ofetch(uri, { responseType: 'text', retry, timeout })
+        if (fetched)
+          cacheFetch.set(uri, fetched)
+        remoteUriFetchedAt.set(uri, Date.now())
+        return [uri, fetched] as const
+      }
+      catch (error) {
+        if (cached) {
+          logger.error(isZh ? `刷新失败，使用缓存: ${uri}` : `Refresh failed, using cached module: ${uri}`)
+          remoteUriFetchedAt.set(uri, Date.now())
+          return [uri, cached] as const
+        }
+        throw error
+      }
     }))
     scriptContents.forEach(([uri, scriptContent]) => {
-      const module: any = {}
-      const runModule = new Function('module', scriptContent)
-      if (scriptContent)
-        cacheFetch.set(uri, scriptContent)
-      runModule(module)
-      const moduleExports = module.exports
-      const temp: any = {}
-      const isZh = getLocale()!.includes('zh')
-      for (const key in moduleExports) {
-        const v = moduleExports[key]
-        if (key.endsWith('Components')) {
-          temp[key] = () => componentsReducer(v(isZh))
-        }
-        else {
-          temp[key] = () => propsReducer(v())
-        }
-      }
-      Object.assign(result, temp)
+      const moduleExports = evaluateRemoteModule(scriptContent, uri)
+      appendReducedExports(result, moduleExports, getLocale()!.includes('zh'), uri)
     })
     resolver()
   }
@@ -264,7 +351,7 @@ export async function fetchFromRemoteUrls() {
     rejecter(String(error))
     logger.error(String(error))
   }
-  isRemoteUrisInProgress = false
+  isRemoteHttpUrisInProgress = false
 
   return result
 }
@@ -277,7 +364,7 @@ export async function fetchFromRemoteNpmUrls() {
 
   const result: any = {}
 
-  if (isRemoteUrisInProgress)
+  if (isRemoteNpmUrisInProgress)
     return
 
   const fixedUris = (await Promise.all(uris.map(async (item) => {
@@ -307,14 +394,14 @@ export async function fetchFromRemoteNpmUrls() {
       return ''
     tempCache.set(key, version)
     return [name, version]
-  }))).filter(Boolean) as [string, string, undefined | string][]
+  }))).filter(Boolean) as [string, string][]
 
   if (!fixedUris.length)
     return
 
   let resolver: () => void = () => { }
   let rejecter: (msg?: string) => void = () => { }
-  isRemoteUrisInProgress = true
+  isRemoteNpmUrisInProgress = true
 
   createFakeProgress({
     title: isZh ? `正在拉取远程 NPM 文件` : 'Pulling remote NPM files',
@@ -330,7 +417,7 @@ export async function fetchFromRemoteNpmUrls() {
     (await Promise.all(fixedUris.map(async ([name, version]) => {
       const key = `${name}@${version}`
       if (cacheFetch.has(key))
-        return cacheFetch.get(key)
+        return [key, cacheFetch.get(key)] as const
 
       const scriptContent = await Promise.any([
         fetchAndExtractPackage({ name, dist: 'index.cjs', logger }),
@@ -339,24 +426,10 @@ export async function fetchFromRemoteNpmUrls() {
 
       if (scriptContent)
         cacheFetch.set(key, scriptContent)
-      return scriptContent
-    }))).forEach((scriptContent) => {
-      const module: any = {}
-      const runModule = new Function('module', scriptContent)
-      runModule(module)
-      const moduleExports = module.exports
-      const temp: any = {}
-      const isZh = getLocale()!.includes('zh')
-      for (const key in moduleExports) {
-        const v = moduleExports[key]
-        if (key.endsWith('Components')) {
-          temp[key] = () => componentsReducer(v(isZh))
-        }
-        else {
-          temp[key] = () => propsReducer(v())
-        }
-      }
-      Object.assign(result, temp)
+      return [key, scriptContent] as const
+    }))).forEach(([key, scriptContent]) => {
+      const moduleExports = evaluateRemoteModule(scriptContent, key)
+      appendReducedExports(result, moduleExports, getLocale()!.includes('zh'), key)
     })
     resolver()
   }
@@ -364,7 +437,7 @@ export async function fetchFromRemoteNpmUrls() {
     rejecter(String(error))
     logger.error(String(error))
   }
-  isRemoteUrisInProgress = false
+  isRemoteNpmUrisInProgress = false
 
   return result
 }

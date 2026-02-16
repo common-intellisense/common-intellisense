@@ -168,6 +168,11 @@
           "type": "array",
           "default": [],
           "description": "%localUris%"
+        },
+        "common-intellisense.trustedHosts": {
+          "type": "array",
+          "default": [],
+          "description": "%trustedHosts%"
         }
       }
     },
