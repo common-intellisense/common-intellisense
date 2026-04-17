@@ -30,7 +30,6 @@ vi.mock('vscode', () => ({
 
 // Prevent heavy runtime modules from executing during import
 vi.mock('@simon_he/translate', () => ({ default: () => async () => ['ok'] }))
-vi.mock('get-lib-version', () => ({ getLibVersion: async () => '1.0.0' }))
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: () => {}, error: () => {} } }))
 
 describe('getIntellisenseConfig (simple)', () => {
