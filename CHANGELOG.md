@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
 - Added unit tests covering suffix-match behavior and a pagination lookup test.
 - Migrate project ignore globs from `.eslintignore` into `eslint.config.js` `ignores` to remove deprecation warnings.
 - Remove several thin wrapper files and unused test helpers; centralize imports to inner modules (`./services/fetch`, `./ui/*`).
+- Fix issue #38 by resolving installed package versions from local package manifests instead of shelling out to npm/pnpm/yarn/bun at runtime.
+- Add regression tests for package version resolution, including missing-package retries and cache refresh behavior.
 
 ### Notes
 

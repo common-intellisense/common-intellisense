@@ -5,10 +5,10 @@ import { createLog, getActiveText, getCurrentFileUrl, getRootPath, watchFile } f
 import { findUp } from 'find-up'
 import { UINames as configUINames } from '../constants'
 import { cacheFetch, fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, localCacheUri } from '../services/fetch'
+import { resolveInstalledPackageVersion } from '../services/package-version'
 import { formatUIName, getAlias, getIsShowSlots, getPrefix, getSelectedUIs, getUiDeps } from './ui-utils'
 import { cacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../services/ui-cache'
 import path from 'node:path'
-import { getLibVersion } from 'get-lib-version'
 import { clearTypeCache } from '../type-extract/cache'
 
 export const logger = createLog('common-intellisense')
@@ -324,7 +324,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
         else {
           // resolve from the package that declares the dependency if possible
           const resolveFrom = depSource[key] || pkgDir || path.resolve(pkg, '..')
-          fixedVersion = await getLibVersion(key, resolveFrom)
+          fixedVersion = await resolveInstalledPackageVersion(key, resolveFrom)
         }
       }
       if (!fixedVersion) {

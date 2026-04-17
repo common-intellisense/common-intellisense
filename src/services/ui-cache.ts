@@ -1,4 +1,5 @@
 import type { ComponentsConfig, PropsConfig, Uis } from '../ui/types'
+import { clearPackageVersionCache } from './package-version'
 
 export const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
 export const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
@@ -10,6 +11,7 @@ export function clearUICache() {
   pkgUIConfigMap.clear()
   urlCache.clear()
   rootPkgCache.clear()
+  clearPackageVersionCache()
 }
 
 export function getCacheMap() {

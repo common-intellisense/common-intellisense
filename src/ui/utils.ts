@@ -5,8 +5,8 @@ import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from
 import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, getRootPath, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { translate } from '../translate'
+import { resolveInstalledPackageVersion } from '../services/package-version'
 import { logger } from '../ui/ui-find'
-import { getLibVersion } from 'get-lib-version'
 
 export interface PropsOptions {
   uiName: string
@@ -87,7 +87,7 @@ export function propsReducer(options: PropsOptions) {
     const isZh = getLocale().includes('zh')
     if (!localVersion) {
       // 从本地安装去获取版本号，如果获取不到根据 uiName 后缀获取版本号，再找不到就是 0.0.0
-      localVersion = await getLibVersion(lib, cwd) || uiName.match(/\d+(\.\d+\.\d+)?/)?.[0] || '0.0.0'
+      localVersion = await resolveInstalledPackageVersion(lib, cwd) || uiName.match(/\d+(\.\d+\.\d+)?/)?.[0] || '0.0.0'
     }
 
     if (item.version) {
