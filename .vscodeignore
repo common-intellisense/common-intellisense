@@ -5,3 +5,11 @@ test
 .vscode
 assets
 scripts
+examples
+.husky
+.gitignore
+.eslintcache
+eslint.config.js
+pnpm*.yaml
+tsup.config.ts
+vitest.config.mjs
