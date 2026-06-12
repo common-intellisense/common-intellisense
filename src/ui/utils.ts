@@ -115,7 +115,7 @@ export function propsReducer(options: PropsOptions) {
             const value = (item.props as any)[key]
             // value.version 只提取版本号
             const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            if (version && compareVersion(version, localVersion!) === -1) {
+            if (version && compareVersion(version, localVersion!) === 1) {
               return result
             }
             return { ...result, [key]: value }
@@ -257,8 +257,8 @@ export function propsReducer(options: PropsOptions) {
         else {
           content = `${key}=""`
 
-          if (value.type.includes('/'))
-            snippet = `${key}="\${1|${value.type.split('/').map((i: string) => i.replace(/['`\s]/g, '').replace(/,/g, '\\,')).join(',')}|}"`
+          if (value.type?.includes('/'))
+            snippet = `${key}="\${1|${value.type.split('/').map((i: string) => i.replace(/['"`\s]/g, '').replace(/,/g, '\\,')).filter((i: string) => i.length).join(',')}|}"`
           else
             snippet = `${key}="\${1}"`
         }
@@ -334,7 +334,7 @@ export function propsReducer(options: PropsOptions) {
         const filterEvents = localVersion
           ? item.events.filter((event) => {
               const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
-              return !(version && compareVersion(version, localVersion!) === -1)
+              return !(version && compareVersion(version, localVersion!) === 1)
             })
           : item.events
 
@@ -408,7 +408,7 @@ export function propsReducer(options: PropsOptions) {
         ? item.methods.filter((item) => {
           // 过滤在某个版本才增加的新方法
             const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === -1)
+            return !(version && compareVersion(version, localVersion!) === 1)
           })
         : item.methods
       methods.push(...filterMethods.map((method) => {
@@ -444,7 +444,7 @@ export function propsReducer(options: PropsOptions) {
         ? item.exposed.filter((item) => {
           // 过滤在某个版本才增加的新方法
             const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === -1)
+            return !(version && compareVersion(version, localVersion!) === 1)
           })
         : item.exposed
       exposed.push(...filterExposed.map((expose) => {
@@ -480,7 +480,7 @@ export function propsReducer(options: PropsOptions) {
         ? item.slots.filter((item) => {
           // 过滤在某个版本才增加的新方法
             const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === -1)
+            return !(version && compareVersion(version, localVersion!) === 1)
           })
         : item.slots
       filterSlots.forEach((slot) => {
