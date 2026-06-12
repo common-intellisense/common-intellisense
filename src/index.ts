@@ -479,7 +479,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (item.params?.length) {
               documentation.appendCodeblock('\n')
               item.params.forEach((i) => {
-                documentation.appendMarkdown(`### 🌟 ${i.name}: \n`)
+                documentation.appendMarkdown(`**🌟 ${i.name}** \n`)
                 documentation.appendMarkdown(`- ${isZh ? '类型' : 'type'}: ${i.type}\n`)
                 documentation.appendMarkdown(`- ${isZh ? '描述' : 'description'}: ${isZh ? i.description_zh : i.description}\n`)
                 documentation.appendMarkdown(`- ${isZh ? '默认值' : 'default'}: ${i.default}\n`)
@@ -792,9 +792,9 @@ export async function activate(context: vscode.ExtensionContext) {
           if (!params)
             return
           const md = createMarkdownString()
-          md.appendMarkdown(`## ${target.lib} [${targetSlot.name}]\n`)
-          md.appendMarkdown(`#### ${isZh ? '说明' : 'description'}: ${isZh ? targetSlot.description_zh : targetSlot.description}\n`)
-          md.appendMarkdown(`#### ${isZh ? '插槽 props' : 'slotProps'}: \n`)
+          md.appendMarkdown(`**${target.lib} [${targetSlot.name}]**\n`)
+          md.appendMarkdown(`- ${isZh ? '说明' : 'description'}: ${isZh ? targetSlot.description_zh : targetSlot.description}\n`)
+          md.appendMarkdown(`**${isZh ? '插槽 props' : 'slotProps'}:** \n`)
           const typeString = `interface SlotProps ${params}`
           md.appendCodeblock(prettierType(typeString), 'typescript')
           return createHover(md)
@@ -823,7 +823,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const detail = getHoverAttribute(completions, propName)
         if (!detail)
           return
-        return createHover(`## Details \n\n${detail}`)
+        return createHover(`**Details** \n\n${detail}`)
       }
       // todo: 优化这里的条件,在 react 中, 也可以减少更多的处理步骤
       if (isVue()) {
@@ -845,7 +845,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
                 let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
                 if (i !== 0) {
-                  content = content.replace(/##[^\]\n]*[\]\n]/, '')
+                  content = stripLeadingMarkdownTitle(content)
                 }
                 groupMd.appendMarkdown(content)
                 groupMd.appendMarkdown('\n')
@@ -881,7 +881,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m: any, i: number) => {
                 let content = m.documentation.value
                 if (content && i !== 0) {
-                  content = content.replace(/##[^\]\n]*[\]\n]/, '')
+                  content = stripLeadingMarkdownTitle(content)
                 }
                 groupMd.appendMarkdown(content)
                 groupMd.appendMarkdown('\n')
@@ -917,7 +917,7 @@ export async function activate(context: vscode.ExtensionContext) {
               ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
               let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
               if (i !== 0) {
-                content = content.replace(/##[^\]\n]*[\]\n]/, '')
+                content = stripLeadingMarkdownTitle(content)
               }
               groupMd.appendMarkdown(content)
               groupMd.appendMarkdown('\n')
@@ -960,6 +960,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   deactivateUICache()
+}
+
+function stripLeadingMarkdownTitle(content: string) {
+  return content.replace(/^(?:##[^\n]*|\*\*[^\n]+?\*\*)\n*/, '')
 }
 
 function getEffectWord(preText: string) {

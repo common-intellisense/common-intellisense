@@ -4,12 +4,22 @@ import { vi } from 'vitest'
 vi.mock('@vscode-use/utils', () => ({
   createCompletionItem: (options: any) => ({ ...options }),
   createHover: (documentation: any) => ({ documentation }),
-  createMarkdownString: () => ({
-    isTrusted: false,
-    supportHtml: false,
-    appendMarkdown: () => {},
-    appendCodeblock: () => {},
-  }),
+  createMarkdownString: () => {
+    const markdown = {
+      value: '',
+      isTrusted: false,
+      supportHtml: false,
+      appendMarkdown(value: string) {
+        markdown.value += value
+        return markdown
+      },
+      appendCodeblock(value: string, language = '') {
+        markdown.value += `\n\`\`\`${language}\n${value}\n\`\`\`\n`
+        return markdown
+      },
+    }
+    return markdown
+  },
   createRange: () => ({}),
   getActiveText: vi.fn(() => ''),
   getActiveTextEditor: () => null,
@@ -54,10 +64,23 @@ vi.mock('@vscode-use/utils', () => ({
 // Mock 'vscode' to avoid needing the real VSCode runtime in unit tests.
 vi.mock('vscode', () => {
   class MarkdownString {
+    value = ''
     isTrusted = false
     supportHtml = false
-    appendMarkdown(_s: string) {}
-    appendCodeblock(_s: string, _lang?: string) {}
+
+    constructor(value = '') {
+      this.value = value
+    }
+
+    appendMarkdown(value: string) {
+      this.value += value
+      return this
+    }
+
+    appendCodeblock(value: string, language = '') {
+      this.value += `\n\`\`\`${language}\n${value}\n\`\`\`\n`
+      return this
+    }
   }
   class Range {}
   return {
