@@ -133,36 +133,36 @@ export function propsReducer(options: PropsOptions) {
         documentation.supportHtml = true
         const detail = []
 
-        detail.push(`## ${uiName} [${item.name}]`)
+        detail.push(`**${uiName} [${item.name}]**`)
 
         if (value.default !== undefined && value.default !== '') {
           value.default = String(value.default)
-          detail.push(`#### 💎 ${isZh ? '默认值' : 'default'}:    ***\`${value.default.replace(/[`\n]/g, '')}\`***`)
+          detail.push(`- 💎 ${isZh ? '默认值' : 'default'}:    ***\`${value.default.replace(/[`\n]/g, '')}\`***`)
         }
 
         if (value.version) {
           if (isZh)
-            detail.push(`#### 🚀 版本:    ***\`${value.version}\`***`)
+            detail.push(`- 🚀 版本:    ***\`${value.version}\`***`)
           else
-            detail.push(`#### 🚀 version:    ***\`${value.version}\`***`)
+            detail.push(`- 🚀 version:    ***\`${value.version}\`***`)
         }
 
         if (value.platform) {
-          detail.push(`#### 🚀 平台:   ***\`${value.platform}\`***`)
+          detail.push(`- 🚀 平台:   ***\`${value.platform}\`***`)
         }
 
         if (value.description) {
           if (isZh)
-            detail.push(`#### 🔦 说明:    ***\`${value.description_zh || value.description}\`***`)
+            detail.push(`- 🔦 说明:    ***\`${value.description_zh || value.description}\`***`)
           else
-            detail.push(`#### 🔦 description:    ***\`${value.description}\`***`)
+            detail.push(`- 🔦 description:    ***\`${value.description}\`***`)
         }
 
         if (value.type) {
           if (Array.isArray(value.type)) {
             value.type = value.type.join(' / ')
           }
-          detail.push(`#### 💡 ${isZh ? '类型' : 'type'}:    ***\`${value.type.replace(/`/g, '')}\`***`)
+          detail.push(`- 💡 ${isZh ? '类型' : 'type'}:    ***\`${value.type.replace(/`/g, '')}\`***`)
         }
 
         documentation.appendMarkdown(detail.join('\n\n'))
@@ -342,20 +342,20 @@ export function propsReducer(options: PropsOptions) {
           const detail: string[] = []
           const { name, description, params, description_zh, platform } = events
 
-          detail.push(`## ${uiName} [${item.name}]`)
+          detail.push(`**${uiName} [${item.name}]**`)
 
           if (description) {
             if (isZh)
-              detail.push(`#### 🔦 说明:    ***\`${description_zh || description}\`***`)
+              detail.push(`- 🔦 说明:    ***\`${description_zh || description}\`***`)
             else
-              detail.push(`#### 🔦 description:    ***\`${description}\`***`)
+              detail.push(`- 🔦 description:    ***\`${description}\`***`)
           }
 
           if (platform)
-            detail.push(`#### 🚀 平台:    ***\`${platform}\`***`)
+            detail.push(`- 🚀 平台:    ***\`${platform}\`***`)
 
           if (params)
-            detail.push(`#### 🔮 ${isZh ? '回调参数' : 'callback parameters'}:    ***\`${params}\`***`)
+            detail.push(`- 🔮 ${isZh ? '回调参数' : 'callback parameters'}:    ***\`${params}\`***`)
 
           let snippet
           let content
@@ -418,10 +418,10 @@ export function propsReducer(options: PropsOptions) {
         const detail: string[] = []
         const { name, description, params, description_zh } = method
 
-        detail.push(`## ${uiName} [${item.name}]`)
+        detail.push(`**${uiName} [${item.name}]**`)
 
         if (name)
-          detail.push(`\n#### 💨 ${isZh ? '方法' : 'method'} ${name}:`)
+          detail.push(`\n- 💨 ${isZh ? '方法' : 'method'} ${name}:`)
 
         if (description) {
           if (isZh)
@@ -454,10 +454,10 @@ export function propsReducer(options: PropsOptions) {
         const details: string[] = []
         const { name, description, detail, description_zh } = expose
 
-        details.push(`## ${uiName} [${item.name}]`)
+        details.push(`**${uiName} [${item.name}]**`)
 
         if (name)
-          details.push(`\n#### 💨 ${isZh ? '导出' : 'exposed'} ${name}:`)
+          details.push(`\n- 💨 ${isZh ? '导出' : 'exposed'} ${name}:`)
 
         if (description) {
           if (isZh)
@@ -506,7 +506,7 @@ export function propsReducer(options: PropsOptions) {
       documentation.isTrusted = true
       documentation.supportHtml = true
       const details: string[] = []
-      let text = `## ${uiName} [${item.name}]`
+      let text = `**${uiName} [${item.name}]**`
       if (item.link) {
         text += `\`            \`[🔗 ${isZh ? '文档链接' : 'Documentation link'}](command:intellisense.openDocument?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D)\`   \`[🔗 ${isZh ? '外部链接' : 'External document links'}](command:intellisense.openDocumentExternal?%7B%22link%22%3A%22${encodeURIComponent(isZh ? (item?.link_zh || item.link) : item.link)}%22%7D) \`            \` [🌟 Star!](https://github.com/common-intellisense/common-intellisense) \`            \` [❤️ Sponsor!](https://github.com/Simon-He95/sponsor)`
       }
@@ -514,9 +514,9 @@ export function propsReducer(options: PropsOptions) {
 
       if (item.props) {
         if (isZh)
-          details.push('### 参数:')
+          details.push('**参数:**')
         else
-          details.push('### Props:')
+          details.push('**Props:**')
 
         const tableHeader = `| ${isZh ? '属性名' : 'Name'} | ${isZh ? '描述' : 'Description'} | ${isZh ? '类型' : 'Type'} | ${isZh ? '默认值' : 'Default'} |`
         const tableDivider = '| --- | --- | --- | --- |'
@@ -539,9 +539,9 @@ export function propsReducer(options: PropsOptions) {
 
       if (item.methods && item.methods.length) {
         if (isZh)
-          details.push('## 方法:')
+          details.push('**方法:**')
         else
-          details.push('## Methods:')
+          details.push('**Methods:**')
 
         const tableHeader = `| ${isZh ? '方法名' : 'Method Name'} | ${isZh ? '描述' : 'Description'} | ${isZh ? '参数' : 'Params'} |`
         const tableDivider = '| --- | --- | --- |'
@@ -563,9 +563,9 @@ export function propsReducer(options: PropsOptions) {
 
       if (item.events && item.events.length) {
         if (isZh)
-          details.push('## 事件:')
+          details.push('**事件:**')
         else
-          details.push('## Events:')
+          details.push('**Events:**')
 
         const tableHeader = `| ${isZh ? '事件名' : 'Event Name'} | ${isZh ? '描述' : 'Description'} | ${isZh ? '参数' : 'Params'} |`
         const tableDivider = '| --- | --- | --- |'
@@ -587,9 +587,9 @@ export function propsReducer(options: PropsOptions) {
 
       if (item.slots && item.slots.length) {
         if (isZh)
-          details.push('## 插槽:')
+          details.push('**插槽:**')
         else
-          details.push('## Slots:')
+          details.push('**Slots:**')
 
         const tableHeader = `| ${isZh ? '插槽名' : 'Slot Name'} | ${isZh ? '描述' : 'Description'} |`
         const tableDivider = '| --- | --- |'
@@ -697,14 +697,14 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           documentation.isTrusted = true
           documentation.supportHtml = true
 
-          documentation.appendMarkdown(`#### 🍀 ${lib} ${detail}\n`)
+          documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
           if (typeof content === 'object' && content.suggestions?.length) {
-            documentation.appendMarkdown(`\n#### 👗 ${isZh ? '常用搭配' : 'Common collocation'} \n`)
+            documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
             // FIXME: suggestions的Item有对象形式的vant4里面,里面的文案要怎么展示
             documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${item}`).join('\n')}\n`)
           }
           const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
-          documentation.appendMarkdown(`#### 🌰 ${isZh ? '例子' : 'example'}\n`)
+          documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
           // FIXME: 要求输入数组，但是demo类型是字符串，但是都通过JSON.stringify处理了，所以这里转成[demo]?
           const params = setCommandParams(demo as any)
@@ -747,13 +747,13 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           const documentation = new vscode.MarkdownString()
           documentation.isTrusted = true
           documentation.supportHtml = true
-          documentation.appendMarkdown(`#### 🍀 ${lib} ${detail}\n`)
+          documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
           if (typeof content === 'object' && content.suggestions?.length) {
-            documentation.appendMarkdown(`\n#### 👗 ${isZh ? '常用搭配' : 'Common collocation'} \n`)
+            documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
             documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
           }
           const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
-          documentation.appendMarkdown(`#### 🌰 ${isZh ? '例子' : 'example'}\n`)
+          documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
           // FIXME: 同上
           const params = setCommandParams(demo as any)
@@ -803,13 +803,13 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       const documentation = new vscode.MarkdownString()
       documentation.isTrusted = true
       documentation.supportHtml = true
-      documentation.appendMarkdown(`#### 🍀 ${lib} ${detail}\n`)
+      documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
       if (typeof content === 'object' && content.suggestions?.length) {
-        documentation.appendMarkdown(`\n#### 👗 ${isZh ? '常用搭配' : 'Common collocation'} \n`)
+        documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
         documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
       }
       const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
-      documentation.appendMarkdown(`#### 🌰 ${isZh ? '例子' : 'example'}\n`)
+      documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
       documentation.appendCodeblock(demo, 'html')
       // FIXME: setCommandParams要求 string[]
       const params = setCommandParams(demo as any)
