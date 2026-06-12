@@ -763,8 +763,9 @@ export function registerCodeLensProviderFn() {
             else if (c.tag && c.props) {
               for (const p of c.props) {
                 if (p.name === 'slot') {
-                  const slotName = p.arg ? p.arg.content : p.value.content
-                  filters.push(slotName)
+                  const slotName = p.arg?.content || p.value?.content
+                  if (slotName)
+                    filters.push(slotName)
                   break
                 }
               }
@@ -772,8 +773,9 @@ export function registerCodeLensProviderFn() {
             else if (c.codegenNode?.tag && c.codegenNode.props) {
               for (const p of c.codegenNode.props) {
                 if (p.name === 'slot') {
-                  const slotName = p.arg ? p.arg.content : p.value.content
-                  filters.push(slotName)
+                  const slotName = p.arg?.content || p.value?.content
+                  if (slotName)
+                    filters.push(slotName)
                   break
                 }
               }

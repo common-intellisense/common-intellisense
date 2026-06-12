@@ -2,14 +2,22 @@ import { vi } from 'vitest'
 
 // Mock @vscode-use/utils to prevent loading the real extension helpers
 vi.mock('@vscode-use/utils', () => ({
+  createCompletionItem: (options: any) => ({ ...options }),
+  createHover: (documentation: any) => ({ documentation }),
+  createMarkdownString: () => ({
+    isTrusted: false,
+    supportHtml: false,
+    appendMarkdown: () => {},
+    appendCodeblock: () => {},
+  }),
   createRange: () => ({}),
-  getActiveText: () => '',
+  getActiveText: vi.fn(() => ''),
   getActiveTextEditor: () => null,
-  getActiveTextEditorLanguageId: () => '',
+  getActiveTextEditorLanguageId: vi.fn(() => ''),
   getConfiguration: () => null,
-  getCurrentFileUrl: () => '',
+  getCurrentFileUrl: vi.fn(() => ''),
   getLineText: () => '',
-  getLocale: () => 'en',
+  getLocale: vi.fn(() => 'en'),
   getPosition: () => ({ position: { line: 0, character: 0 } }),
   getSelection: () => ({ lineText: '' }),
   insertText: () => {},
@@ -17,10 +25,11 @@ vi.mock('@vscode-use/utils', () => ({
   openExternalUrl: () => {},
   registerCommand: () => {},
   registerCompletionItemProvider: () => {},
+  registerCodeLensProvider: vi.fn((_languages: any, provider: any) => provider),
   setCopyText: () => Promise.resolve(),
+  setCommandParams: (value: any) => encodeURIComponent(JSON.stringify(value)),
   updateText: () => {},
   addEventListener: () => () => {},
-  registerCodeLensProvider: () => {},
   createFilter: () => () => false,
   // logging helper used in ui-find
   createLog: (_name: string) => ({
@@ -54,6 +63,15 @@ vi.mock('vscode', () => {
   return {
     MarkdownString,
     Range,
+    CodeLens: class CodeLens {
+      range: any
+      command: any
+
+      constructor(range: any, command: any) {
+        this.range = range
+        this.command = command
+      }
+    },
     Uri: { file: (p: string) => ({ fsPath: p }) },
     CompletionItemKind: { Property: 10, Enum: 11, Event: 12 },
     Hover: class Hover {},
