@@ -44,6 +44,7 @@ const latestVersionInFlight = new Map<string, Promise<string>>()
 const remoteExecTimeout = 1200
 const maxRemoteScriptSize = 8 * 1024 * 1024
 const maxAdapterResultSize = 8 * 1024 * 1024
+const maxTotalAdapterResultSize = 16 * 1024 * 1024
 const maxAdapterDepth = 30
 const maxAdapterArrayLength = 20_000
 const maxAdapterStringLength = 1_000_000
@@ -140,6 +141,25 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+export function validateLegacyAdapterLimits(keys: string[], resultSizes: number[], source: string, limits = {
+  maxExports: maxAdapterExports,
+  maxSingleResultSize: maxAdapterResultSize,
+  maxTotalResultSize: maxTotalAdapterResultSize,
+}) {
+  if (keys.length > limits.maxExports)
+    throw new Error(`Adapter has too many exports: ${source}`)
+  let totalResultSize = 0
+  for (let index = 0; index < resultSizes.length; index++) {
+    const size = resultSizes[index]
+    if (size > limits.maxSingleResultSize)
+      throw new Error(`Adapter result is invalid or too large: ${source}#${keys[index] || index}`)
+    totalResultSize += size
+    if (totalResultSize > limits.maxTotalResultSize)
+      throw new Error(`Adapter results are too large in total: ${source}`)
+  }
+  return totalResultSize
+}
+
 function evaluateAdapter(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean) {
   if (typeof scriptContent !== 'string' || !scriptContent.trim())
     throw new Error(`Adapter is empty: ${source}`)
@@ -181,7 +201,9 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
   const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } })
   new vm.Script(scriptContent, { filename: source }).runInContext(context, { timeout: remoteExecTimeout })
   const keys = new vm.Script('Object.keys(module.exports)').runInContext(context, { timeout: remoteExecTimeout }) as string[]
+  validateLegacyAdapterLimits(keys, [], source)
   const result: Record<string, unknown> = {}
+  let totalResultSize = 0
   for (const key of keys) {
     if (blockedExportKeys.has(key))
       continue
@@ -191,8 +213,15 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
       const data = typeof value === 'function' ? value(__key.endsWith('Components') ? __localeZh : undefined) : value
       return JSON.stringify(data)
     })()`).runInContext(context, { timeout: remoteExecTimeout })
-    if (typeof json !== 'string' || json.length > maxAdapterResultSize)
+    if (typeof json !== 'string')
       throw new Error(`Adapter result is invalid or too large: ${source}#${key}`)
+    const resultSize = Buffer.byteLength(json)
+    validateLegacyAdapterLimits([key], [resultSize], source, {
+      maxExports: maxAdapterExports,
+      maxSingleResultSize: maxAdapterResultSize,
+      maxTotalResultSize: maxTotalAdapterResultSize - totalResultSize,
+    })
+    totalResultSize += resultSize
     const data = JSON.parse(json)
     validateAdapterData(data, `${source}#${key}`)
     result[key] = data
@@ -207,7 +236,11 @@ function appendReducedExports(target: Record<string, any>, exportsData: Record<s
     try {
       target[key] = key.endsWith('Components')
         ? () => componentsReducer(data as any)
-        : () => propsReducer(data as any)
+        : (runtimeOptions?: { resolveFrom?: string, installedVersion?: string }) => propsReducer(
+            runtimeOptions && data && typeof data === 'object' && !Array.isArray(data)
+              ? { ...(data as any), ...runtimeOptions }
+              : data as any,
+          )
     }
     catch (error) {
       logger.error(`Failed to reduce adapter export ${source}#${key}: ${String(error)}`)
@@ -284,7 +317,7 @@ async function getLatestVersion(name: string) {
 }
 
 // todo: add result type replace any
-export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string }) {
+export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string, installedVersion?: string }) {
   const uiName = options?.uiName || tag.replace(/-(\w)/g, (_, v) => v.toUpperCase())
   const name = prefix + tag
   let version = ''
@@ -319,6 +352,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     pkgName: options?.pkgName || '',
     uiName,
     resolveFrom: options?.resolveFrom || '',
+    installedVersion: options?.installedVersion || '',
   })
   const inFlightTask = commonIntellisenseInFlight.get(key)
   if (inFlightTask)
@@ -394,7 +428,19 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
             let propsData = data
             if (Array.isArray(fallbackRaw) && fallbackRaw.length)
               propsData = mergeComponentsWithTypeFallback(propsData as any[], fallbackRaw)
-            return propsReducer(propsData as any)
+            return Array.isArray(propsData)
+              ? propsReducer({
+                  uiName,
+                  lib: options?.pkgName || name,
+                  map: propsData,
+                  resolveFrom: options?.resolveFrom,
+                  installedVersion: options?.installedVersion,
+                })
+              : propsReducer({
+                  ...(propsData as any),
+                  resolveFrom: options?.resolveFrom,
+                  installedVersion: options?.installedVersion,
+                })
           }
         }
       }
@@ -632,6 +678,14 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
 }
 
 const localUrisMap = new Map<string, any>()
+
+export function resolveLocalAdapterPath(workspaceRoot: string, configuredUri: string) {
+  const root = path.resolve(workspaceRoot)
+  const target = path.resolve(root, configuredUri)
+  const relative = path.relative(root, target)
+  return relative.startsWith('..') || path.isAbsolute(relative) ? undefined : target
+}
+
 export function fetchFromLocalUris(workspaceRoot?: string) {
   const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
   const key = getSourceTaskKey('local', uris, workspaceRoot)
@@ -661,9 +715,8 @@ async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspa
   const normalizedRoot = path.resolve(root)
   for (const configuredUri of uris) {
     try {
-      const uri = path.resolve(normalizedRoot, configuredUri)
-      const relative = path.relative(normalizedRoot, uri)
-      if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      const uri = resolveLocalAdapterPath(normalizedRoot, configuredUri)
+      if (!uri) {
         logger.error(`Skipped local adapter outside workspace: ${configuredUri}`)
         continue
       }

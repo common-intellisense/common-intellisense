@@ -113,6 +113,36 @@ describe('utils reducer regressions', () => {
     })
   })
 
+  it('renders completion syntax from the supplied document context, not the active editor', async () => {
+    const { componentsReducer, propsReducer } = await import('../../src/ui/utils')
+    mockGetCurrentFileUrl.mockReturnValue('/fixtures/Active.vue')
+    mockGetActiveTextEditorLanguageId.mockReturnValue('vue')
+
+    const props = await propsReducer({
+      uiName: 'fixture',
+      lib: 'fixture-lib',
+      installedVersion: '1.0.0',
+      map: [{ name: 'Demo', props: { className: { type: 'string' } }, events: [] }] as any,
+    })
+    const svelteContext = { languageId: 'svelte', framework: 'svelte' as const, uri: 'file:///Svelte.svelte' }
+    expect(props.Demo.events[0](svelteContext).some(item => item.content.startsWith('onclick='))).toBe(true)
+    expect(props.Demo.completions[0](svelteContext).some(item => item.content === 'className')).toBe(true)
+
+    const [components] = componentsReducer({ lib: 'fixture-lib', map: [[{ name: 'Demo' }, 'Demo']] as any })
+    const react = await Promise.all(components.data(undefined, { languageId: 'typescriptreact', framework: 'react', uri: 'file:///Demo.tsx' }))
+    expect((react[0] as any).snippet).toContain('<demo')
+  })
+
+  it('uses the package-specific installed version for API filtering', async () => {
+    const { propsReducer } = await import('../../src/ui/utils')
+    const component = { name: 'Demo', props: { old: { type: 'string' }, newer: { type: 'string', version: '2.6.0' } } }
+    const legacy = await propsReducer({ uiName: 'fixture2', lib: 'fixture-lib', installedVersion: '2.4.0', map: [component] as any })
+    const current = await propsReducer({ uiName: 'fixture2', lib: 'fixture-lib', installedVersion: '2.8.0', map: [component] as any })
+    const vue = { languageId: 'vue', framework: 'vue' as const, uri: 'file:///Demo.vue' }
+    expect(legacy.Demo.completions[0](vue).some(item => item.content.startsWith('newer'))).toBe(false)
+    expect(current.Demo.completions[0](vue).some(item => item.content.startsWith('newer'))).toBe(true)
+  })
+
   it('componentsReducer uses item-local dynamicLib/importWay without enabling HTML markdown', async () => {
     const { componentsReducer } = await import('../../src/ui/utils')
 

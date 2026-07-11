@@ -1,10 +1,11 @@
 import type * as vscode from 'vscode'
+import type { CompletionRenderContext } from './utils'
 
 export interface PropsConfig { [key: string]: any }
 
 export interface ComponentItem {
   prefix: string
-  data: ((parent?: any) => vscode.CompletionItem[])[]
+  data: ((parent?: any, context?: CompletionRenderContext) => vscode.CompletionItem[])[]
   directives?: Record<string, any>
   lib: string
 }
@@ -15,7 +16,7 @@ export type Directives = Record<string, any>
 
 export interface OptionsComponents {
   prefix: string[]
-  data: ((parent?: any) => vscode.CompletionItem[])[]
+  data: ((parent?: any, context?: CompletionRenderContext) => vscode.CompletionItem[])[]
   directivesMap: Record<string, Directives | undefined>
   libs: string[]
 }

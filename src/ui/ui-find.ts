@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createLog, getCurrentFileUrl, getRootPath, watchFile } from '@vscode-use/utils'
 import { findUp } from 'find-up'
+import semver from 'semver'
 import { UINames as configUINames } from '../constants'
 import { fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, writeLocalCache } from '../services/fetch'
 import { clearPackageVersionCache, resolveInstalledPackageVersion } from '../services/package-version'
@@ -16,6 +17,7 @@ export const logger = createLog('common-intellisense')
 export interface PackageContext {
   cwd: string
   pkgPath: string
+  workspaceRoot: string
   generation: number
   uiNames: string[]
   currentPkgUiNames: string[]
@@ -80,17 +82,23 @@ export function getContextForDocumentPath(cwd: string) {
   return packagePath ? contexts.get(packagePath) : contexts.get(cwd)
 }
 
-export async function ensureContextForPath(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache = false) {
+export async function resolvePackagePathForDocument(cwd: string, refresh = false) {
+  if (!cwd || cwd === 'exthhost')
+    return
+  if (!refresh && documentPackageCache.has(cwd))
+    return documentPackageCache.get(cwd) || undefined
+  const packagePath = await findUp('package.json', { cwd }) || null
+  documentPackageCache.set(cwd, packagePath)
+  return packagePath || undefined
+}
+
+export async function ensureContextForPath(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache = false, workspaceRoot?: string) {
   if (!cwd || cwd === 'exthhost')
     return
   if (cleanCache)
     invalidateContexts()
 
-  let pkgPath = documentPackageCache.get(cwd)
-  if (pkgPath === undefined) {
-    pkgPath = await findUp('package.json', { cwd }) || null
-    documentPackageCache.set(cwd, pkgPath)
-  }
+  const pkgPath = await resolvePackagePathForDocument(cwd)
   if (!pkgPath)
     return
 
@@ -105,7 +113,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
 
   const epoch = registryEpoch
   const generation = nextGeneration(pkgPath)
-  const task = buildContext(cwd, extensionContext, detectSlots, generation)
+  const task = buildContext(cwd, extensionContext, detectSlots, generation, workspaceRoot)
   contextLoads.set(pkgPath, task)
   try {
     const context = await task
@@ -135,10 +143,10 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
   }
 }
 
-async function buildContext(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, generation: number) {
+async function buildContext(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, generation: number, workspaceRoot?: string) {
   const onChange = () => {
     invalidatePackageContext(cwd)
-    void ensureContextForPath(cwd, extensionContext, detectSlots)
+    void ensureContextForPath(cwd, extensionContext, detectSlots, false, workspaceRoot)
   }
   const discovered = urlCache.get(cwd) || await findPkgUI(cwd, onChange)
   if (!discovered)
@@ -151,6 +159,7 @@ async function buildContext(cwd: string, extensionContext: vscode.ExtensionConte
     detectSlots,
     prefix: getPrefix(pkg) || {},
     pkgPath: pkg,
+    workspaceRoot,
   }, cwd, generation)
   logger.info(`findUI: ${uis.map(ui => ui.join('@')).join(' | ')}`)
   return context
@@ -162,6 +171,7 @@ export interface UpdateCompletionsOptions {
   detectSlots: (...args: any[]) => void
   prefix: Record<string, string>
   pkgPath?: string
+  workspaceRoot?: string
 }
 
 export async function updateCompletions(uis: Uis, options: UpdateCompletionsOptions) {
@@ -174,15 +184,15 @@ export async function updateCompletions(uis: Uis, options: UpdateCompletionsOpti
 }
 
 async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd: string, generation: number): Promise<PackageContext> {
-  const { selectedUIs, alias, prefix: userPrefix, pkgPath = '' } = options
+  const { selectedUIs, alias, prefix: userPrefix, pkgPath = '', workspaceRoot = path.dirname(pkgPath) } = options
   await getLocalCache
   const localCache = new Map<string, any>()
-  const localUI: Record<string, () => any> = {}
+  const localUI: Record<string, (options?: { resolveFrom?: string, installedVersion?: string }) => any> = {}
   const localOptions = emptyOptions()
   let localCompletions: PropsConfig | null = null
   const availableNames: string[] = []
   const originNames: string[] = []
-  const formatToPkg = new Map<string, { pkgName: string, version: string }>()
+  const formatToPkg = new Map<string, { pkgName: string, version: string, installedVersion?: string }>()
   const selectionToAdapter = new Map<string, string>()
 
   for (const [declaredName, version] of uis) {
@@ -199,7 +209,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     }
     const formatName = `${formatUIName(uiName)}${major}`
     const selectionName = `${declaredName}${major}`
-    formatToPkg.set(formatName, { pkgName: uiName, version: major })
+    formatToPkg.set(formatName, { pkgName: uiName, version: major, installedVersion: version })
     selectionToAdapter.set(formatName, formatName)
     selectionToAdapter.set(selectionName, formatName)
     availableNames.push(formatName)
@@ -211,7 +221,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     : []
   const uiNames = hasExplicitSelection ? [...new Set(selected)] : availableNames
 
-  await loadOtherSources(localUI, localCache, localOptions, path.dirname(pkgPath), () => localCompletions, value => localCompletions = value)
+  await loadOtherSources(localUI, localCache, localOptions, workspaceRoot, pkgPath, () => localCompletions, value => localCompletions = value)
 
   // Deliberately sequential: configured library order defines collision precedence.
   for (const name of uiNames) {
@@ -219,7 +229,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
       const pkgInfo = formatToPkg.get(name)
       const exports = await fetchFromCommonIntellisense(
         name.replace(/([A-Z])/g, '-$1').toLowerCase(),
-        pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath } : { uiName: name, resolveFrom: pkgPath },
+        pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath, installedVersion: pkgInfo.installedVersion } : { uiName: name, resolveFrom: pkgPath },
       )
       if (exports)
         Object.assign(localUI, exports)
@@ -229,7 +239,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
         localCache.set(componentsKey, components)
         mergeComponents(localOptions, components, userPrefix, originNames, name)
       }
-      const completion = await localUI[name]?.()
+      const completion = await localUI[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion })
       if (completion) {
         localCache.set(name, completion)
         localCompletions ||= {} as PropsConfig
@@ -243,14 +253,15 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
 
   await writeLocalCache()
 
-  return { cwd, pkgPath, generation, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
+  return { cwd, pkgPath, workspaceRoot, generation, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
 }
 
 async function loadOtherSources(
-  ui: Record<string, () => any>,
+  ui: Record<string, (options?: { resolveFrom?: string, installedVersion?: string }) => any>,
   targetCache: Map<string, any>,
   targetOptions: OptionsComponents,
   workspaceRoot: string,
+  pkgPath: string,
   getCompletions: () => PropsConfig | null,
   setCompletions: (value: PropsConfig) => void,
 ) {
@@ -275,7 +286,7 @@ async function loadOtherSources(
             }
           }
           else {
-            const completion = await exports[key]?.()
+            const completion = await exports[key]?.({ resolveFrom: pkgPath })
             if (completion) {
               targetCache.set(key, completion)
               const merged = getCompletions() || {} as PropsConfig
@@ -314,7 +325,20 @@ function mergeComponents(target: OptionsComponents, components: any[], userPrefi
 export interface ParsedDependency {
   packageName?: string
   major?: string
+  range?: string
   requiresInstalledVersion: boolean
+}
+
+function parseSemverRange(value: string): ParsedDependency {
+  const range = semver.validRange(value)
+  if (!range)
+    return { requiresInstalledVersion: true }
+  const minimum = semver.minVersion(range)
+  return {
+    major: minimum ? String(minimum.major) : undefined,
+    range,
+    requiresInstalledVersion: false,
+  }
 }
 
 export function parseDeclaredDependency(spec: unknown): ParsedDependency {
@@ -325,15 +349,16 @@ export function parseDeclaredDependency(spec: unknown): ParsedDependency {
     return { requiresInstalledVersion: true }
   if (value.startsWith('npm:')) {
     const match = value.slice(4).match(/^((?:@[^/]+\/)?[^@]+)(?:@(.+))?$/)
-    return { packageName: match?.[1], major: extractMajor(match?.[2]), requiresInstalledVersion: !extractMajor(match?.[2]) }
+    const parsed = parseSemverRange(match?.[2] || '')
+    return { ...parsed, packageName: match?.[1] }
   }
   const protocol = value.match(/^(?:workspace|catalog|catelog):(.*)$/i)
   if (protocol) {
-    const major = extractMajor(protocol[1])
-    return { major, requiresInstalledVersion: !major }
+    if (!protocol[1] || protocol[1] === '*')
+      return { requiresInstalledVersion: true }
+    return parseSemverRange(protocol[1])
   }
-  const major = extractMajor(value)
-  return { major, requiresInstalledVersion: !major }
+  return parseSemverRange(value)
 }
 
 function extractMajor(value: unknown) {
@@ -371,20 +396,19 @@ export function getDependencyResolveFrom(key: string, localDependencies: Record<
   return key in localDependencies ? pkgDir : rootPath
 }
 
-export function selectDependencyVersion(installed: string | undefined, declaredMajor: string | undefined) {
-  if (!installed)
-    return declaredMajor
-  const installedMajor = extractMajor(installed)
-  return declaredMajor && installedMajor !== declaredMajor ? declaredMajor : installed
+export function selectDependencyVersion(installed: string | undefined, declaredMajor: string | undefined, declaredRange?: string) {
+  if (installed && (!declaredRange || semver.satisfies(installed, declaredRange, { includePrerelease: true })))
+    return installed
+  return declaredMajor
 }
 
 export async function findPkgUI(cwd?: string, onChange?: () => void) {
-  const alias = getAlias() || {}
   if (!cwd)
     return
   const pkg = await findUp('package.json', { cwd })
   if (!pkg)
     return
+  const alias = getAlias(pkg) || {}
   const pkgDir = path.dirname(pkg)
   let rootPkgPath = ''
   let rootPkg: any = null
@@ -454,7 +478,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
     const resolveFrom = getDependencyResolveFrom(key, localDependencies, pkgDir, rootPath)
     const installedName = parsed.packageName || key
     const installed = await resolveInstalledPackageVersion(installedName, resolveFrom)
-    const version = selectDependencyVersion(installed, parsed.major)
+    const version = selectDependencyVersion(installed, parsed.major, parsed.range)
     if (!version) {
       logger.error(`${key} version is unsupported: ${declared}`)
       continue

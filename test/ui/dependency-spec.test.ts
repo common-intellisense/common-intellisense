@@ -21,9 +21,21 @@ describe('dependency spec parsing', () => {
     expect(parseDeclaredDependency('npm:@scope/actual@^12.0.0')).toMatchObject({ packageName: '@scope/actual', major: '12' })
   })
 
-  it('uses the declared major when a hoisted installed package has a different major', () => {
-    expect(selectDependencyVersion('2.9.0', '1')).toBe('1')
-    expect(selectDependencyVersion('2.9.0', '2')).toBe('2.9.0')
+  it.each([
+    ['>=10 <12', '11.2.0', '11.2.0'],
+    ['>=4 <6', '5.1.0', '5.1.0'],
+    ['2 || 3', '3.4.0', '3.4.0'],
+    ['>=2', '8.0.0', '8.0.0'],
+    ['>=10 <12', '12.0.0', '10'],
+  ])('selects installed %s versions using semver semantics', (range, installed, expected) => {
+    const parsed = parseDeclaredDependency(range)
+    expect(selectDependencyVersion(installed, parsed.major, parsed.range)).toBe(expected)
+  })
+
+  it('applies semver ranges to npm aliases', () => {
+    const parsed = parseDeclaredDependency('npm:@scope/actual@>=10 <12')
+    expect(parsed.packageName).toBe('@scope/actual')
+    expect(selectDependencyVersion('11.2.0', parsed.major, parsed.range)).toBe('11.2.0')
   })
 
   it.each(['devDependencies', 'peerDependencies', 'optionalDependencies'])('lets local %s override root dependencies', (field) => {

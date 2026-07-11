@@ -145,6 +145,8 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
       uiName,
       lib: pkgName,
       map: components.map(c => c.component),
+      resolveFrom: options.resolveFrom,
+      installedVersion: version,
     })
     const rawComponents = components.map(c => c.component)
     const result = {

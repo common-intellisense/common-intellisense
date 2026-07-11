@@ -13,7 +13,7 @@ vi.mock('@simon_he/fetch-npm', () => ({ fetchAndExtractPackage: vi.fn(async () =
 vi.mock('@simon_he/latest-version', () => ({ latestVersion: vi.fn(async () => '2.0.0') }))
 vi.mock('@simon_he/fetch-npm-cjs', () => ({ fetchFromCjsForCommonIntellisense: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
 vi.mock('ofetch', () => ({ ofetch: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
-vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsReducer: (v: any) => v }))
+vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsReducer: (v: any) => v?.map ?? v }))
 vi.mock('../../src/type-extract', () => ({ fetchFromTypes: fetchFromTypesMock }))
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: () => {}, error: () => {} } }))
 vi.mock('@vscode-use/utils', () => ({

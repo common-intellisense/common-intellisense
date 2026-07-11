@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const fetchFromLocalUris = vi.fn(async () => ({}))
 const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => {
   const uiName = options.uiName
   return {
@@ -18,7 +19,7 @@ const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => 
 vi.mock('../../src/services/fetch', () => ({
   cacheFetch: new Map(),
   fetchFromCommonIntellisense,
-  fetchFromLocalUris: vi.fn(async () => ({})),
+  fetchFromLocalUris,
   fetchFromRemoteNpmUrls: vi.fn(async () => ({})),
   fetchFromRemoteUrls: vi.fn(async () => ({})),
   getLocalCache: Promise.resolve('done'),
@@ -30,6 +31,7 @@ describe('ui-find updateCompletions', () => {
   beforeEach(() => {
     vi.resetModules()
     fetchFromCommonIntellisense.mockClear()
+    fetchFromLocalUris.mockClear()
   })
 
   it('selects only the aliased adapter when selectedUIs uses the origin name', async () => {
@@ -55,6 +57,20 @@ describe('ui-find updateCompletions', () => {
       }),
     )
     expect(context.uiNames).toEqual(['antd5'])
+  })
+
+  it('uses the workspace root rather than the nested package root for local adapters', async () => {
+    const mod = await import('../../src/ui/ui-find')
+    await mod.updateCompletions([], {
+      selectedUIs: [],
+      alias: {},
+      detectSlots: () => {},
+      prefix: {},
+      pkgPath: '/repo/packages/a/package.json',
+      workspaceRoot: '/repo',
+    })
+
+    expect(fetchFromLocalUris).toHaveBeenCalledWith('/repo')
   })
 
   it('keeps an unmatched explicit selection empty instead of loading every detected UI', async () => {

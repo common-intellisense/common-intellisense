@@ -2,7 +2,7 @@ import type { CompletionItemOptions } from '@vscode-use/utils'
 import type { CompletionItem } from 'vscode'
 import type { Component, Slots, SuggestionItem } from './ui-type'
 import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from 'lazy-js-utils'
-import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, getRootPath, setCommandParams } from '@vscode-use/utils'
+import { createCompletionItem, createHover, createMarkdownString, getConfiguration, getCurrentFileUrl, getLocale, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { translate } from '../translate'
 import { resolveInstalledPackageVersion } from '../services/package-version'
@@ -21,6 +21,24 @@ function enableCommandTrust(documentation: vscode.MarkdownString) {
   return documentation
 }
 
+export type CompletionFramework = 'vue' | 'vine' | 'react' | 'svelte'
+export interface CompletionRenderContext {
+  languageId: string
+  framework: CompletionFramework
+  uri: string
+}
+export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
+
+function normalizeRenderContext(input?: CompletionRenderInput): CompletionRenderContext {
+  if (typeof input === 'object' && input)
+    return input
+  return {
+    languageId: input ? 'vue' : 'typescriptreact',
+    framework: input ? 'vue' : 'react',
+    uri: '',
+  }
+}
+
 export interface PropsOptions {
   uiName: string
   lib: string
@@ -28,6 +46,8 @@ export interface PropsOptions {
   extensionContext?: vscode.ExtensionContext
   prefix?: string
   dynamicLib?: string
+  resolveFrom?: string
+  installedVersion?: string
 }
 
 export type IconsItem = any
@@ -43,8 +63,8 @@ export type SubCompletionItem = CompletionItem & {
 }
 export interface PropsConfigItem {
   icons?: SubCompletionItem[] | vscode.CompletionList<SubCompletionItem> | PromiseLike<SubCompletionItem[] | vscode.CompletionList<SubCompletionItem> | null | undefined> | null | undefined
-  completions: ((isVue?: boolean) => SubCompletionItem[])[]
-  events: ((isVue?: boolean) => SubCompletionItem[])[]
+  completions: ((context?: CompletionRenderInput) => SubCompletionItem[])[]
+  events: ((context?: CompletionRenderInput) => SubCompletionItem[])[]
   methods: SubCompletionItem[]
   exposed: SubCompletionItem[]
   slots: SubCompletionItem[]
@@ -72,9 +92,8 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
   return createCompletionItem(options)
 }
 
-const cwd = getRootPath()
 export function propsReducer(options: PropsOptions) {
-  const { uiName, lib, map, prefix = '', dynamicLib } = options
+  const { uiName, lib, map, prefix = '', dynamicLib, resolveFrom, installedVersion } = options
 
   const result: PropsConfig = {}
   // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
@@ -92,15 +111,15 @@ export function propsReducer(options: PropsOptions) {
   let localVersion: string | undefined
 
   return reduceAsync(map, async (result, item: Component) => {
-    const completions: ((isVue?: boolean) => SubCompletionItem[])[] = []
-    const events: ((isVue?: boolean) => SubCompletionItem[])[] = []
+    const completions: ((context?: CompletionRenderInput) => SubCompletionItem[])[] = []
+    const events: ((context?: CompletionRenderInput) => SubCompletionItem[])[] = []
     const methods: SubCompletionItem[] = []
     const exposed: SubCompletionItem[] = []
     const slots: SubCompletionItem[] = []
     const isZh = getLocale().includes('zh')
     if (!localVersion) {
       // 从本地安装去获取版本号，如果获取不到根据 uiName 后缀获取版本号，再找不到就是 0.0.0
-      localVersion = await resolveInstalledPackageVersion(lib, cwd) || uiName.match(/\d+(\.\d+\.\d+)?/)?.[0] || '0.0.0'
+      localVersion = installedVersion || await resolveInstalledPackageVersion(lib, resolveFrom) || uiName.match(/\d+(\.\d+\.\d+)?/)?.[0] || '0.0.0'
     }
 
     if (item.version) {
@@ -110,7 +129,9 @@ export function propsReducer(options: PropsOptions) {
       }
     }
 
-    const completionsDeferCallback = (isVue?: any) => {
+    const completionsDeferCallback = (input?: CompletionRenderInput) => {
+      const renderContext = normalizeRenderContext(input)
+      const isVue = renderContext.framework === 'vue' || renderContext.framework === 'vine'
       const data: SubCompletionItem[] = [
         'id',
         isVue ? 'class' : 'className',
@@ -317,13 +338,15 @@ export function propsReducer(options: PropsOptions) {
       item.events = []
 
     if (item.events) {
-      const deferEventsCall = (isVue?: boolean) => {
-        const lan = getActiveTextEditorLanguageId()
+      const deferEventsCall = (input?: CompletionRenderInput) => {
+        const renderContext = normalizeRenderContext(input)
+        const isVue = renderContext.framework === 'vue' || renderContext.framework === 'vine'
+        const isSvelte = renderContext.framework === 'svelte'
         const originEvent = [
           {
             name: isVue
               ? 'click'
-              : lan === 'svelte'
+              : isSvelte
                 ? 'onclick'
                 : 'onClick',
             description: 'click event',
@@ -372,7 +395,7 @@ export function propsReducer(options: PropsOptions) {
             snippet = `${name}="\${1|${snippetEventNameOptions.join(',')}|}"`
             content = `@${name}="on${_name}"`
           }
-          else if (lan === 'svelte') {
+          else if (isSvelte) {
             snippet = `${name}={\${1:${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}}`
             content = `${name}={${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}`
           }
@@ -652,7 +675,7 @@ export interface ComponentsConfigItem {
   prefix: string
   directives?: Directives
   lib: string
-  data: () => Promise<CompletionItem>[]
+  data: (parent?: any, context?: CompletionRenderContext) => Promise<CompletionItem>[]
   isReact?: boolean
   dynamicLib?: string
   importWay?: 'as default' | 'default' | 'specifier'
@@ -669,8 +692,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix,
         directives,
         lib,
-        data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const isVue = isVueOrVine()
+        data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
+          const isVue = context?.framework === 'vue' || context?.framework === 'vine'
           let snippet = ''
           let _content = ''
           let description = ''
@@ -722,8 +745,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix: '',
         directives,
         lib,
-        data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const isVue = isVueOrVine()
+        data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
+          const isVue = context?.framework === 'vue' || context?.framework === 'vine'
           let snippet = ''
           let _content = ''
           let description = ''
@@ -774,8 +797,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
     prefix,
     directives,
     lib,
-    data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-      const isVue = isVueOrVine()
+    data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
+      const isVue = context?.framework === 'vue' || context?.framework === 'vine'
       let snippet = ''
       let _content = ''
       let description = ''

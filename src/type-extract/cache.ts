@@ -9,6 +9,7 @@ export class TypeCache {
   private readonly inFlight = new Map<string, Promise<CachedTypeResult | undefined>>()
   private readonly order: string[] = []
   private readonly snapshots = new Map<string, TypeFileSnapshot>()
+  private readonly snapshotOrder: string[] = []
   private readonly maxEntries: number
   private epoch = 0
 
@@ -39,6 +40,7 @@ export class TypeCache {
     this.cache.clear()
     this.inFlight.clear()
     this.snapshots.clear()
+    this.snapshotOrder.length = 0
     this.order.length = 0
   }
 
@@ -60,11 +62,24 @@ export class TypeCache {
   }
 
   getSnapshot(key: string) {
-    return this.snapshots.get(key)
+    const snapshot = this.snapshots.get(key)
+    if (snapshot)
+      this.touchSnapshot(key)
+    return snapshot
   }
 
   setSnapshot(key: string, files: string[]) {
     this.snapshots.set(key, { files: [...new Set(files)].sort() })
+    this.touchSnapshot(key)
+    this.pruneSnapshots()
+  }
+
+  hasSnapshot(key: string) {
+    return this.snapshots.has(key)
+  }
+
+  getSnapshotSize() {
+    return this.snapshots.size
   }
 
   prune() {
@@ -74,6 +89,21 @@ export class TypeCache {
         continue
       this.cache.delete(key)
     }
+  }
+
+  private pruneSnapshots() {
+    while (this.snapshotOrder.length > this.maxEntries) {
+      const key = this.snapshotOrder.shift()
+      if (key)
+        this.snapshots.delete(key)
+    }
+  }
+
+  private touchSnapshot(key: string) {
+    const index = this.snapshotOrder.indexOf(key)
+    if (index >= 0)
+      this.snapshotOrder.splice(index, 1)
+    this.snapshotOrder.push(key)
   }
 
   private touch(key: string) {

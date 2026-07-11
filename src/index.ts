@@ -1,6 +1,5 @@
-import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
+import type { CompletionRenderContext, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
-import path from 'node:path'
 import { createFilter } from '@rollup/pluginutils'
 import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveTextEditor, getConfiguration, getCurrentFileUrl, getLocale, getPosition, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import { findUp } from 'find-up'
@@ -10,7 +9,7 @@ import { clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri }
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getCurrentPkgUiNames, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated } from './ui/ui-find'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getCurrentPkgUiNames, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getUiDeps } from './ui/ui-utils'
 import { clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
@@ -62,6 +61,19 @@ function isSkip(document?: vscode.TextDocument) {
 function getDocumentPath(document: vscode.TextDocument) {
   return document.uri.fsPath || document.uri.toString()
 }
+
+function getDocumentWorkspaceRoot(document: vscode.TextDocument) {
+  return vscode.workspace.getWorkspaceFolder?.(document.uri)?.uri.fsPath
+}
+
+function getCompletionRenderContext(document: vscode.TextDocument): CompletionRenderContext {
+  const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+  return {
+    languageId: document.languageId,
+    framework: isVineDocument ? 'vine' : document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'react',
+    uri: document.uri.toString(),
+  }
+}
 // todo: 补充类型
 // todo: 补充example
 export async function activate(context: vscode.ExtensionContext) {
@@ -73,22 +85,32 @@ export async function activate(context: vscode.ExtensionContext) {
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
   const initialEditor = vscode.window.activeTextEditor
+  const ensureDocumentContext = (document: vscode.TextDocument, cleanCache = false) => ensureContextForPath(
+    getDocumentPath(document),
+    context,
+    detectSlots,
+    cleanCache,
+    getDocumentWorkspaceRoot(document),
+  )
   const analyzeDocumentSlots = async (document: vscode.TextDocument, packageContext: Awaited<ReturnType<typeof ensureContextForPath>>) => {
     if (!getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
       return
-    if (getDocumentSlotAnalysis(document.uri)?.version === document.version)
+    const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation }
+    const cached = getDocumentSlotAnalysis(document.uri)
+    if (cached?.documentVersion === document.version && cached.packagePath === identity.packagePath && cached.contextGeneration === identity.contextGeneration)
       return
     const code = document.getText()
-    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix)
+    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, identity)
   }
 
   context.subscriptions.push(onPackageContextsInvalidated(() => clearDocumentAnalysis()))
   context.subscriptions.push(onPackageContextUpdated((packageContext) => {
     for (const editor of vscode.window.visibleTextEditors) {
       const documentPath = getDocumentPath(editor.document)
-      const packageRoot = path.dirname(packageContext.pkgPath)
-      if (documentPath === packageRoot || documentPath.startsWith(`${packageRoot}${path.sep}`))
-        void analyzeDocumentSlots(editor.document, packageContext).catch(error => logger.error(String(error)))
+      void resolvePackagePathForDocument(documentPath).then((nearestPackagePath) => {
+        if (nearestPackagePath === packageContext.pkgPath)
+          return analyzeDocumentSlots(editor.document, packageContext)
+      }).catch(error => logger.error(String(error)))
     }
   }))
 
@@ -102,7 +124,7 @@ export async function activate(context: vscode.ExtensionContext) {
     clearDocumentAnalysis()
     const editor = vscode.window.activeTextEditor
     if (editor && !isSkip(editor.document))
-      await ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
+      await ensureDocumentContext(editor.document)
   }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
@@ -116,7 +138,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const visibleEditors = vscode.window.visibleTextEditors
     const currentEditor = visibleEditors.find(e => e === editor)
     if (currentEditor) {
-      void ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
+      void ensureDocumentContext(editor.document)
         .then(packageContext => analyzeDocumentSlots(editor.document, packageContext))
         .catch(error => logger.error(String(error)))
     }
@@ -195,7 +217,7 @@ export async function activate(context: vscode.ExtensionContext) {
     documentAnalysisCache.clear()
     const editor = vscode.window.activeTextEditor
     if (editor && !isSkip(editor.document))
-      void ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
+      void ensureDocumentContext(editor.document)
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.import', async (params, _loc, _lineOffset) => {
@@ -232,12 +254,12 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!editor)
       return
     const packageContext = getContextForDocumentPath(getDocumentPath(editor.document))
-      || await ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
+      || await ensureDocumentContext(editor.document)
     if (!packageContext?.uiCompletions)
       return
     if (!child) {
       const code = editor.document.getText()
-      await detectSlots(editor.document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix)
+      await detectSlots(editor.document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation })
       return
     }
     if (!child.children)
@@ -297,18 +319,18 @@ export async function activate(context: vscode.ExtensionContext) {
       clearTimeout(previous)
     slotTimers.set(key, setTimeout(async () => {
       slotTimers.delete(key)
-      const packageContext = await ensureContextForPath(getDocumentPath(document), context, detectSlots)
+      const packageContext = await ensureDocumentContext(document)
       if (!packageContext?.uiCompletions)
         return
       const code = document.getText()
-      await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix)
+      await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation })
     }, 200))
   }))
 
   context.subscriptions.push(registerCompletionItemProvider(filter, async (document, position) => {
     if (isSkip(document))
       return
-    const packageContext = await ensureContextForPath(getDocumentPath(document), context, detectSlots)
+    const packageContext = await ensureDocumentContext(document)
     if (!packageContext?.uiCompletions)
       return
     const optionsComponents = packageContext.optionsComponents
@@ -329,6 +351,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
     const isVue = (document.languageId === 'vue' && result.template) || isVineDocument
+    const renderContext = getCompletionRenderContext(document)
     const analysis = getDocumentAnalysis(document)
     const deps = isVue ? analysis.getImportDeps() : {}
     const uiDeps = analysis.getUiDeps()
@@ -383,13 +406,13 @@ export async function activate(context: vscode.ExtensionContext) {
       const existingPropsSet = new Set(getExistingPropNames(result, lineText))
       const existingProps = existingPropsSet.size ? existingPropsSet : null
       if (result.isEvent) {
-        const events = matchedComponent.events?.[0]?.(isVue) || []
+        const events = matchedComponent.events?.[0]?.(renderContext) || []
         return existingProps ? filterExistingCompletions(events, existingProps) : events
       }
       // slot suggestions for all slot-related scenarios
       if (matchedComponent.slots && (result.type === 'slots' || result.type === 'slot' || result.isSlot || (typeof result.propName === 'string' && result.propName.startsWith('#'))))
         return matchedComponent.slots
-      const completions = matchedComponent.completions?.[0]?.(isVue) || []
+      const completions = matchedComponent.completions?.[0]?.(renderContext) || []
       return existingProps ? filterExistingCompletions(completions, existingProps) : completions
     }
 
@@ -486,8 +509,8 @@ export async function activate(context: vscode.ExtensionContext) {
             })
           })
         : []
-      eventCallback = events[0](isVue) || []
-      completionsCallback = [...completions[0](isVue), ...(isVue ? [] : eventCallback), ...directivesCompletions]
+      eventCallback = events[0](renderContext) || []
+      completionsCallback = [...completions[0](renderContext), ...(isVue ? [] : eventCallback), ...directivesCompletions]
 
       const hasProps = new Set(getExistingPropNames(result, lineText))
       const hasProp = (item: any) => {
@@ -571,7 +594,7 @@ export async function activate(context: vscode.ExtensionContext) {
       ? optionsComponents.prefix.some((reg: string) => !reg || prefix.startsWith(reg) || reg.startsWith(prefix))
       : true) {
       const parent = result.parent
-      const data = await Promise.all(optionsComponents.data.map(c => c(parent)).flat())
+      const data = await Promise.all(optionsComponents.data.map(c => c(parent, renderContext)).flat())
       if (parent) {
         const parentTag = parent.tag || parent.name
         if (UiCompletions) {
@@ -627,11 +650,12 @@ export async function activate(context: vscode.ExtensionContext) {
     async provideHover(document, position) {
       if (isSkip(document))
         return
-      const packageContext = await ensureContextForPath(getDocumentPath(document), context, detectSlots)
+      const packageContext = await ensureDocumentContext(document)
       if (!packageContext?.uiCompletions)
         return
       const optionsComponents = packageContext.optionsComponents
       const componentsPrefix = optionsComponents.prefix
+      const renderContext = getCompletionRenderContext(document)
       let UiCompletions = packageContext.uiCompletions
       const alias = getAlias(packageContext.pkgPath) || {}
       const currentFileUrl = getDocumentPath(document)
@@ -754,7 +778,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const r = UiCompletions[tag] || await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
         if (!r)
           return
-        const completions = result.isEvent ? r.events[0]?.() : r.completions[0]?.()
+        const completions = result.isEvent ? r.events[0]?.(renderContext) : r.completions[0]?.(renderContext)
         if (!completions)
           return
 
@@ -898,7 +922,7 @@ export async function activate(context: vscode.ExtensionContext) {
   void Promise.resolve(getLocalCache).then(async () => {
     if (!initialEditor || isSkip(initialEditor.document))
       return
-    const packageContext = await ensureContextForPath(getDocumentPath(initialEditor.document), context, detectSlots)
+    const packageContext = await ensureDocumentContext(initialEditor.document)
     await analyzeDocumentSlots(initialEditor.document, packageContext)
   }).catch(error => logger.error(`Initial context preload failed: ${String(error)}`))
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   let resolveCache!: (value: string) => void
@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => {
     registerHover: vi.fn(() => ({ dispose: vi.fn() })),
     registerCodeLens: vi.fn(() => ({ dispose: vi.fn() })),
     ensureContext: vi.fn(),
+    detectSlots: vi.fn(),
+    resolvePackagePath: vi.fn(),
+    contextUpdatedListener: undefined as undefined | ((context: any) => void),
   }
 })
 
@@ -27,12 +30,17 @@ vi.mock('../src/ui/ui-find', () => ({
   getCurrentPkgUiNames: vi.fn(),
   invalidateContexts: vi.fn(),
   onPackageContextsInvalidated: vi.fn(() => ({ dispose: vi.fn() })),
-  onPackageContextUpdated: vi.fn(() => ({ dispose: vi.fn() })),
+  onPackageContextUpdated: vi.fn((listener: (context: any) => void) => {
+    mocks.contextUpdatedListener = listener
+    return { dispose: vi.fn() }
+  }),
+  resolvePackagePathForDocument: mocks.resolvePackagePath,
   logger: { info: vi.fn(), error: vi.fn() },
 }))
 vi.mock('../src/parser', () => ({
   clearDocumentAnalysis: vi.fn(),
-  detectSlots: vi.fn(),
+  detectSlots: mocks.detectSlots,
+  getDocumentSlotAnalysis: vi.fn(),
   findDynamicComponent: vi.fn(),
   getImportDeps: vi.fn(() => ({})),
   parser: vi.fn(),
@@ -73,6 +81,7 @@ vi.mock('vscode', () => ({
     visibleTextEditors: [],
   },
   workspace: {
+    getWorkspaceFolder: vi.fn(() => ({ uri: { fsPath: '/workspace' } })),
     onDidCloseTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
   },
   languages: {
@@ -82,6 +91,38 @@ vi.mock('vscode', () => ({
 }))
 
 describe('activation registration', () => {
+  beforeEach(() => {
+    mocks.ensureContext.mockClear()
+    mocks.detectSlots.mockClear()
+    mocks.resolvePackagePath.mockReset()
+    mocks.contextUpdatedListener = undefined
+  })
+
+  it('does not analyze a nested document with its parent package context', async () => {
+    const nestedDocument = {
+      languageId: 'vue',
+      version: 1,
+      uri: { fsPath: '/workspace/packages/child/App.vue', toString: () => 'file:///workspace/packages/child/App.vue' },
+      getText: () => '<template />',
+    }
+    const vscode = await import('vscode')
+    ;(vscode.window.visibleTextEditors as any).push({ document: nestedDocument })
+    mocks.resolvePackagePath.mockResolvedValue('/workspace/packages/child/package.json')
+    const { activate } = await import('../src/index')
+    const context = { globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any
+    await activate(context)
+
+    mocks.contextUpdatedListener?.({
+      pkgPath: '/workspace/package.json',
+      generation: 1,
+      uiCompletions: {},
+      optionsComponents: { prefix: [] },
+    })
+    await vi.waitFor(() => expect(mocks.resolvePackagePath).toHaveBeenCalled())
+    expect(mocks.detectSlots).not.toHaveBeenCalled()
+    ;(vscode.window.visibleTextEditors as any).length = 0
+  })
+
   it('registers providers and commands before the initial preload resolves', async () => {
     const { activate } = await import('../src/index')
     const context = { globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any
@@ -97,6 +138,13 @@ describe('activation registration', () => {
     await expect(activation).resolves.toBeUndefined()
 
     mocks.resolveCache('done reading')
-    await vi.waitFor(() => expect(mocks.ensureContext).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(mocks.ensureContext).toHaveBeenCalled())
+    expect(mocks.ensureContext).toHaveBeenCalledWith(
+      '/workspace/App.vue',
+      context,
+      expect.any(Function),
+      false,
+      '/workspace',
+    )
   })
 })

@@ -302,6 +302,9 @@
     "typecheck": "tsc --noEmit",
     "release": "bumpp && pnpm run publish"
   },
+  "dependencies": {
+    "semver": "7.7.3"
+  },
   "devDependencies": {
     "@antfu/eslint-config": "^5.4.1",
     "@babel/parser": "^7.28.5",
@@ -314,6 +317,7 @@
     "@simon_he/translate": "^0.0.13",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^18.19.130",
+    "@types/semver": "^7.7.1",
     "@types/vscode": "1.75.1",
     "@typescript-eslint/typescript-estree": "^8.48.1",
     "@vscode-use/createwebview": "^0.0.13",

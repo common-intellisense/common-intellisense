@@ -723,13 +723,27 @@ function convertCodeOffsetToLineColumn(code: string, offset: number) {
   }
 }
 
-export interface SlotAnalysis {
-  version: number
+export interface SlotAnalysisIdentity {
+  packagePath: string
+  contextGeneration: number
+}
+
+export interface SlotAnalysisRequest extends SlotAnalysisIdentity {
+  uri: string
+  documentVersion: number
+  requestId: number
+  epoch: number
+}
+
+export interface SlotAnalysis extends SlotAnalysisRequest {
   children: any[]
 }
 
 const MAX_DOCUMENT_SLOT_ANALYSES = 20
 const documentSlotAnalyses = new Map<string, SlotAnalysis>()
+const latestSlotRequests = new Map<string, number>()
+let slotRequestSequence = 0
+let slotAnalysisEpoch = 0
 const codeLensEmitter = new vscode.EventEmitter<void>()
 
 export function refreshCodeLenses() {
@@ -738,11 +752,15 @@ export function refreshCodeLenses() {
 
 export function clearDocumentAnalysis(uri?: string | vscode.Uri) {
   if (uri) {
-    const deleted = documentSlotAnalyses.delete(typeof uri === 'string' ? uri : uri.toString())
+    const key = typeof uri === 'string' ? uri : uri.toString()
+    latestSlotRequests.set(key, ++slotRequestSequence)
+    const deleted = documentSlotAnalyses.delete(key)
     if (deleted)
       refreshCodeLenses()
     return
   }
+  slotAnalysisEpoch++
+  latestSlotRequests.clear()
   if (documentSlotAnalyses.size) {
     documentSlotAnalyses.clear()
     refreshCodeLenses()
@@ -759,22 +777,31 @@ export function getDocumentSlotAnalysis(uri: string | vscode.Uri) {
   return analysis
 }
 
-export function commitDocumentSlotAnalysis(uri: string | vscode.Uri, analysis: SlotAnalysis) {
+export function beginDocumentSlotAnalysis(uri: string | vscode.Uri, documentVersion: number, identity: SlotAnalysisIdentity): SlotAnalysisRequest {
   const key = typeof uri === 'string' ? uri : uri.toString()
-  const current = documentSlotAnalyses.get(key)
-  if (current && current.version > analysis.version)
+  const requestId = ++slotRequestSequence
+  latestSlotRequests.set(key, requestId)
+  return { uri: key, documentVersion, requestId, epoch: slotAnalysisEpoch, ...identity }
+}
+
+export function commitDocumentSlotAnalysis(request: SlotAnalysisRequest, children: any[]) {
+  if (request.epoch !== slotAnalysisEpoch || latestSlotRequests.get(request.uri) !== request.requestId)
     return false
-  documentSlotAnalyses.delete(key)
-  documentSlotAnalyses.set(key, analysis)
-  while (documentSlotAnalyses.size > MAX_DOCUMENT_SLOT_ANALYSES)
-    documentSlotAnalyses.delete(documentSlotAnalyses.keys().next().value!)
+  const analysis: SlotAnalysis = { ...request, children }
+  documentSlotAnalyses.delete(request.uri)
+  documentSlotAnalyses.set(request.uri, analysis)
+  while (documentSlotAnalyses.size > MAX_DOCUMENT_SLOT_ANALYSES) {
+    const oldest = documentSlotAnalyses.keys().next().value!
+    documentSlotAnalyses.delete(oldest)
+    latestSlotRequests.delete(oldest)
+  }
   refreshCodeLenses()
   return true
 }
 
-export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[]): Promise<void>
+export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[], identity?: SlotAnalysisIdentity): Promise<void>
 export async function detectSlots(UiCompletions: any, uiDeps: any, prefix: string[]): Promise<void>
-export async function detectSlots(documentOrCompletions: vscode.TextDocument | any, completionsOrDeps: any, depsOrPrefix: any, maybePrefix?: string[]) {
+export async function detectSlots(documentOrCompletions: vscode.TextDocument | any, completionsOrDeps: any, depsOrPrefix: any, maybePrefix?: string[], maybeIdentity?: SlotAnalysisIdentity) {
   const hasDocument = documentOrCompletions?.uri && typeof documentOrCompletions.getText === 'function'
   const document = hasDocument ? documentOrCompletions as vscode.TextDocument : getActiveTextEditor()?.document
   if (!document)
@@ -782,13 +809,13 @@ export async function detectSlots(documentOrCompletions: vscode.TextDocument | a
   const UiCompletions = hasDocument ? completionsOrDeps : documentOrCompletions
   const uiDeps = hasDocument ? depsOrPrefix : completionsOrDeps
   const prefix = (hasDocument ? maybePrefix : depsOrPrefix) || []
-  const requestedVersion = document.version
+  const identity = hasDocument ? maybeIdentity : undefined
+  const request = beginDocumentSlotAnalysis(document.uri, document.version, identity || { packagePath: '', contextGeneration: 0 })
   const children = (await getTemplateAst(document, UiCompletions, uiDeps, prefix)).filter(item => item.children.length)
 
-  // A slower analysis for an older document version must never replace newer data.
-  if (document.version !== requestedVersion)
+  if (document.version !== request.documentVersion)
     return
-  commitDocumentSlotAnalysis(document.uri, { version: requestedVersion, children })
+  commitDocumentSlotAnalysis(request, children)
 }
 
 export function registerCodeLensProviderFn() {
