@@ -32,7 +32,7 @@ export function normalizeScopedSource(from: string | undefined, alias: Record<st
   if (!from)
     return
   if (sourceScopes) {
-    const scope = getSourceScope({ sourceScopes } as any, from)
+    const scope = getSourceScope({ sourceScopes }, from)
     if (scope)
       return scope.lib
   }
@@ -44,7 +44,7 @@ export function normalizeScopedSource(from: string | undefined, alias: Record<st
 export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, { key: string, lib: string }>): PropsConfig {
   if (!from)
     return current
-  const explicitScope = sourceScopes ? getSourceScope({ sourceScopes } as any, from) : undefined
+  const explicitScope = sourceScopes ? getSourceScope({ sourceScopes }, from) : undefined
   if (explicitScope) {
     const scoped = cacheMap.get(explicitScope.key)
     return scoped && typeof scoped === 'object' && !Array.isArray(scoped) ? scoped as PropsConfig : current

@@ -55,7 +55,7 @@ function registerCompletionScopes(scopes: Map<string, { key: string, lib: string
     registerSourceScope(scopes, lib, key, lib)
 }
 
-export function getSourceScope(context: PackageContext, source: string | undefined) {
+export function getSourceScope(context: Pick<PackageContext, 'sourceScopes'>, source: string | undefined) {
   if (!source)
     return
   for (const variant of sourceVariants(source)) {
