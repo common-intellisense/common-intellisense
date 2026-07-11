@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeScopedSource, resolveRefMembers, selectScopedCompletions } from '../../src/index'
+import { normalizeScopedSource, resolveImportedComponent, resolveRefMembers, selectScopedCompletions } from '../../src/index'
 import { findDynamicComponent } from '../../src/parser'
 import { getUiDeps, getUiImportedName } from '../../src/ui/ui-utils'
 
@@ -43,6 +43,25 @@ describe('source-aware component resolution', () => {
     const refDeps = getUiDeps(`import { Button as AppButton } from '@private/ui/button'`) || {}
     expect(await resolveRefMembers('AppButton', refDeps, { Button: { lib: 'mui' } } as any, refCache, alias, [])).toEqual([{ label: 'antdMethod' }])
     expect(await resolveRefMembers('Button', { Button: '@unknown/private' }, { Button: { lib: 'mui', methods: [{ label: 'muiMethod' }] } } as any, refCache, alias, [])).toBeUndefined()
+  })
+
+  it('preserves compound roots for named and namespace imports', async () => {
+    const antdItem = { lib: 'antd', marker: 'antd-item', methods: [{ label: 'focus' }] }
+    const radixRoot = { lib: '@radix-ui/react-dialog', marker: 'radix-root' }
+    const flattened = { 'Form.Item': { lib: 'other', marker: 'wrong' }, 'Dialog.Root': { lib: 'other', marker: 'wrong' } } as any
+    const cache = new Map<string, any>([
+      ['antd5', { 'Form.Item': antdItem }],
+      ['radixDialog1', { 'Dialog.Root': radixRoot }],
+    ])
+    const scopes = new Map([
+      ['antd', { key: 'antd5', lib: 'antd' }],
+      ['@radix-ui/react-dialog', { key: 'radixDialog1', lib: '@radix-ui/react-dialog' }],
+    ])
+    const deps = getUiDeps(`import { Form as AntForm } from 'antd'\nimport * as Dialog from '@radix-ui/react-dialog'`) || {}
+
+    await expect(resolveImportedComponent('AntForm.Item', deps, flattened, cache, {}, [], scopes)).resolves.toMatchObject({ component: antdItem, source: 'antd' })
+    await expect(resolveImportedComponent('Dialog.Root', deps, flattened, cache, {}, [], scopes)).resolves.toMatchObject({ component: radixRoot, source: '@radix-ui/react-dialog' })
+    await expect(resolveRefMembers('AntForm.Item', deps, flattened, cache, {}, [], scopes)).resolves.toEqual([{ label: 'focus' }])
   })
 
   it('records local names for aliased and default imports', () => {

@@ -50,7 +50,15 @@ export function createImportEdits(code: string, source: string, dependencies: st
   const script = getScriptRegion(code, vue)
   if (!script) {
     const statements = createStatements(source, names, importWay)
-    return statements ? [{ start: 0, end: 0, text: `<script setup>\n${statements}\n</script>\n` }] : []
+    if (!statements)
+      return []
+    if (vue) {
+      const openingTag = getNewVueScriptSetupTag(code)
+      if (!openingTag)
+        return []
+      return [{ start: 0, end: 0, text: `${openingTag}\n${statements}\n</script>\n` }]
+    }
+    return [{ start: 0, end: 0, text: `<script setup>\n${statements}\n</script>\n` }]
   }
 
   const sourceFile = ts.createSourceFile('component.tsx', script.code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
@@ -320,12 +328,23 @@ function getScriptRegion(code: string, vue: boolean) {
     return { code, offset: 0 }
 
   const { descriptor } = parseVueSfc(code)
-  const selected = descriptor.scriptSetup?.src
-    ? descriptor.script && !descriptor.script.src ? descriptor.script : undefined
-    : descriptor.scriptSetup || (descriptor.script && !descriptor.script.src ? descriptor.script : undefined)
+  const selected = descriptor.scriptSetup && !descriptor.scriptSetup.src
+    ? descriptor.scriptSetup
+    : undefined
   if (!selected)
     return null
   return { code: selected.content, offset: selected.loc.start.offset }
+}
+
+function getNewVueScriptSetupTag(code: string) {
+  const { descriptor, errors } = parseVueSfc(code)
+  // Vue does not support an external script-setup block. The compiler omits it
+  // from the descriptor and reports an error, so decline rather than creating
+  // a second setup block in an already invalid SFC.
+  if (descriptor.scriptSetup || errors.some((error: any) => String(error?.message || error).includes('<script setup> cannot use the "src" attribute')))
+    return
+  const lang = descriptor.script?.lang
+  return lang ? `<script setup lang=${JSON.stringify(lang)}>` : '<script setup>'
 }
 
 function isIdentifier(name: string) {

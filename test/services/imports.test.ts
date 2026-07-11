@@ -180,11 +180,24 @@ const view = [Button, Input]
     expect(output).toContain('<script setup>\nimport { Button } from "ui"\n</script>')
   })
 
-  it('uses an inline normal script when script setup is external', () => {
+  it('declines edits when script setup is external', () => {
     const vue = '<script setup src="./setup.ts"></script>\n<script>\nconst x = 1\n</script>\n'
+    expect(createImportEdits(vue, 'ui', ['Button'], 'specifier', true)).toEqual([])
+  })
+
+  it('creates a local script setup instead of importing into an Options API script', () => {
+    const vue = `<template><Button /></template>\n<script lang="ts">\nexport default { name: 'Page' }\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
-    expect(output).toContain('<script setup src="./setup.ts"></script>')
-    expect(output).toContain('<script>\nimport { Button } from "ui"\nconst x = 1')
+    expect(output).toContain('<script setup lang="ts">\nimport { Button } from "ui"\n</script>')
+    expect(output).toContain(`<script lang="ts">\nexport default { name: 'Page' }\n</script>`)
+    expect(output).not.toContain(`<script lang="ts">\nimport { Button }`)
+  })
+
+  it('creates script setup alongside defineComponent Options API code', () => {
+    const vue = `<template><Button /></template>\n<script>\nexport default defineComponent({ components: { Existing } })\n</script>\n`
+    const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
+    expect(output).toContain('<script setup>\nimport { Button } from "ui"\n</script>')
+    expect(output).toContain('export default defineComponent({ components: { Existing } })')
   })
 
   it('inserts into Vue script setup and creates one when absent', () => {

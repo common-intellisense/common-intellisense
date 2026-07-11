@@ -18,7 +18,8 @@ import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { convertPrefixedComponentName, findPrefixedComponent, hyphenate } from './ui/utils'
 import { getSourceScope, logger } from './ui/ui-find'
-import { fixedTagName, getUiImportedName } from './ui/ui-utils'
+import { resolveImportedTag } from './services/component-resolver'
+import { getNodeOffsetRange } from './services/node-range'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -1016,16 +1017,14 @@ export function registerCodeLensProviderFn() {
           }
           slots.filter((s: any) => !filters.includes(s.name)).forEach((s: any, i: number) => {
             const { name, description, description_zh, version } = s
-            // 计算偏移量
-            let codeLensRange = null
-            if (offset) {
-              const fixedStart = getPosition(range.start.offset + offset, document.getText()).position
-              const fixedEnd = getPosition(range.end.offset + offset, document.getText()).position
-              codeLensRange = createRange(fixedStart, fixedEnd)
-            }
-            else {
-              codeLensRange = createRange(range.start.line - 1, range.start.column, range.end.line - 1, range.end.column)
-            }
+            // Normalize compiler AST and ESTree nodes into absolute document offsets.
+            const absoluteRange = getNodeOffsetRange(child, offset)
+            const codeLensRange = absoluteRange
+              ? createRange(
+                  getPosition(absoluteRange.start, document.getText()).position,
+                  getPosition(absoluteRange.end, document.getText()).position,
+                )
+              : createRange(range.start.line - 1, range.start.column, range.end.line - 1, range.end.column)
 
             result.push(new vscode.CodeLens(codeLensRange, {
               title: `${i === 0 ? 'Slots: ' : ''}${name}`,
@@ -1114,9 +1113,8 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
     if (cacheMap.has(range) || originTag.includes(tag))
       continue
 
-    const localName = fixedTagName(tag)
-    const importedName = getUiImportedName(uiDeps, localName)
-    const source = uiDeps?.[localName]
+    const importedTag = resolveImportedTag(tag, uiDeps)
+    const source = importedTag.source
     let scopedCompletions = UiCompletions
     let normalizedSource = source
     if (source && sourceContext) {
@@ -1129,11 +1127,16 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
       }
     }
 
-    const target = source
-      ? await findDynamicComponent(importedName, {}, scopedCompletions, prefix, normalizedSource)
-      : findPrefixedComponent(tag, prefix.filter(Boolean), scopedCompletions)
-        || scopedCompletions[importedName]
-        || await findDynamicComponent(importedName, {}, scopedCompletions, prefix)
+    let target: any
+    for (const candidate of importedTag.candidates) {
+      target = source
+        ? await findDynamicComponent(candidate, {}, scopedCompletions, prefix, normalizedSource)
+        : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
+          || scopedCompletions[candidate]
+          || await findDynamicComponent(candidate, {}, scopedCompletions, prefix)
+      if (target)
+        break
+    }
 
     // An explicit import source is authoritative. Never fall back to a same-name
     // component from the flattened map when its scoped candidate is absent.
