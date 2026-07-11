@@ -227,6 +227,23 @@ describe('utils reducer regressions', () => {
     expect(completions[0].snippet).not.toContain('<unknown1>')
   })
 
+  it('normalizes required prop types and defaults without rejecting snippets', async () => {
+    const { getRequireProp } = await import('../../src/ui/utils')
+
+    await expect(getRequireProp({ props: { label: { required: true, default: '' } } }, 0, 'vue')).resolves.toEqual([
+      ['label="${1||}"'],
+      1,
+    ])
+    await expect(getRequireProp({ props: { count: { required: true, type: '0 | 1', default: 1 } } }, 0, 'vue')).resolves.toEqual([
+      ['count="${1|1,0|}"'],
+      1,
+    ])
+    await expect(getRequireProp({ props: { disabled: { required: true, type: 'boolean', default: false } } }, 0, 'react')).resolves.toEqual([
+      ['disabled={true}'],
+      0,
+    ])
+  })
+
   it('componentsReducer uses item-local dynamicLib/importWay without enabling HTML markdown', async () => {
     const { componentsReducer } = await import('../../src/ui/utils')
 

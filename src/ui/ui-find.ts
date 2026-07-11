@@ -27,9 +27,43 @@ export interface PackageContext {
   optionsComponents: OptionsComponents
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
+  sourceScopes: Map<string, { key: string, lib: string }>
 }
 
 const contexts = new Map<string, PackageContext>()
+
+function sourceVariants(source: string) {
+  const packageName = source.startsWith('@') ? source.split('/').slice(0, 2).join('/') : source.split('/')[0]
+  return new Set([source, packageName, formatUIName(source), formatUIName(packageName)])
+}
+
+function registerSourceScope(scopes: Map<string, { key: string, lib: string }>, source: string, key: string, lib: string) {
+  for (const variant of sourceVariants(source))
+    scopes.set(variant, { key, lib })
+}
+
+function registerCompletionScopes(scopes: Map<string, { key: string, lib: string }>, completion: PropsConfig, key: string, sources: string[]) {
+  const canonicalLibs = new Set(
+    (Object.values(completion) as any[])
+      .map(item => typeof item?.lib === 'string' ? item.lib : undefined)
+      .filter((lib): lib is string => !!lib),
+  )
+  const fallbackLib = canonicalLibs.values().next().value || key.replace(/\d+$/, '')
+  for (const source of sources)
+    registerSourceScope(scopes, source, key, fallbackLib)
+  for (const lib of canonicalLibs)
+    registerSourceScope(scopes, lib, key, lib)
+}
+
+export function getSourceScope(context: PackageContext, source: string | undefined) {
+  if (!source)
+    return
+  for (const variant of sourceVariants(source)) {
+    const scope = context.sourceScopes.get(variant)
+    if (scope)
+      return scope
+  }
+}
 interface ContextLoad {
   epoch: number
   generation: number
@@ -42,6 +76,11 @@ const mainWatchers = new Map<string, () => void>()
 const sourceRefreshes = new Set<string>()
 const officialSourceTTL = 10 * 60 * 1000
 const customSourceTTL = 5 * 60 * 1000
+
+function getSourceRefreshKey(kind: 'custom' | 'official', context: PackageContext) {
+  return `${kind}:${context.pkgPath || context.cwd}:${context.generation}:${context.officialCheckedAt}`
+}
+
 let registryEpoch = 0
 let activeContext: PackageContext | undefined
 const contextInvalidationListeners = new Set<(packagePaths?: string[]) => void>()
@@ -181,7 +220,7 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
   const now = Date.now()
   if (now - context.officialCheckedAt < officialSourceTTL) {
     if (now - context.customSourcesCheckedAt >= customSourceTTL) {
-      const refreshKey = `custom:${contextKey}`
+      const refreshKey = getSourceRefreshKey('custom', context)
       if (!sourceRefreshes.has(refreshKey)) {
         sourceRefreshes.add(refreshKey)
         startContextEnhancements(context, registryEpoch, () => sourceRefreshes.delete(refreshKey))
@@ -192,7 +231,7 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
   // An official refresh also restarts custom enhancements. Do not publish an
   // old-baseline custom revision concurrently or it could invalidate the
   // official refresh's context identity guard.
-  const refreshKey = `official:${contextKey}`
+  const refreshKey = getSourceRefreshKey('official', context)
   if (sourceRefreshes.has(refreshKey))
     return
   sourceRefreshes.add(refreshKey)
@@ -278,6 +317,8 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   const originNames: string[] = []
   const formatToPkg = new Map<string, { pkgName: string, version: string, installedVersion?: string, adapterMajor: string }>()
   const selectionToAdapter = new Map<string, string>()
+  const sourceScopes = new Map<string, { key: string, lib: string }>()
+  const adapterSources = new Map<string, string[]>()
 
   for (const [declaredName, version] of uis) {
     let uiName = declaredName
@@ -301,6 +342,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     selectionToAdapter.set(formatName, formatName)
     selectionToAdapter.set(selectionName, formatName)
     availableNames.push(formatName)
+    adapterSources.set(formatName, [...(adapterSources.get(formatName) || []), declaredName, uiName])
   }
 
   const hasExplicitSelection = !!selectedUIs?.length && !selectedUIs.includes('auto')
@@ -341,17 +383,23 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
       localCache.set(name, completion)
       localCompletions ||= {} as PropsConfig
       Object.assign(localCompletions, completion)
+      registerCompletionScopes(
+        sourceScopes,
+        completion,
+        name,
+        adapterSources.get(name) || [pkgInfo?.pkgName || name],
+      )
     }
   }
 
   await writeLocalCache()
 
   const checkedAt = Date.now()
-  return { cwd, pkgPath, workspaceRoot, generation, revision: 1, officialCheckedAt: checkedAt, customSourcesCheckedAt: 0, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
+  return { cwd, pkgPath, workspaceRoot, generation, revision: 1, officialCheckedAt: checkedAt, customSourcesCheckedAt: 0, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache, sourceScopes }
 }
 
 function startTrackedContextEnhancements(context: PackageContext, expectedEpoch: number) {
-  const refreshKey = `custom:${context.pkgPath || context.cwd}`
+  const refreshKey = getSourceRefreshKey('custom', context)
   if (sourceRefreshes.has(refreshKey))
     return
   sourceRefreshes.add(refreshKey)
@@ -408,6 +456,7 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
     ...context,
     revision: current.revision + 1,
     cacheMap: new Map(context.cacheMap),
+    sourceScopes: new Map(context.sourceScopes),
     optionsComponents: {
       prefix: [...context.optionsComponents.prefix],
       data: [...context.optionsComponents.data],
@@ -435,6 +484,12 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
             enhanced.cacheMap.set(key, completion)
             enhanced.uiCompletions ||= {} as PropsConfig
             Object.assign(enhanced.uiCompletions, completion)
+            registerCompletionScopes(
+              enhanced.sourceScopes,
+              completion,
+              key,
+              [key, key.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')],
+            )
           }
         }
       }

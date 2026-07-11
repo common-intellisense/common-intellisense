@@ -935,8 +935,11 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
 
   for (let key of Object.keys(content.props)) {
     const item = content.props[key]
-    if (!item.required)
+    if (!item?.required)
       continue
+    const typeText = typeof item.type === 'string' ? item.type : ''
+    const defaultText = item.default == null ? '' : String(item.default)
+    const valueText = item.value == null ? '' : String(item.value)
     let prefix = ''
     let prefixKey = ''
     if (item.related && item.related.length && parent) {
@@ -947,7 +950,7 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
       }
     }
     let attr = ''
-    const v = item.value
+    const v = valueText
     if (key.startsWith(':')) {
       const tagName = getComponentTagName(content.name)
       const keyName = toCamel(key.split(':').slice(-1)[0])
@@ -1006,16 +1009,15 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
         }
       }
     }
-    else if (item.type && item.type.toLowerCase().includes('boolean') && item.default?.toLowerCase() === 'false') {
-      // 还要进一步看它的 type 如果 type === boolean 提供 true or false 如果是字符串，使用 / 或着 ｜ 分割，作为提示
+    else if (typeText.toLowerCase().includes('boolean')) {
       if (isHtmlLike)
         attr = key
       else
-        attr = `${key}="true"`
+        attr = `${key}={true}`
     }
     else {
       const tempMap: any = {}
-      const types = item.type.replace(/\s+/g, ' ').replace(/\{((?:[^{}]|\{[^{}]*\})*)\}|<((?:[^<>]|<[^<>]*>)*)>/g, (_: string) => {
+      const types = typeText.replace(/\s+/g, ' ').replace(/\{((?:[^{}]|\{[^{}]*\})*)\}|<((?:[^<>]|<[^<>]*>)*)>/g, (_: string) => {
         const key = hash(_)
         tempMap[key] = _.replace(/,/g, '\,')
         return key
@@ -1033,11 +1035,10 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
         attr = `${key}="${item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)}"`
       }
       else {
-        if (item.default && types.includes(item.default)) {
-          // 如果 item.default 并且在 type 中，将 types 的 default 值，放到
-          const i = types.findIndex((i: string) => i === item.default)
+        if (defaultText && types.includes(defaultText)) {
+          const i = types.findIndex((i: string) => i === defaultText)
           types.splice(i, 1)
-          types.unshift(item.default)
+          types.unshift(defaultText)
         }
         const typeTips = types
           .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))

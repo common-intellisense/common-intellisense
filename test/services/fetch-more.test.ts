@@ -1,3 +1,4 @@
+import vm from 'node:vm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let remoteUris: string[] = ['https://fake/remote.js']
@@ -349,11 +350,12 @@ describe('fetch service additional tests (mocked)', () => {
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
   })
 
-  it('discards a source result completed after cache invalidation', async () => {
+  it('discards a source result completed after cache invalidation without executing it', async () => {
     let resolveRemote!: (value: string) => void
     const pending = new Promise<string>((resolve) => { resolveRemote = resolve })
     const ofetchMod = await import('ofetch')
     vi.mocked(ofetchMod.ofetch).mockReturnValue(pending as any)
+    const executionSpy = vi.spyOn(vm.Script.prototype, 'runInContext')
     const mod = await import('../../src/services/fetch')
     mod.clearFetchCaches()
 
@@ -363,6 +365,40 @@ describe('fetch service additional tests (mocked)', () => {
 
     await expect(resultPromise).resolves.toEqual({})
     expect(mod.cacheFetch.has('https://fake/remote.js')).toBe(false)
+    expect(executionSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not execute a stale cached remote fallback after invalidation', async () => {
+    const ofetchMod = await import('ofetch')
+    const executionSpy = vi.spyOn(vm.Script.prototype, 'runInContext')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+    mod.cacheFetch.set('https://fake/remote.js', 'module.exports = { StaleProps: () => ({ stale: true }) }')
+    vi.mocked(ofetchMod.ofetch).mockImplementation(async () => {
+      mod.clearFetchCaches()
+      throw new Error('offline')
+    })
+    vi.spyOn(Date, 'now').mockReturnValue(6 * 60 * 1000)
+
+    await expect(mod.fetchFromRemoteUrls()).resolves.toEqual({})
+    expect(executionSpy).not.toHaveBeenCalled()
+  })
+
+  it('rejects an oversized legacy export before parsing its inner JSON', async () => {
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(
+      'module.exports = { HugeProps: () => ({ value: "x".repeat(9 * 1024 * 1024) }) }',
+    )
+    const parseSpy = vi.spyOn(JSON, 'parse')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+    parseSpy.mockClear()
+
+    await expect(mod.fetchFromRemoteUrls()).resolves.toEqual({})
+    // Manifest detection and the outer VM envelope may parse; the oversized inner JSON must not.
+    expect(parseSpy.mock.calls.some(([value]) => (
+      typeof value === 'string' && value.startsWith('{"value"') && value.length > 8 * 1024 * 1024
+    ))).toBe(false)
   })
 
   it('fetchFromRemoteUrls skips untrusted http hosts by default', async () => {

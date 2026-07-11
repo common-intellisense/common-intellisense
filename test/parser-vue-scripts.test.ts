@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parser } from '../src/parser'
+import { clearDocumentAnalysis, detectSlots, getDocumentSlotAnalysis, parser } from '../src/parser'
 
 function positionIn(code: string, needle: string) {
   const offset = code.indexOf(needle)
@@ -44,6 +44,25 @@ const button = <ElButton size="small" />
     expect(tag).toMatchObject({ type: 'tag', tag: 'ElButton', hostFramework: 'vue' })
     expect(prop).toMatchObject({ type: 'props', tag: 'ElButton', propName: 'size', hostFramework: 'vue' })
     expect(tag.template).toBeDefined()
+  })
+
+  it('keeps template slot analysis when a TSX script is also present', async () => {
+    clearDocumentAnalysis()
+    const code = `<template><UiTable /></template>\n<script setup lang="tsx">const icon = <UiIcon /></script>`
+    const document = {
+      languageId: 'vue',
+      version: 1,
+      uri: { toString: () => 'file:///App.vue' },
+      getText: () => code,
+    } as any
+    const table = { rawSlots: [{ name: 'default' }] }
+    await detectSlots(document, { UiTable: table, UiIcon: { rawSlots: [{ name: 'icon' }] } }, {}, [], {
+      packagePath: '/workspace/package.json',
+      contextGeneration: 1,
+      contextRevision: 1,
+    })
+    const groups = getDocumentSlotAnalysis(document.uri)?.children || []
+    expect(groups.some((group: any) => group.offset === 0 && group.children.some((entry: any) => entry.child.tag === 'UiTable'))).toBe(true)
   })
 
   it('uses either active block and aggregates refs from both blocks', () => {

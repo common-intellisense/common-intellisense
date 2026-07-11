@@ -101,6 +101,8 @@ const remoteExecTimeout = 1200
 const maxRemoteScriptSize = 8 * 1024 * 1024
 const maxAdapterResultSize = 8 * 1024 * 1024
 const maxTotalAdapterResultSize = 16 * 1024 * 1024
+// Bound the host-side outer JSON parse before allocating its object graph.
+const maxAdapterEnvelopeSize = maxTotalAdapterResultSize + 1024 * 1024
 const maxAdapterDepth = 30
 const maxAdapterArrayLength = 20_000
 const maxAdapterStringLength = 1_000_000
@@ -314,23 +316,38 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
   const context = createAdapterVmContext(sandbox)
   new vm.Script(scriptContent, { filename: source }).runInContext(context, { timeout: remoteExecTimeout })
   const serializedJson = runAdapterExports(context, remoteExecTimeout)
-  if (typeof serializedJson !== 'string')
+  if (typeof serializedJson !== 'string' || Buffer.byteLength(serializedJson) > maxAdapterEnvelopeSize)
     throw new Error(`Adapter result is invalid or too large: ${source}`)
-  const serialized = JSON.parse(serializedJson) as Array<[string, unknown]>
+  const serialized = JSON.parse(serializedJson) as unknown
   if (!Array.isArray(serialized))
     throw new Error(`Adapter result is invalid or too large: ${source}`)
-  const result: Record<string, unknown> = {}
+
+  const keys: string[] = []
   const resultSizes: number[] = []
-  for (const [key, json] of serialized) {
-    if (typeof json !== 'string')
-      throw new Error(`Adapter result is invalid or too large: ${source}#${key}`)
-    resultSizes.push(Buffer.byteLength(json))
+  const entries: Array<[string, string]> = []
+  for (const entry of serialized) {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || typeof entry[1] !== 'string')
+      throw new Error(`Adapter result is invalid or too large: ${source}`)
+    keys.push(entry[0])
+    resultSizes.push(Buffer.byteLength(entry[1]))
+    entries.push([entry[0], entry[1]])
+  }
+  // Validate every byte budget before parsing any individual export.
+  validateLegacyAdapterLimits(keys, resultSizes, source)
+
+  const result: Record<string, unknown> = {}
+  for (const [key, json] of entries) {
     const data = JSON.parse(json)
     validateAdapterData(data, `${source}#${key}`)
     result[key] = data
   }
-  validateLegacyAdapterLimits(serialized.map(([key]) => key), resultSizes, source)
   return result
+}
+
+function evaluateAdapterForEpoch(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean, expectedEpoch: number) {
+  if (sourceEpoch !== expectedEpoch)
+    throw new Error(`Adapter source invalidated before evaluation: ${source}`)
+  return evaluateAdapter(scriptContent, source, localeZh, allowLegacyCode)
 }
 
 function appendReducedExports(target: Record<string, any>, exportsData: Record<string, unknown>, source: string) {
@@ -520,7 +537,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
         setFetchCacheEntry(scriptKey, scriptContent)
       // Official @common-intellisense packages remain a trusted compatibility source.
       // Custom executable adapters are opt-in and should migrate to data-only manifests.
-      const exportsData = evaluateAdapter(scriptContent, scriptKey, !!isZh, true)
+      const exportsData = evaluateAdapterForEpoch(scriptContent, scriptKey, !!isZh, true, epoch)
       const result: any = {}
       let fallbackRaw: any[] | undefined
       if (options?.pkgName && options?.resolveFrom) {
@@ -604,19 +621,20 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
 const maxRemoteRedirects = 5
 
 type RemoteTrustClass
-  = | { kind: 'publicHttps' }
-    | { kind: 'localhostHttp', hostname: string }
-    | { kind: 'explicitTrustedHost', hostname: string }
+  = | { kind: 'publicHttps', initialProtocol: 'https:' }
+    | { kind: 'localhostHttp', hostname: string, initialProtocol: 'http:' }
+    | { kind: 'explicitTrustedHost', hostname: string, initialProtocol: 'http:' | 'https:' }
 
 async function getRemoteTrustClass(uri: string): Promise<RemoteTrustClass | undefined> {
   const target = new URL(uri)
   const hostname = normalizeHostname(target.hostname)
   if (target.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname))
-    return { kind: 'localhostHttp', hostname }
-  if ((target.protocol === 'http:' || target.protocol === 'https:') && isExplicitlyTrustedHost(hostname))
-    return { kind: 'explicitTrustedHost', hostname }
+    return { kind: 'localhostHttp', hostname, initialProtocol: 'http:' }
+  // Public HTTPS keeps the stricter public trust class even when explicitly listed.
   if (isTrustedRedirectUri(uri))
-    return { kind: 'publicHttps' }
+    return { kind: 'publicHttps', initialProtocol: 'https:' }
+  if ((target.protocol === 'http:' || target.protocol === 'https:') && isExplicitlyTrustedHost(hostname))
+    return { kind: 'explicitTrustedHost', hostname, initialProtocol: target.protocol }
 }
 
 function isRedirectAllowed(uri: string, trust: RemoteTrustClass) {
@@ -624,6 +642,8 @@ function isRedirectAllowed(uri: string, trust: RemoteTrustClass) {
   const hostname = normalizeHostname(target.hostname)
   if (trust.kind === 'publicHttps')
     return isTrustedRedirectUri(uri)
+  if (trust.initialProtocol === 'https:' && target.protocol !== 'https:')
+    return false
   return hostname === trust.hostname && (target.protocol === 'http:' || target.protocol === 'https:')
 }
 
@@ -830,7 +850,7 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
       }
       const [uri, scriptContent] = entry.value
       try {
-        appendReducedExports(result, evaluateAdapter(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled()), uri)
+        appendReducedExports(result, evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), uri)
       }
       catch (error) {
         logger.error(`Failed to evaluate remote adapter ${uri}: ${String(error)}`)
@@ -932,7 +952,7 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
       }
       const [key, scriptContent] = entry.value
       try {
-        const exportsData = evaluateAdapter(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled())
+        const exportsData = evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
         appendReducedExports(result, exportsData, key)
       }
       catch (error) {
@@ -1006,7 +1026,7 @@ async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspa
         Object.assign(result, localUrisMap.get(uri))
         continue
       }
-      const exportsData = evaluateAdapter(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled())
+      const exportsData = evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
       const reduced: Record<string, any> = {}
       appendReducedExports(reduced, exportsData, uri)
       if (sourceEpoch !== epoch)

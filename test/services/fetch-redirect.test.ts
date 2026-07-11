@@ -155,6 +155,15 @@ describe('remote redirect validation', () => {
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, redirected, expect.any(Object))
   })
 
+  it('rejects a same-host HTTPS to HTTP downgrade', async () => {
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+    const requester = vi.fn()
+      .mockResolvedValueOnce({ status: 302, location: 'http://trusted.test/adapter', body: '' })
+
+    await expect(fetchRemoteText('https://trusted.test/adapter', async () => [{ address: '8.8.8.8', family: 4 }], requester)).rejects.toThrow('untrusted URL')
+    expect(requester).toHaveBeenCalledTimes(1)
+  })
+
   it('stops redirect loops at the configured limit', async () => {
     const ofetchMod = await import('ofetch')
     vi.mocked(ofetchMod.ofetch).mockImplementation(async (_url: any, options: any) => {

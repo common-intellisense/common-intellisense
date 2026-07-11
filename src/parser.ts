@@ -1048,20 +1048,22 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
     const {
       descriptor: { template, script, scriptSetup },
     } = getVueSfcParseResult(code)
+    const analyses: Array<{ children: any, offset: number }> = []
+    if (template) {
+      analyses.push({
+        children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix),
+        offset: 0,
+      })
+    }
     const tsxScript = [scriptSetup, script].find(block => block?.lang === 'tsx')
     if (tsxScript) {
       const children = findAllJsxElements(tsxScript.content)
-      return [{
+      analyses.push({
         children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
         offset: tsxScript.loc.start.offset,
-      }]
+      })
     }
-    if (!template)
-      return []
-    return [{
-      children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix),
-      offset: 0,
-    }]
+    return analyses
   }
   else if (isVineDocument) {
     const { vineFileCtx } = createVineFileCtx('', code)

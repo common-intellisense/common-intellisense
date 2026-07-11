@@ -64,6 +64,8 @@ describe('ui-find updateCompletions', () => {
       }),
     )
     expect(context.uiNames).toEqual(['antd5'])
+    expect(mod.getSourceScope(context, 'my-ui')).toMatchObject({ key: 'antd5', lib: 'antd' })
+    expect(mod.getSourceScope(context, 'antd')).toMatchObject({ key: 'antd5', lib: 'antd' })
   })
 
   it('uses the alias major rather than the unrelated wrapper package version', async () => {
@@ -99,6 +101,29 @@ describe('ui-find updateCompletions', () => {
       'element-plus2',
       expect.objectContaining({ pkgName: 'element-plus', installedVersion: undefined, adapterMajor: '2' }),
     )
+  })
+
+  it('records explicit source scopes for canonical built-in adapter keys', async () => {
+    const mod = await import('../../src/ui/ui-find')
+    const cases = [
+      ['uview-ui', 'uview2'],
+      ['@nextui-org/react', 'nextUi2'],
+      ['@arco-design/web-react', 'arcoDesign2'],
+      ['@nuxt/ui-pro', 'nuxtUiPro2'],
+      ['@ark-ui/vue', 'arkVue2'],
+      ['@dcloudio/uni-ui', 'dcloudioUniUi2'],
+    ] as const
+    const context = await mod.updateCompletions(cases.map(([source]) => [source, '2.0.0']) as any, {
+      selectedUIs: [],
+      alias: {},
+      detectSlots: () => {},
+      prefix: {},
+      pkgPath: '/repo/package.json',
+      workspaceRoot: '/repo',
+    })
+
+    for (const [source, key] of cases)
+      expect(mod.getSourceScope(context, source)?.key).toBe(key)
   })
 
   it('uses the workspace root rather than the nested package root for local adapters', async () => {

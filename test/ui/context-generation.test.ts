@@ -164,6 +164,49 @@ describe('package context generations', () => {
       expect(contexts.some(value => value.uiCompletions?.NpmButton)).toBe(true)
     })
     expect(remoteFetchMock).toHaveBeenCalledTimes(1)
+    const latestLocalContext = updated.mock.calls.map(call => call[0]).find(value => value.uiCompletions?.LocalButton)
+    expect(mod.getSourceScope(latestLocalContext, 'local-props')).toMatchObject({ key: 'LocalProps', lib: 'LocalProps' })
+  })
+
+  it('starts custom sources for a new package generation while the old generation is pending', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    let resolveOldRemote!: (value: any) => void
+    remoteFetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOldRemote = resolve }))
+      .mockResolvedValueOnce({ Gen2Props: () => ({ Gen2Button: { source: 'gen2' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    const first = await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidatePackageContext(documentPath)
+    const second = await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+
+    expect(second?.generation).toBeGreaterThan(first?.generation || 0)
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Gen2Button).toBeDefined())
+
+    resolveOldRemote({ OldProps: () => ({ OldButton: { source: 'gen1' } }) })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldButton).toBeUndefined()
+  })
+
+  it('maps a custom manifest canonical package name to its completion scope', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    localFetchMock.mockResolvedValue({
+      VendorProps: () => ({ VendorButton: { lib: '@vendor/ui', source: 'manifest' } }),
+    })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.VendorButton).toBeDefined())
+
+    const context = mod.getContextForDocumentPath(documentPath)!
+    expect(mod.getSourceScope(context, '@vendor/ui/button')).toEqual({ key: 'VendorProps', lib: '@vendor/ui' })
   })
 
   it('does not republish stale custom enhancement after global invalidation', async () => {
