@@ -113,7 +113,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
 
   const epoch = registryEpoch
   const generation = nextGeneration(pkgPath)
-  const task = buildContext(cwd, extensionContext, detectSlots, generation, workspaceRoot)
+  const task = buildContext(cwd, extensionContext, detectSlots, generation, workspaceRoot || path.dirname(pkgPath))
   contextLoads.set(pkgPath, task)
   try {
     const context = await task
@@ -123,6 +123,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
     documentPackageCache.set(cwd, context.pkgPath)
     applyContext(context)
     notifyContextUpdated(context)
+    void enhanceContextWithOtherSources(context).catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
     return context
   }
   finally {
@@ -148,7 +149,7 @@ async function buildContext(cwd: string, extensionContext: vscode.ExtensionConte
     invalidatePackageContext(cwd)
     void ensureContextForPath(cwd, extensionContext, detectSlots, false, workspaceRoot)
   }
-  const discovered = urlCache.get(cwd) || await findPkgUI(cwd, onChange)
+  const discovered = urlCache.get(cwd) || await findPkgUI(cwd, onChange, workspaceRoot)
   if (!discovered)
     return
   urlCache.set(cwd, discovered)
@@ -177,31 +178,35 @@ export interface UpdateCompletionsOptions {
 export async function updateCompletions(uis: Uis, options: UpdateCompletionsOptions) {
   const cwd = options.pkgPath ? path.dirname(options.pkgPath) : getCurrentFileUrl() || ''
   const context = await buildCompletions(uis, options, cwd, nextGeneration(cwd))
-  contexts.set(cwd, context)
+  contexts.set(context.pkgPath || cwd, context)
   applyContext(context)
-  contextUpdateListeners.forEach(listener => listener(context))
-  return context
+  notifyContextUpdated(context)
+  return await enhanceContextWithOtherSources(context) || context
 }
 
 async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd: string, generation: number): Promise<PackageContext> {
   const { selectedUIs, alias, prefix: userPrefix, pkgPath = '', workspaceRoot = path.dirname(pkgPath) } = options
   await getLocalCache
   const localCache = new Map<string, any>()
-  const localUI: Record<string, (options?: { resolveFrom?: string, installedVersion?: string }) => any> = {}
+  const localUI: Record<string, (options?: { resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) => any> = {}
   const localOptions = emptyOptions()
   let localCompletions: PropsConfig | null = null
   const availableNames: string[] = []
   const originNames: string[] = []
-  const formatToPkg = new Map<string, { pkgName: string, version: string, installedVersion?: string }>()
+  const formatToPkg = new Map<string, { pkgName: string, version: string, installedVersion?: string, adapterMajor: string }>()
   const selectionToAdapter = new Map<string, string>()
 
   for (const [declaredName, version] of uis) {
     let uiName = declaredName
     let major = extractMajor(version) || '0'
+    let installedVersion = version
     if (uiName in alias) {
       const parsedAlias = parseAlias(alias[uiName])
       uiName = parsedAlias.name || uiName
       major = parsedAlias.major || major
+      const underlyingPackageName = configUINames.find(candidate => formatUIName(candidate) === formatUIName(uiName)) || uiName
+      installedVersion = await resolveInstalledPackageVersion(underlyingPackageName, path.dirname(pkgPath))
+      uiName = underlyingPackageName
       originNames.push(`${declaredName}${major}`)
     }
     else {
@@ -209,7 +214,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     }
     const formatName = `${formatUIName(uiName)}${major}`
     const selectionName = `${declaredName}${major}`
-    formatToPkg.set(formatName, { pkgName: uiName, version: major, installedVersion: version })
+    formatToPkg.set(formatName, { pkgName: uiName, version: major, installedVersion, adapterMajor: major })
     selectionToAdapter.set(formatName, formatName)
     selectionToAdapter.set(selectionName, formatName)
     availableNames.push(formatName)
@@ -221,15 +226,13 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     : []
   const uiNames = hasExplicitSelection ? [...new Set(selected)] : availableNames
 
-  await loadOtherSources(localUI, localCache, localOptions, workspaceRoot, pkgPath, () => localCompletions, value => localCompletions = value)
-
   // Deliberately sequential: configured library order defines collision precedence.
   for (const name of uiNames) {
     try {
       const pkgInfo = formatToPkg.get(name)
       const exports = await fetchFromCommonIntellisense(
         name.replace(/([A-Z])/g, '-$1').toLowerCase(),
-        pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath, installedVersion: pkgInfo.installedVersion } : { uiName: name, resolveFrom: pkgPath },
+        pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath, installedVersion: pkgInfo.installedVersion, adapterMajor: pkgInfo.adapterMajor } : { uiName: name, resolveFrom: pkgPath },
       )
       if (exports)
         Object.assign(localUI, exports)
@@ -239,7 +242,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
         localCache.set(componentsKey, components)
         mergeComponents(localOptions, components, userPrefix, originNames, name)
       }
-      const completion = await localUI[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion })
+      const completion = await localUI[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion, adapterMajor: pkgInfo?.adapterMajor })
       if (completion) {
         localCache.set(name, completion)
         localCompletions ||= {} as PropsConfig
@@ -256,8 +259,40 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   return { cwd, pkgPath, workspaceRoot, generation, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
 }
 
+async function enhanceContextWithOtherSources(context: PackageContext) {
+  const contextKey = context.pkgPath || context.cwd
+  const registered = contexts.get(contextKey)
+  const currentGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
+  if ((registered && registered !== context) || currentGeneration !== context.generation)
+    return
+  const enhanced: PackageContext = {
+    ...context,
+    cacheMap: new Map(context.cacheMap),
+    optionsComponents: {
+      prefix: [...context.optionsComponents.prefix],
+      data: [...context.optionsComponents.data],
+      directivesMap: { ...context.optionsComponents.directivesMap },
+      libs: [...context.optionsComponents.libs],
+    },
+    uiCompletions: context.uiCompletions ? { ...context.uiCompletions } : null,
+  }
+  const customUI: Record<string, (options?: { resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) => any> = {}
+  let completions = enhanced.uiCompletions
+  await loadOtherSources(customUI, enhanced.cacheMap, enhanced.optionsComponents, enhanced.workspaceRoot, enhanced.pkgPath, () => completions, value => completions = value)
+  const current = contexts.get(contextKey)
+  const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
+  if ((current && current !== context) || latestGeneration !== context.generation)
+    return
+  enhanced.uiCompletions = completions
+  contexts.set(contextKey, enhanced)
+  applyContext(enhanced)
+  notifyContextUpdated(enhanced)
+  await writeLocalCache()
+  return enhanced
+}
+
 async function loadOtherSources(
-  ui: Record<string, (options?: { resolveFrom?: string, installedVersion?: string }) => any>,
+  ui: Record<string, (options?: { resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) => any>,
   targetCache: Map<string, any>,
   targetOptions: OptionsComponents,
   workspaceRoot: string,
@@ -402,7 +437,7 @@ export function selectDependencyVersion(installed: string | undefined, declaredM
   return declaredMajor
 }
 
-export async function findPkgUI(cwd?: string, onChange?: () => void) {
+export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRoot?: string) {
   if (!cwd)
     return
   const pkg = await findUp('package.json', { cwd })
@@ -413,7 +448,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   let rootPkgPath = ''
   let rootPkg: any = null
   let isMonorepo = false
-  const rootPath = getRootPath()
+  const rootPath = workspaceRoot || getRootPath()
   if (rootPath) {
     const cached = rootPkgCache.get(rootPath)
     if (cached) {

@@ -82,10 +82,27 @@ export function createImportEdits(code: string, source: string, dependencies: st
   if (!statements)
     return []
   const lastImport = imports.at(-1)
-  const insertion = lastImport ? lastImport.end : 0
-  const leading = insertion > 0 || script.code.startsWith('\n') ? '\n' : ''
+  const insertion = lastImport ? lastImport.end : getPrologueInsertion(sourceFile, script.code)
+  const beforeInsertion = script.code.slice(0, insertion)
+  const leading = insertion === 0
+    ? script.offset > 0 && script.code.startsWith('\n') ? '\n' : ''
+    : beforeInsertion.endsWith('\n') ? '' : '\n'
   const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
   return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }]
+}
+
+function getPrologueInsertion(sourceFile: ts.SourceFile, code: string) {
+  const shebangNewline = code.indexOf('\n')
+  const shebangEnd = code.startsWith('#!')
+    ? shebangNewline === -1 ? code.length : shebangNewline + 1
+    : 0
+  let insertion = shebangEnd
+  for (const statement of sourceFile.statements) {
+    if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression))
+      break
+    insertion = statement.end
+  }
+  return insertion
 }
 
 function collectRuntimeBindings(imports: ts.ImportDeclaration[], importWay: ImportWay) {

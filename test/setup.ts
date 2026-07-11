@@ -34,6 +34,10 @@ vi.mock('@vscode-use/utils', () => ({
   getPosition: () => ({ position: { line: 0, character: 0 } }),
   getSelection: () => ({ lineText: '' }),
   insertText: () => {},
+  isInPosition: (loc: any, position: any) => position.line + 1 >= loc.start.line
+    && position.line + 1 <= loc.end.line
+    && (position.line + 1 !== loc.start.line || position.character >= (loc.start.column ?? loc.start.character ?? 0))
+    && (position.line + 1 !== loc.end.line || position.character <= (loc.end.column ?? loc.end.character ?? Number.MAX_SAFE_INTEGER)),
   message: { info: () => {} },
   openExternalUrl: () => {},
   registerCommand: () => {},

@@ -66,6 +66,28 @@ describe('fetch service additional tests (mocked)', () => {
     expect(mod.cacheFetch.has(key)).toBe(true)
   })
 
+  it('uses configured npm resources and isolates their cache keys', async () => {
+    const fetchNpm = await import('@simon_he/fetch-npm')
+    remoteNpmUris = [
+      { name: '@common-intellisense/button', resource: 'dist/manifest.json' },
+      { name: '@common-intellisense/button', resource: 'dist/alternate.json' },
+    ]
+    vi.mocked(fetchNpm.fetchAndExtractPackage)
+      .mockResolvedValueOnce(JSON.stringify({ schemaVersion: 1, exports: { FirstProps: { uiName: 'first', lib: 'first', map: [] } } }))
+      .mockResolvedValueOnce(JSON.stringify({ schemaVersion: 1, exports: { SecondProps: { uiName: 'second', lib: 'second', map: [] } } }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteNpmUrls()
+
+    expect(result.FirstProps).toBeTypeOf('function')
+    expect(result.SecondProps).toBeTypeOf('function')
+    expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({ dist: 'dist/manifest.json' }))
+    expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({ dist: 'dist/alternate.json' }))
+    expect(mod.cacheFetch.has('@common-intellisense/button@2.0.0::dist/manifest.json')).toBe(true)
+    expect(mod.cacheFetch.has('@common-intellisense/button@2.0.0::dist/alternate.json')).toBe(true)
+  })
+
   it('fetchFromRemoteNpmUrls handles configured npm packages', async () => {
     const mod = await import('../../src/services/fetch')
     if (mod.cacheFetch && typeof mod.cacheFetch.clear === 'function')

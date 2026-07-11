@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { findUpMock, fetchMock } = vi.hoisted(() => ({
+const { findUpMock, fetchMock, remoteFetchMock } = vi.hoisted(() => ({
   findUpMock: vi.fn(),
   fetchMock: vi.fn(),
+  remoteFetchMock: vi.fn(async () => ({})),
 }))
 
 vi.mock('find-up', () => ({ findUp: findUpMock }))
@@ -17,7 +18,7 @@ vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchMock,
   fetchFromLocalUris: vi.fn(async () => ({})),
   fetchFromRemoteNpmUrls: vi.fn(async () => ({})),
-  fetchFromRemoteUrls: vi.fn(async () => ({})),
+  fetchFromRemoteUrls: remoteFetchMock,
   getLocalCache: Promise.resolve('done'),
   writeLocalCache: vi.fn(async () => {}),
 }))
@@ -33,6 +34,7 @@ describe('package context generations', () => {
     vi.resetModules()
     findUpMock.mockReset()
     fetchMock.mockReset()
+    remoteFetchMock.mockReset().mockResolvedValue({})
   })
 
   it('does not let a context started before global invalidation commit later', async () => {
@@ -94,6 +96,24 @@ describe('package context generations', () => {
     expect(invalidated).toHaveBeenCalledWith(['/workspace/package.json'])
     invalidationSubscription.dispose()
     updateSubscription.dispose()
+  })
+
+  it('publishes official completions before a custom source resolves', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({
+      antd5: () => ({ Button: { completions: [], events: [], methods: [], exposed: [], slots: [], suggestions: [] } }),
+    })
+    remoteFetchMock.mockReturnValue(new Promise(() => {}))
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    const result = await Promise.race([
+      mod.ensureContextForPath('/workspace/src/App.tsx', context, () => {}, false, '/workspace'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('official baseline was blocked')), 100)),
+    ]) as any
+
+    expect(result?.uiCompletions?.Button).toBeDefined()
+    expect(remoteFetchMock).toHaveBeenCalled()
   })
 
   it('discovers a nested package instead of reusing a loaded parent context', async () => {

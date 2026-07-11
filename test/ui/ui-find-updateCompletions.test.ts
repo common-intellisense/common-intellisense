@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const resolveInstalledPackageVersion = vi.fn(async () => undefined)
 const fetchFromLocalUris = vi.fn(async () => ({}))
 const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => {
   const uiName = options.uiName
@@ -15,6 +16,11 @@ const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => 
     }),
   }
 })
+
+vi.mock('../../src/services/package-version', async importOriginal => ({
+  ...await importOriginal<any>(),
+  resolveInstalledPackageVersion,
+}))
 
 vi.mock('../../src/services/fetch', () => ({
   cacheFetch: new Map(),
@@ -32,6 +38,7 @@ describe('ui-find updateCompletions', () => {
     vi.resetModules()
     fetchFromCommonIntellisense.mockClear()
     fetchFromLocalUris.mockClear()
+    resolveInstalledPackageVersion.mockReset().mockResolvedValue(undefined)
   })
 
   it('selects only the aliased adapter when selectedUIs uses the origin name', async () => {
@@ -59,6 +66,24 @@ describe('ui-find updateCompletions', () => {
     expect(context.uiNames).toEqual(['antd5'])
   })
 
+  it('uses the alias major rather than the unrelated wrapper package version', async () => {
+    const mod = await import('../../src/ui/ui-find')
+    await mod.updateCompletions([['@acme/ui', '1.4.0']] as any, {
+      selectedUIs: [],
+      alias: { '@acme/ui': 'elementUi2' },
+      detectSlots: () => {},
+      prefix: {},
+      pkgPath: '/repo/packages/a/package.json',
+      workspaceRoot: '/repo',
+    })
+
+    expect(resolveInstalledPackageVersion).toHaveBeenCalledWith('element-ui', '/repo/packages/a')
+    expect(fetchFromCommonIntellisense).toHaveBeenCalledWith(
+      'element-ui2',
+      expect.objectContaining({ pkgName: 'element-ui', uiName: 'elementUi2', installedVersion: undefined, adapterMajor: '2' }),
+    )
+  })
+
   it('uses the workspace root rather than the nested package root for local adapters', async () => {
     const mod = await import('../../src/ui/ui-find')
     await mod.updateCompletions([], {
@@ -70,7 +95,7 @@ describe('ui-find updateCompletions', () => {
       workspaceRoot: '/repo',
     })
 
-    expect(fetchFromLocalUris).toHaveBeenCalledWith('/repo')
+    await vi.waitFor(() => expect(fetchFromLocalUris).toHaveBeenCalledWith('/repo'))
   })
 
   it('keeps an unmatched explicit selection empty instead of loading every detected UI', async () => {

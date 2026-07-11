@@ -1,8 +1,10 @@
 import { Buffer } from 'node:buffer'
+import dns from 'node:dns/promises'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import process from 'node:process'
 import path from 'node:path'
+import { isIP } from 'node:net'
 import vm from 'node:vm'
 import * as vscode from 'vscode'
 import { fetchAndExtractPackage } from '@simon_he/fetch-npm'
@@ -94,6 +96,66 @@ function getSourceTaskKey(kind: string, configuration: unknown, workspaceRoot?: 
 function isLegacyAdapterEnabled() {
   return vscode.workspace?.isTrusted !== false
     && getConfiguration('common-intellisense.allowLegacyAdapters') === true
+}
+
+function isPrivateIpv4(host: string) {
+  const parts = host.split('.').map(Number)
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255))
+    return false
+  const [a, b] = parts
+  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224
+}
+
+function isPrivateNetworkHost(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '')
+  if (host === 'localhost' || host.endsWith('.localhost'))
+    return true
+  const ipVersion = isIP(host)
+  if (ipVersion === 4)
+    return isPrivateIpv4(host)
+  if (ipVersion === 6) {
+    if (host.startsWith('::ffff:')) {
+      const mapped = host.slice('::ffff:'.length)
+      if (isIP(mapped) === 4)
+        return isPrivateIpv4(mapped)
+      const groups = mapped.split(':')
+      if (groups.length === 2) {
+        const high = Number.parseInt(groups[0], 16)
+        const low = Number.parseInt(groups[1], 16)
+        if (Number.isFinite(high) && Number.isFinite(low))
+          return isPrivateIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`)
+      }
+    }
+    return host === '::' || host === '::1' || host.startsWith('fc') || host.startsWith('fd') || /^fe[89ab]/.test(host) || host.startsWith('ff')
+  }
+  return false
+}
+
+export function isTrustedRedirectUri(uri: string) {
+  try {
+    const target = new URL(uri)
+    return target.protocol === 'https:' && !isPrivateNetworkHost(target.hostname)
+  }
+  catch {
+    return false
+  }
+}
+
+type ResolveHost = (hostname: string) => Promise<Array<{ address: string, family: number }>>
+
+async function validateRedirectTarget(uri: string, resolveHost: ResolveHost) {
+  if (!isTrustedRedirectUri(uri))
+    return false
+  const hostname = new URL(uri).hostname.replace(/^\[|\]$/g, '')
+  if (isIP(hostname))
+    return true
+  try {
+    const addresses = await resolveHost(hostname)
+    return addresses.length > 0 && addresses.every(({ address }) => !isPrivateNetworkHost(address))
+  }
+  catch {
+    return false
+  }
 }
 
 function isTrustedRemoteUri(uri: string) {
@@ -236,7 +298,7 @@ function appendReducedExports(target: Record<string, any>, exportsData: Record<s
     try {
       target[key] = key.endsWith('Components')
         ? () => componentsReducer(data as any)
-        : (runtimeOptions?: { resolveFrom?: string, installedVersion?: string }) => propsReducer(
+        : (runtimeOptions?: { resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) => propsReducer(
             runtimeOptions && data && typeof data === 'object' && !Array.isArray(data)
               ? { ...(data as any), ...runtimeOptions }
               : data as any,
@@ -317,7 +379,7 @@ async function getLatestVersion(name: string) {
 }
 
 // todo: add result type replace any
-export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string, installedVersion?: string }) {
+export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) {
   const uiName = options?.uiName || tag.replace(/-(\w)/g, (_, v) => v.toUpperCase())
   const name = prefix + tag
   let version = ''
@@ -353,6 +415,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     uiName,
     resolveFrom: options?.resolveFrom || '',
     installedVersion: options?.installedVersion || '',
+    adapterMajor: options?.adapterMajor || '',
   })
   const inFlightTask = commonIntellisenseInFlight.get(key)
   if (inFlightTask)
@@ -435,11 +498,13 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
                   map: propsData,
                   resolveFrom: options?.resolveFrom,
                   installedVersion: options?.installedVersion,
+                  adapterMajor: options?.adapterMajor,
                 })
               : propsReducer({
                   ...(propsData as any),
                   resolveFrom: options?.resolveFrom,
                   installedVersion: options?.installedVersion,
+                  adapterMajor: options?.adapterMajor,
                 })
           }
         }
@@ -472,6 +537,42 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     if (commonIntellisenseInFlight.get(key) === task)
       commonIntellisenseInFlight.delete(key)
   }
+}
+
+const maxRemoteRedirects = 5
+
+export async function fetchRemoteText(uri: string, resolveHost: ResolveHost = hostname => dns.lookup(hostname, { all: true, verbatim: true })) {
+  let current = uri
+  for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
+    let status = 0
+    let location: string | null = null
+    const body = await ofetch(current, {
+      responseType: 'text',
+      retry,
+      timeout,
+      redirect: 'manual',
+      ignoreResponseError: true,
+      onResponse({ response }) {
+        status = response.status
+        location = response.headers.get('location')
+      },
+    })
+    if (status >= 300 && status < 400) {
+      if (!location)
+        throw new Error(`Remote adapter redirect is missing Location: ${current}`)
+      if (redirects === maxRemoteRedirects)
+        throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
+      const next = new URL(location, current).toString()
+      if (!await validateRedirectTarget(next, resolveHost))
+        throw new Error(`Remote adapter redirected to an untrusted URL: ${next}`)
+      current = next
+      continue
+    }
+    if (status >= 400)
+      throw new Error(`Remote adapter request failed (${status}): ${current}`)
+    return body
+  }
+  throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
 }
 
 export function fetchFromRemoteUrls() {
@@ -529,17 +630,7 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
         return [uri, cached] as const
       logger.info(isZh ? `正在加载 ${uri}` : `Loading ${uri}`)
       try {
-        let finalUri = uri
-        const fetched = await ofetch(uri, {
-          responseType: 'text',
-          retry,
-          timeout,
-          onResponse({ response }) {
-            finalUri = response.url || uri
-          },
-        })
-        if (!isTrustedRemoteUri(finalUri))
-          throw new Error(`Remote adapter redirected to an untrusted URL: ${finalUri}`)
+        const fetched = await fetchRemoteText(uri)
         if (typeof fetched !== 'string' || fetched.length > maxRemoteScriptSize)
           throw new Error(`Remote adapter is invalid or too large: ${uri}`)
         if (sourceEpoch !== epoch)
@@ -601,11 +692,13 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
 
   const fixedUris = (await Promise.all(uris.map(async (item) => {
     let name = ''
+    let resource = 'index.cjs'
     if (typeof item === 'string') {
       name = item
     }
     else {
       name = item.name
+      resource = item.resource || resource
     }
     let version = ''
     logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
@@ -620,8 +713,8 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
         logger.error(String(error))
       }
     }
-    return version ? [name, version] : ''
-  }))).filter(Boolean) as [string, string][]
+    return version ? [name, version, resource] : ''
+  }))).filter(Boolean) as [string, string, string][]
 
   if (!fixedUris.length)
     return
@@ -639,14 +732,16 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
   logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
 
   try {
-    const settled = await Promise.allSettled(fixedUris.map(async ([name, version]) => {
-      const key = `${name}@${version}`
+    const settled = await Promise.allSettled(fixedUris.map(async ([name, version, resource]) => {
+      const key = `${name}@${version}::${resource}`
       if (cacheFetch.has(key))
         return [key, cacheFetch.get(key)] as const
 
       const scriptContent = await Promise.any([
-        fetchAndExtractPackage({ name, dist: 'index.cjs', logger }),
-        fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
+        fetchAndExtractPackage({ name, dist: resource, logger }),
+        resource === 'index.cjs'
+          ? fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>
+          : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
       ])
 
       if (scriptContent && sourceEpoch === epoch)

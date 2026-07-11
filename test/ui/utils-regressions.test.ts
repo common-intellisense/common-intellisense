@@ -126,11 +126,30 @@ describe('utils reducer regressions', () => {
     })
     const svelteContext = { languageId: 'svelte', framework: 'svelte' as const, uri: 'file:///Svelte.svelte' }
     expect(props.Demo.events[0](svelteContext).some(item => item.content.startsWith('onclick='))).toBe(true)
-    expect(props.Demo.completions[0](svelteContext).some(item => item.content === 'className')).toBe(true)
+    const svelteCompletions = props.Demo.completions[0](svelteContext)
+    expect(svelteCompletions.some(item => item.content === 'class')).toBe(true)
+    expect(svelteCompletions.some(item => item.content === 'className')).toBe(false)
+    expect(svelteCompletions.find(item => item.content === 'style')?.snippet).toBe('style="$1"')
 
     const [components] = componentsReducer({ lib: 'fixture-lib', map: [[{ name: 'Demo' }, 'Demo']] as any })
     const react = await Promise.all(components.data(undefined, { languageId: 'typescriptreact', framework: 'react', uri: 'file:///Demo.tsx' }))
     expect((react[0] as any).snippet).toContain('<demo')
+  })
+
+  it('keeps same-major APIs when only an alias adapter major is known', async () => {
+    const { propsReducer } = await import('../../src/ui/utils')
+    const component = {
+      name: 'Demo',
+      props: { newer: { type: 'string', version: '2.6.0' }, future: { type: 'string', version: '3.0.0' } },
+      slots: [{ name: 'newer-slot', version: '2.6.0' }, { name: 'future-slot', version: '3.0.0' }],
+    }
+    const props = await propsReducer({ uiName: 'elementUi2', lib: 'element-ui', adapterMajor: '2', map: [component] as any })
+    const vue = { languageId: 'vue', framework: 'vue' as const, uri: 'file:///Demo.vue' }
+
+    expect(props.Demo.completions[0](vue).some(item => item.content.startsWith('newer'))).toBe(true)
+    expect(props.Demo.completions[0](vue).some(item => item.content.startsWith('future'))).toBe(false)
+    expect(props.Demo.tableDocument.value).toContain('newer')
+    expect(props.Demo.rawSlots?.map(slot => slot.name)).toEqual(['newer-slot'])
   })
 
   it('uses the package-specific installed version for API filtering', async () => {
@@ -141,6 +160,27 @@ describe('utils reducer regressions', () => {
     const vue = { languageId: 'vue', framework: 'vue' as const, uri: 'file:///Demo.vue' }
     expect(legacy.Demo.completions[0](vue).some(item => item.content.startsWith('newer'))).toBe(false)
     expect(current.Demo.completions[0](vue).some(item => item.content.startsWith('newer'))).toBe(true)
+  })
+
+  it('uses the same version-filtered model for completions, hover tables, and slots', async () => {
+    const { propsReducer } = await import('../../src/ui/utils')
+    const legacy = await propsReducer({
+      uiName: 'fixture3',
+      lib: 'fixture-lib',
+      installedVersion: '2.4.0',
+      map: [{
+        name: 'Demo',
+        props: { old: { type: 'string' }, newer: { type: 'string', version: '2.6.0' } },
+        methods: [{ name: 'newMethod', version: '2.6.0' }],
+        events: [{ name: 'new-event', version: '2.6.0' }],
+        slots: [{ name: 'new-slot', version: '2.6.0' }],
+      }] as any,
+    })
+    expect(legacy.Demo.tableDocument.value).not.toContain('newer')
+    expect(legacy.Demo.tableDocument.value).not.toContain('newMethod')
+    expect(legacy.Demo.tableDocument.value).not.toContain('new-event')
+    expect(legacy.Demo.tableDocument.value).not.toContain('new-slot')
+    expect(legacy.Demo.rawSlots).toEqual([])
   })
 
   it('componentsReducer uses item-local dynamicLib/importWay without enabling HTML markdown', async () => {

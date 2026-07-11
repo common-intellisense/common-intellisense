@@ -1,16 +1,15 @@
 import type { CompletionRenderContext, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import { createFilter } from '@rollup/pluginutils'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveTextEditor, getConfiguration, getCurrentFileUrl, getLocale, getPosition, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
-import { findUp } from 'find-up'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveTextEditor, getConfiguration, getLocale, getPosition, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri } from './services/fetch'
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getCurrentPkgUiNames, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
-import { fixedTagName, getAlias, getIsShowSlots, getUiDeps } from './ui/ui-utils'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
+import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui/ui-utils'
 import { clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
@@ -24,7 +23,7 @@ interface DocumentAnalysisCacheEntry {
 const documentAnalysisCache = new Map<string, DocumentAnalysisCacheEntry>()
 const maxDocumentAnalysisEntries = 10
 
-function getDocumentAnalysis(document: vscode.TextDocument) {
+export function getDocumentAnalysis(document: vscode.TextDocument) {
   const uri = document.uri.toString()
   const key = `${uri}:${document.version}`
   let entry = documentAnalysisCache.get(key)
@@ -46,6 +45,14 @@ function getDocumentAnalysis(document: vscode.TextDocument) {
       entry!.importDeps ||= getImportDeps(entry!.code) || {}
       return entry!.importDeps
     },
+  }
+}
+
+export function clearLocalDocumentAnalysis(uri: string | vscode.Uri) {
+  const keyPrefix = `${typeof uri === 'string' ? uri : uri.toString()}:`
+  for (const key of documentAnalysisCache.keys()) {
+    if (key.startsWith(keyPrefix))
+      documentAnalysisCache.delete(key)
   }
 }
 
@@ -85,6 +92,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
   const initialEditor = vscode.window.activeTextEditor
+  const slotTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const ensureDocumentContext = (document: vscode.TextDocument, cleanCache = false) => ensureContextForPath(
     getDocumentPath(document),
     context,
@@ -144,7 +152,15 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   }))
 
-  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(document => clearDocumentAnalysis(document.uri)))
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
+    const key = document.uri.toString()
+    const timer = slotTimers.get(key)
+    if (timer)
+      clearTimeout(timer)
+    slotTimers.delete(key)
+    clearDocumentAnalysis(document.uri)
+    clearLocalDocumentAnalysis(document.uri)
+  }))
 
   context.subscriptions.push(registerCommand('intellisense.copyDemo', (demo) => {
     setCopyText(demo)
@@ -152,8 +168,10 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.pickUI', async () => {
-    const currentPkgUiNames = getCurrentPkgUiNames()
-    if (currentPkgUiNames && currentPkgUiNames.length) {
+    const editor = vscode.window.activeTextEditor
+    const packageContext = editor ? await ensureDocumentContext(editor.document) : undefined
+    const currentPkgUiNames = packageContext?.currentPkgUiNames ? [...packageContext.currentPkgUiNames] : undefined
+    if (packageContext && currentPkgUiNames?.length) {
       if (currentPkgUiNames.some(i => i.includes('bitsUi'))) {
         currentPkgUiNames.filter(i => i.startsWith('bitsUi')).map(i => i.replace('bitsUi', 'shadcnSvelte')).forEach((i) => {
           if (!currentPkgUiNames!.includes(i))
@@ -162,14 +180,8 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       const rawCfg = getConfiguration('common-intellisense.ui') as any
-      const options: ({ label: string, picked?: boolean })[] = currentPkgUiNames.map((label: string) => {
-        const picked = Array.isArray(rawCfg)
-          ? rawCfg.includes(label)
-          : (rawCfg && typeof rawCfg === 'object')
-              ? Object.values(rawCfg).flat().includes(label)
-              : false
-        return picked ? { label, picked: true } : { label }
-      })
+      const selectedForPackage = getSelectedUIs(packageContext.pkgPath) || []
+      const options: ({ label: string, picked?: boolean })[] = currentPkgUiNames.map((label: string) => selectedForPackage.includes(label) ? { label, picked: true } : { label })
 
       const data = await createSelect(options, {
         canSelectMany: true,
@@ -179,15 +191,8 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!data)
         return
 
-      // find package.json for current file and save selection keyed by its path
-      const cwd = getCurrentFileUrl()
-      let pkgPath: string | undefined
-      try {
-        if (cwd && cwd !== 'exthhost')
-          pkgPath = await findUp('package.json', { cwd })
-      }
-      catch {}
-
+      // Save the selection for the active editor's package only.
+      const pkgPath = packageContext.pkgPath
       let newCfg: any
       if (pkgPath) {
         if (rawCfg && typeof rawCfg === 'object' && !Array.isArray(rawCfg))
@@ -304,7 +309,6 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   }))
 
-  const slotTimers = new Map<string, ReturnType<typeof setTimeout>>()
   context.subscriptions.push({ dispose() {
     for (const timer of slotTimers.values())
       clearTimeout(timer)
@@ -319,10 +323,14 @@ export async function activate(context: vscode.ExtensionContext) {
       clearTimeout(previous)
     slotTimers.set(key, setTimeout(async () => {
       slotTimers.delete(key)
+      if (document.isClosed)
+        return
       const packageContext = await ensureDocumentContext(document)
-      if (!packageContext?.uiCompletions)
+      if (document.isClosed || !packageContext?.uiCompletions)
         return
       const code = document.getText()
+      if (document.isClosed)
+        return
       await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation })
     }, 200))
   }))

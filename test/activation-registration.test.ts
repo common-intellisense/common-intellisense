@@ -3,17 +3,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => {
   let resolveCache!: (value: string) => void
   const cache = new Promise<string>((resolve) => { resolveCache = resolve })
+  const commandHandlers = new Map<string, (...args: any[]) => any>()
   return {
     cache,
     resolveCache,
-    registerCommand: vi.fn(() => ({ dispose: vi.fn() })),
+    commandHandlers,
+    registerCommand: vi.fn((name: string, handler: (...args: any[]) => any) => {
+      commandHandlers.set(name, handler)
+      return { dispose: vi.fn() }
+    }),
+    createSelect: vi.fn(async () => []),
+    setConfiguration: vi.fn(),
+    uiConfiguration: undefined as any,
     registerCompletion: vi.fn(() => ({ dispose: vi.fn() })),
     registerHover: vi.fn(() => ({ dispose: vi.fn() })),
     registerCodeLens: vi.fn(() => ({ dispose: vi.fn() })),
     ensureContext: vi.fn(),
     detectSlots: vi.fn(),
+    clearDocumentAnalysis: vi.fn(),
     resolvePackagePath: vi.fn(),
     contextUpdatedListener: undefined as undefined | ((context: any) => void),
+    textChangeListener: undefined as undefined | ((event: any) => void),
+    closeListener: undefined as undefined | ((document: any) => void),
   }
 })
 
@@ -38,7 +49,7 @@ vi.mock('../src/ui/ui-find', () => ({
   logger: { info: vi.fn(), error: vi.fn() },
 }))
 vi.mock('../src/parser', () => ({
-  clearDocumentAnalysis: vi.fn(),
+  clearDocumentAnalysis: mocks.clearDocumentAnalysis,
   detectSlots: mocks.detectSlots,
   getDocumentSlotAnalysis: vi.fn(),
   findDynamicComponent: vi.fn(),
@@ -47,15 +58,19 @@ vi.mock('../src/parser', () => ({
   registerCodeLensProviderFn: mocks.registerCodeLens,
 }))
 vi.mock('@vscode-use/utils', () => ({
-  addEventListener: vi.fn(() => ({ dispose: vi.fn() })),
+  addEventListener: vi.fn((name: string, listener: (event: any) => void) => {
+    if (name === 'text-change')
+      mocks.textChangeListener = listener
+    return { dispose: vi.fn() }
+  }),
   createCompletionItem: vi.fn(),
   createHover: vi.fn(),
   createMarkdownString: vi.fn(),
   createPosition: vi.fn(),
   createRange: vi.fn(),
-  createSelect: vi.fn(),
+  createSelect: mocks.createSelect,
   getActiveTextEditor: vi.fn(),
-  getConfiguration: vi.fn(),
+  getConfiguration: vi.fn((key: string) => key === 'common-intellisense.showSlots' ? true : key === 'common-intellisense.ui' ? mocks.uiConfiguration : undefined),
   getCurrentFileUrl: vi.fn(),
   getLocale: vi.fn(() => 'en'),
   getPosition: vi.fn(),
@@ -65,7 +80,7 @@ vi.mock('@vscode-use/utils', () => ({
   openExternalUrl: vi.fn(),
   registerCommand: mocks.registerCommand,
   registerCompletionItemProvider: mocks.registerCompletion,
-  setConfiguration: vi.fn(),
+  setConfiguration: mocks.setConfiguration,
   setCopyText: vi.fn(),
   updateText: vi.fn(),
 }))
@@ -82,7 +97,10 @@ vi.mock('vscode', () => ({
   },
   workspace: {
     getWorkspaceFolder: vi.fn(() => ({ uri: { fsPath: '/workspace' } })),
-    onDidCloseTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
+    onDidCloseTextDocument: vi.fn((listener: (document: any) => void) => {
+      mocks.closeListener = listener
+      return { dispose: vi.fn() }
+    }),
   },
   languages: {
     registerHoverProvider: mocks.registerHover,
@@ -94,8 +112,14 @@ describe('activation registration', () => {
   beforeEach(() => {
     mocks.ensureContext.mockClear()
     mocks.detectSlots.mockClear()
+    mocks.clearDocumentAnalysis.mockClear()
     mocks.resolvePackagePath.mockReset()
     mocks.contextUpdatedListener = undefined
+    mocks.textChangeListener = undefined
+    mocks.closeListener = undefined
+    mocks.createSelect.mockClear().mockResolvedValue([])
+    mocks.setConfiguration.mockClear()
+    mocks.uiConfiguration = undefined
   })
 
   it('does not analyze a nested document with its parent package context', async () => {
@@ -121,6 +145,63 @@ describe('activation registration', () => {
     await vi.waitFor(() => expect(mocks.resolvePackagePath).toHaveBeenCalled())
     expect(mocks.detectSlots).not.toHaveBeenCalled()
     ;(vscode.window.visibleTextEditors as any).length = 0
+  })
+
+  it('cancels pending slot analysis when a document closes', async () => {
+    vi.useFakeTimers()
+    const { activate } = await import('../src/index')
+    const context = { globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any
+    await activate(context)
+    const document = {
+      languageId: 'vue',
+      version: 1,
+      isClosed: false,
+      uri: { fsPath: '/workspace/Closed.vue', toString: () => 'file:///workspace/Closed.vue' },
+      getText: () => '<template />',
+    }
+
+    mocks.textChangeListener?.({ contentChanges: [{}], document })
+    document.isClosed = true
+    mocks.closeListener?.(document)
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(mocks.ensureContext).not.toHaveBeenCalledWith('/workspace/Closed.vue', expect.anything(), expect.anything(), expect.anything(), expect.anything())
+    expect(mocks.detectSlots).not.toHaveBeenCalled()
+    expect(mocks.clearDocumentAnalysis).toHaveBeenCalledWith(document.uri)
+    vi.useRealTimers()
+  })
+
+  it('drops local document analysis entries across close and reopen', async () => {
+    const { clearLocalDocumentAnalysis, getDocumentAnalysis } = await import('../src/index')
+    const uri = { fsPath: '/workspace/Reopen.vue', toString: () => 'file:///workspace/Reopen.vue' }
+    const oldDocument = { uri, version: 1, getText: () => 'old code' } as any
+    const newDocument = { uri, version: 1, getText: () => 'new code' } as any
+
+    expect(getDocumentAnalysis(oldDocument).code).toBe('old code')
+    clearLocalDocumentAnalysis(uri as any)
+    expect(getDocumentAnalysis(newDocument).code).toBe('new code')
+  })
+
+  it('picks UI libraries from the active editor package only', async () => {
+    mocks.uiConfiguration = {
+      '/workspace/package.json': ['antd5'],
+      '/other/package.json': ['elementPlus2'],
+    }
+    mocks.ensureContext.mockResolvedValue({
+      pkgPath: '/workspace/package.json',
+      currentPkgUiNames: ['antd5', 'elementPlus2'],
+      uiCompletions: {},
+      optionsComponents: { prefix: [] },
+    })
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    await mocks.commandHandlers.get('common-intellisense.pickUI')?.()
+
+    expect(mocks.createSelect).toHaveBeenCalledWith([
+      { label: 'antd5', picked: true },
+      { label: 'elementPlus2' },
+    ], expect.any(Object))
   })
 
   it('registers providers and commands before the initial preload resolves', async () => {

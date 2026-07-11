@@ -39,6 +39,19 @@ function normalizeRenderContext(input?: CompletionRenderInput): CompletionRender
   }
 }
 
+function isVisibleForVersion(value: { version?: string } | undefined, installedVersion?: string, adapterMajor?: string) {
+  if (!value)
+    return true
+  const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
+  if (!version)
+    return true
+  if (installedVersion)
+    return compareVersion(version, installedVersion) !== 1
+  if (adapterMajor)
+    return Number(version.split('.')[0]) <= Number(adapterMajor)
+  return true
+}
+
 export interface PropsOptions {
   uiName: string
   lib: string
@@ -48,6 +61,7 @@ export interface PropsOptions {
   dynamicLib?: string
   resolveFrom?: string
   installedVersion?: string
+  adapterMajor?: string
 }
 
 export type IconsItem = any
@@ -93,7 +107,7 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
 }
 
 export function propsReducer(options: PropsOptions) {
-  const { uiName, lib, map, prefix = '', dynamicLib, resolveFrom, installedVersion } = options
+  const { uiName, lib, map, prefix = '', dynamicLib, resolveFrom, installedVersion, adapterMajor } = options
 
   const result: PropsConfig = {}
   // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
@@ -108,7 +122,9 @@ export function propsReducer(options: PropsOptions) {
   //   })
   //   result.icons = icons
   // }
-  let localVersion: string | undefined
+  let localVersion = installedVersion
+  let effectiveAdapterMajor = adapterMajor
+  let versionResolved = !!installedVersion
 
   return reduceAsync(map, async (result, item: Component) => {
     const completions: ((context?: CompletionRenderInput) => SubCompletionItem[])[] = []
@@ -117,47 +133,39 @@ export function propsReducer(options: PropsOptions) {
     const exposed: SubCompletionItem[] = []
     const slots: SubCompletionItem[] = []
     const isZh = getLocale().includes('zh')
-    if (!localVersion) {
-      // 从本地安装去获取版本号，如果获取不到根据 uiName 后缀获取版本号，再找不到就是 0.0.0
-      localVersion = installedVersion || await resolveInstalledPackageVersion(lib, resolveFrom) || uiName.match(/\d+(\.\d+\.\d+)?/)?.[0] || '0.0.0'
+    if (!versionResolved) {
+      localVersion = await resolveInstalledPackageVersion(lib, resolveFrom)
+      effectiveAdapterMajor ||= uiName.match(/\d+/)?.[0]
+      versionResolved = true
     }
 
-    if (item.version) {
-      // 过滤在某个版本才增加的新组件
-      if (localVersion && compareVersion(localVersion, item.version) === -1) {
-        return result
-      }
-    }
+    if (!isVisibleForVersion(item, localVersion, effectiveAdapterMajor))
+      return result
+
+    const visibleProps = Object.fromEntries(Object.entries(item.props || {}).filter(([, value]) => isVisibleForVersion(value as any, localVersion, effectiveAdapterMajor)))
+    const visibleEvents = (item.events || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
+    const visibleMethods = (item.methods || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
+    const visibleExposed = (item.exposed || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
+    const visibleSlots = (item.slots || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
 
     const completionsDeferCallback = (input?: CompletionRenderInput) => {
       const renderContext = normalizeRenderContext(input)
       const isVue = renderContext.framework === 'vue' || renderContext.framework === 'vine'
+      const isHtmlLike = isVue || renderContext.framework === 'svelte'
       const data: SubCompletionItem[] = [
         'id',
-        isVue ? 'class' : 'className',
+        isHtmlLike ? 'class' : 'className',
         'ref',
       ].map(item => proxyCreateCompletionItem({ content: item, snippet: `${item}="\${1:}"`, type: 5, params: [] }))
 
-      if (isVue)
+      if (isHtmlLike)
         data.push(proxyCreateCompletionItem({ content: 'style', snippet: 'style="$1"', type: 5, params: [] }))
       else
         data.push(proxyCreateCompletionItem({ content: 'style', snippet: 'style={$1}', type: 5, params: [] }))
 
       // 过滤 props 中有 version 并且当前版本小于组件版本的属性
-      const filterProps = localVersion
-        ? Object.keys(item.props || {}).reduce((result, key) => {
-            const value = (item.props as any)[key]
-            // value.version 只提取版本号
-            const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            if (version && compareVersion(version, localVersion!) === 1) {
-              return result
-            }
-            return { ...result, [key]: value }
-          }, {})
-        : item.props
-
-      Object.keys(filterProps).forEach((key) => {
-        const value = (item.props as any)[key]
+      Object.keys(visibleProps).forEach((key) => {
+        const value = (visibleProps as any)[key]
         const normalizedDefault = value.default === undefined || value.default === '' ? undefined : String(value.default)
         const normalizedType = Array.isArray(value.type) ? value.type.join(' / ') : value.type
         let type = vscode.CompletionItemKind.Property
@@ -334,113 +342,101 @@ export function propsReducer(options: PropsOptions) {
 
     completions.push(completionsDeferCallback)
 
-    if (!item.events)
-      item.events = []
-
-    if (item.events) {
-      const deferEventsCall = (input?: CompletionRenderInput) => {
-        const renderContext = normalizeRenderContext(input)
-        const isVue = renderContext.framework === 'vue' || renderContext.framework === 'vine'
-        const isSvelte = renderContext.framework === 'svelte'
-        const originEvent = [
-          {
-            name: isVue
-              ? 'click'
-              : isSvelte
-                ? 'onclick'
-                : 'onClick',
-            description: 'click event',
-            description_zh: '点击事件',
-            params: [],
-          },
-        ]
-        const localEvents = [...item.events]
-
-        originEvent.forEach((_event) => {
-          if (!localEvents.find(event => event.name === _event.name))
-            localEvents.push(_event)
-        })
-
-        // 过滤在某个版本才增加的新事件
-        const filterEvents = localVersion
-          ? localEvents.filter((event) => {
-              const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
-              return !(version && compareVersion(version, localVersion!) === 1)
-            })
-          : localEvents
-
-        return filterEvents.map((events: any) => {
-          const detail: string[] = []
-          const { name, description, params, description_zh, platform } = events
-
-          detail.push(`**${uiName} [${item.name}]**`)
-
-          if (description) {
-            if (isZh)
-              detail.push(`- 🔦 说明:    ***\`${description_zh || description}\`***`)
-            else
-              detail.push(`- 🔦 description:    ***\`${description}\`***`)
-          }
-
-          if (platform)
-            detail.push(`- 🚀 平台:    ***\`${platform}\`***`)
-
-          if (params)
-            detail.push(`- 🔮 ${isZh ? '回调参数' : 'callback parameters'}:    ***\`${params}\`***`)
-
-          let snippet
-          let content
-          if (isVue) {
-            const [snippetEventNameOptions, _name] = generateScriptNames(name)
-            snippet = `${name}="\${1|${snippetEventNameOptions.join(',')}|}"`
-            content = `@${name}="on${_name}"`
-          }
-          else if (isSvelte) {
-            snippet = `${name}={\${1:${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}}`
-            content = `${name}={${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}`
-          }
-          else {
-            const [snippetEventNameOptions, _name] = generateScriptNames(name)
-            snippet = `${name}={\${1|${snippetEventNameOptions.join(',')}|}}`
-            content = `${name}={${_name}}`
-          }
-
-          const eventDesc = isZh ? (description_zh || description) : description
-          if (eventDesc)
-            content += `  ${eventDesc}`
-          if (params)
-            content += `  ${isZh ? '参数' : 'params'}：${params}`
-          const detailsLines: string[] = []
-          detailsLines.push(`${isZh ? '***属性***' : '***prop***'}: ${content}`)
-          if (eventDesc) {
-            detailsLines.push(isZh
-              ? `***描述***: ${description_zh || description}`
-              : `***description***: ${description}`)
-          }
-          if (typeof params === 'string' && params) {
-            detailsLines.push(isZh
-              ? `***参数***: ${params.replace(/\n/g, '')}`
-              : `***params***: ${params.replace(/\n/g, '')}`)
-          }
-          const details = detailsLines.join('\n-  ')
-          const documentation = enableCommandTrust(new vscode.MarkdownString())
-          documentation.appendMarkdown(detail.join('\n\n'))
-          return proxyCreateCompletionItem({ content, snippet, details, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
+    const deferEventsCall = (input?: CompletionRenderInput) => {
+      const renderContext = normalizeRenderContext(input)
+      const isVue = renderContext.framework === 'vue' || renderContext.framework === 'vine'
+      const isSvelte = renderContext.framework === 'svelte'
+      const originEvent = [
+        {
+          name: isVue
+            ? 'click'
+            : isSvelte
+              ? 'onclick'
+              : 'onClick',
+          description: 'click event',
+          description_zh: '点击事件',
+          params: [],
         },
-        )
-      }
-      events.push(deferEventsCall)
-    }
+      ]
+      const localEvents = [...visibleEvents]
 
-    if (item.methods) {
-      const filterMethods = localVersion
-        ? item.methods.filter((item) => {
-          // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+      originEvent.forEach((_event) => {
+        if (!localEvents.find(event => event.name === _event.name))
+          localEvents.push(_event)
+      })
+
+      // 过滤在某个版本才增加的新事件
+      const filterEvents = localVersion
+        ? localEvents.filter((event) => {
+            const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
             return !(version && compareVersion(version, localVersion!) === 1)
           })
-        : item.methods
-      methods.push(...filterMethods.map((method) => {
+        : localEvents
+
+      return filterEvents.map((events: any) => {
+        const detail: string[] = []
+        const { name, description, params, description_zh, platform } = events
+
+        detail.push(`**${uiName} [${item.name}]**`)
+
+        if (description) {
+          if (isZh)
+            detail.push(`- 🔦 说明:    ***\`${description_zh || description}\`***`)
+          else
+            detail.push(`- 🔦 description:    ***\`${description}\`***`)
+        }
+
+        if (platform)
+          detail.push(`- 🚀 平台:    ***\`${platform}\`***`)
+
+        if (params)
+          detail.push(`- 🔮 ${isZh ? '回调参数' : 'callback parameters'}:    ***\`${params}\`***`)
+
+        let snippet
+        let content
+        if (isVue) {
+          const [snippetEventNameOptions, _name] = generateScriptNames(name)
+          snippet = `${name}="\${1|${snippetEventNameOptions.join(',')}|}"`
+          content = `@${name}="on${_name}"`
+        }
+        else if (isSvelte) {
+          snippet = `${name}={\${1:${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}}`
+          content = `${name}={${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}`
+        }
+        else {
+          const [snippetEventNameOptions, _name] = generateScriptNames(name)
+          snippet = `${name}={\${1|${snippetEventNameOptions.join(',')}|}}`
+          content = `${name}={${_name}}`
+        }
+
+        const eventDesc = isZh ? (description_zh || description) : description
+        if (eventDesc)
+          content += `  ${eventDesc}`
+        if (params)
+          content += `  ${isZh ? '参数' : 'params'}：${params}`
+        const detailsLines: string[] = []
+        detailsLines.push(`${isZh ? '***属性***' : '***prop***'}: ${content}`)
+        if (eventDesc) {
+          detailsLines.push(isZh
+            ? `***描述***: ${description_zh || description}`
+            : `***description***: ${description}`)
+        }
+        if (typeof params === 'string' && params) {
+          detailsLines.push(isZh
+            ? `***参数***: ${params.replace(/\n/g, '')}`
+            : `***params***: ${params.replace(/\n/g, '')}`)
+        }
+        const details = detailsLines.join('\n-  ')
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
+        documentation.appendMarkdown(detail.join('\n\n'))
+        return proxyCreateCompletionItem({ content, snippet, details, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
+      },
+      )
+    }
+    events.push(deferEventsCall)
+
+    if (visibleMethods.length) {
+      methods.push(...visibleMethods.map((method) => {
         const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail: string[] = []
         const { name, description, params, description_zh } = method
@@ -466,15 +462,8 @@ export function propsReducer(options: PropsOptions) {
       }))
     }
 
-    if (item.exposed) {
-      const filterExposed = localVersion
-        ? item.exposed.filter((item) => {
-          // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === 1)
-          })
-        : item.exposed
-      exposed.push(...filterExposed.map((expose) => {
+    if (visibleExposed.length) {
+      exposed.push(...visibleExposed.map((expose) => {
         const documentation = enableCommandTrust(new vscode.MarkdownString())
         const details: string[] = []
         const { name, description, detail, description_zh } = expose
@@ -500,15 +489,8 @@ export function propsReducer(options: PropsOptions) {
       }))
     }
 
-    if (item.slots) {
-      const filterSlots = localVersion
-        ? item.slots.filter((item) => {
-          // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === 1)
-          })
-        : item.slots
-      filterSlots.forEach((slot) => {
+    if (visibleSlots.length) {
+      visibleSlots.forEach((slot) => {
         const { name, description, description_zh } = slot
         const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail = []
@@ -533,7 +515,7 @@ export function propsReducer(options: PropsOptions) {
       }
       details.push(text)
 
-      if (item.props) {
+      if (Object.keys(visibleProps).length) {
         if (isZh)
           details.push('**参数:**')
         else
@@ -545,8 +527,8 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...Object.keys(item.props).map((name) => {
-            const { default: defaultValue = '', type, description, description_zh } = item.props[name]
+          ...Object.keys(visibleProps).map((name) => {
+            const { default: defaultValue = '', type, description, description_zh } = (visibleProps as any)[name]
             let value = String(defaultValue).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()
             value = String(defaultValue).length > 20 ? '...' : value
             const safeType = String(type).replace(/\|/g, '\\|')
@@ -558,7 +540,7 @@ export function propsReducer(options: PropsOptions) {
         details.push(tableContent)
       }
 
-      if (item.methods && item.methods.length) {
+      if (visibleMethods.length) {
         if (isZh)
           details.push('**方法:**')
         else
@@ -570,7 +552,7 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...item.methods.map((m) => {
+          ...visibleMethods.map((m) => {
             const { name, params, description, description_zh } = m
             const safeName = String(name).replace(/\|/g, '\\|')
             const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
@@ -582,7 +564,7 @@ export function propsReducer(options: PropsOptions) {
         details.push(tableContent)
       }
 
-      if (item.events && item.events.length) {
+      if (visibleEvents.length) {
         if (isZh)
           details.push('**事件:**')
         else
@@ -594,7 +576,7 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...item.events.map((m) => {
+          ...visibleEvents.map((m) => {
             const { name, params, description, description_zh } = m
             const safeName = String(name).replace(/\|/g, '\\|')
             const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
@@ -606,7 +588,7 @@ export function propsReducer(options: PropsOptions) {
         details.push(tableContent)
       }
 
-      if (item.slots && item.slots.length) {
+      if (visibleSlots.length) {
         if (isZh)
           details.push('**插槽:**')
         else
@@ -618,7 +600,7 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...item.slots.map((m) => {
+          ...visibleSlots.map((m) => {
             const { name, description, description_zh } = m
             const safeName = String(name).replace(/\|/g, '\\|')
             const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
@@ -638,7 +620,7 @@ export function propsReducer(options: PropsOptions) {
     const tableDocument = createTableDocument()
     const name = item.name.split('.')[0]
     const from = (item.dynamicLib || dynamicLib) ? (item.dynamicLib || dynamicLib)!.replace('${name}', hyphenate(name)) : lib
-    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: item.slots, uiName, lib: from }
+    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: visibleSlots, uiName, lib: from }
     return result
   }, result)
 }
@@ -693,7 +675,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         directives,
         lib,
         data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const isVue = context?.framework === 'vue' || context?.framework === 'vine'
+          const framework = context?.framework || 'vue'
           let snippet = ''
           let _content = ''
           let description = ''
@@ -704,7 +686,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             itemImportWay = content.importWay || importWay
 
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
-            snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
+            snippet = await getTemplateStr(map, content, 0, framework, isSeperatorByHyphen, parent)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
@@ -746,7 +728,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         directives,
         lib,
         data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const isVue = context?.framework === 'vue' || context?.framework === 'vine'
+          const framework = context?.framework || 'vue'
           let snippet = ''
           let _content = ''
           let description = ''
@@ -755,7 +737,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           if (typeof content === 'object') {
             itemDynamicLib = content.dynamicLib || dynamicLib
             itemImportWay = content.importWay || importWay
-            snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
+            snippet = await getTemplateStr(map, content, 0, framework, isSeperatorByHyphen, parent)
             const tag = content.name.slice(prefix.length)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
@@ -798,7 +780,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
     directives,
     lib,
     data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-      const isVue = context?.framework === 'vue' || context?.framework === 'vine'
+      const framework = context?.framework || 'react'
       let snippet = ''
       let _content = ''
       let description = ''
@@ -807,7 +789,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       if (typeof content === 'object') {
         itemDynamicLib = content.dynamicLib || dynamicLib
         itemImportWay = content.importWay || importWay
-        snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
+        snippet = await getTemplateStr(map, content, 0, framework, isSeperatorByHyphen, parent)
         const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
@@ -932,7 +914,9 @@ export function findPrefixedComponent(componentName: string, prefixes: string[],
   return null
 }
 
-export async function getRequireProp(content: any, index = 0, isVue: boolean, parent: any = null): Promise<[string[], number]> {
+export async function getRequireProp(content: any, index = 0, framework: CompletionFramework | boolean, parent: any = null): Promise<[string[], number]> {
+  const isVue = framework === true || framework === 'vue' || framework === 'vine'
+  const isHtmlLike = isVue || framework === 'svelte'
   const requiredProps: string[] = []
   if (!content?.props)
     return [requiredProps, index]
@@ -1012,7 +996,7 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
     }
     else if (item.type && item.type.toLowerCase().includes('boolean') && item.default?.toLowerCase() === 'false') {
       // 还要进一步看它的 type 如果 type === boolean 提供 true or false 如果是字符串，使用 / 或着 ｜ 分割，作为提示
-      if (isVue)
+      if (isHtmlLike)
         attr = key
       else
         attr = `${key}="true"`
@@ -1063,7 +1047,8 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
     const [snippetEventNameOptions] = generateScriptNames(e.name)
     const snippetVue = `@${e.name}="\${${index}|${snippetEventNameOptions.join(',')}|}"`
     const snippetJsx = `${e.name}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
-    requiredProps.push(isVue ? snippetVue : snippetJsx)
+    const snippetSvelte = `on${e.name}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
+    requiredProps.push(isVue ? snippetVue : framework === 'svelte' ? snippetSvelte : snippetJsx)
   }
 
   return [requiredProps, index]
@@ -1168,27 +1153,27 @@ export function generateScriptNames(name: string): [string[], string] {
 }
 
 // 防止递归出现重复tag
-async function getTemplateStr(map: any, content: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
+async function getTemplateStr(map: any, content: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
   const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
   if (tags.has(tag))
     return `$${++index}`
 
-  let [requiredProps, __index] = await getRequireProp(content, index, isVue, parent)
+  let [requiredProps, __index] = await getRequireProp(content, index, framework, parent)
   tags.add(tag)
 
   const isFirst = tags.size > 1
-  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, map, __index, isVue, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
+  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, map, __index, framework, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
 }
 
-async function getSuggestionsTemplateStr(content: any, map: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
+async function getSuggestionsTemplateStr(content: any, map: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
   if (content.suggestions?.length) {
     const suggestionTag = content.suggestions[0]
     tags.add(suggestionTag)
     const suggestion = findTargetMap(map, suggestionTag)
-    let [childRequiredProps, _index] = await getRequireProp(suggestion, index, isVue, parent)
+    let [childRequiredProps, _index] = await getRequireProp(suggestion, index, framework, parent)
 
     if (suggestion) {
-      const children = await getTemplateStr(map, suggestion, ++_index, isVue, isSeperatorByHyphen, parent, tags)
+      const children = await getTemplateStr(map, suggestion, ++_index, framework, isSeperatorByHyphen, parent, tags)
       return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index}>${children}</${suggestionTag}>\n`
     }
     else {

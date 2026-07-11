@@ -36,6 +36,23 @@ describe('import transforms', () => {
     )
   })
 
+  it('preserves directive prologues and shebangs', () => {
+    const directives = `'use client'\n'use strict'\n\nexport default function Page() {}\n`
+    const directiveOutput = applyEdits(directives, createImportEdits(directives, 'ui', ['Button']))
+    expect(directiveOutput.indexOf(`'use strict'`)).toBeLessThan(directiveOutput.indexOf('import { Button }'))
+    expect(directiveOutput).toContain(`'use client'\n'use strict'\nimport { Button } from "ui"\n`)
+
+    const shebang = '#!/usr/bin/env node\nconsole.log("ok")\n'
+    const shebangOutput = applyEdits(shebang, createImportEdits(shebang, 'ui', ['Button']))
+    expect(shebangOutput).toBe('#!/usr/bin/env node\nimport { Button } from "ui"\nconsole.log("ok")\n')
+  })
+
+  it('keeps directives before an existing import', () => {
+    const code = `'use client'\nimport { Existing } from "other"\nexport default function Page() {}\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button']))
+    expect(output).toContain(`'use client'\nimport { Existing } from "other"\nimport { Button } from "ui"\n`)
+  })
+
   it('inserts into Vue script setup and creates one when absent', () => {
     const vue = `<template><Button /></template>\n<script setup lang="ts">\nconst x = 1\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))

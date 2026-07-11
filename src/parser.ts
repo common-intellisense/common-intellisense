@@ -321,11 +321,40 @@ export function parserJSX(code: string, position: vscode.Position) {
   }
 }
 
+function getJsxElementName(node: any): string | undefined {
+  if (!node)
+    return
+  if (typeof node === 'string')
+    return node
+  if (typeof node.name === 'string' && (node.type === 'JSXIdentifier' || node.type === 'Identifier' || !node.type))
+    return node.name
+  if (node.type === 'JSXMemberExpression') {
+    const object = getJsxElementName(node.object)
+    const property = getJsxElementName(node.property)
+    return object && property ? `${object}.${property}` : object || property
+  }
+  if (node.type === 'JSXNamespacedName') {
+    const namespace = getJsxElementName(node.namespace)
+    const name = getJsxElementName(node.name)
+    return namespace && name ? `${namespace}:${name}` : namespace || name
+  }
+  return typeof node.name === 'string' ? node.name : undefined
+}
+
+function getJsxAttributeName(attribute: any): string | undefined {
+  if (!attribute || attribute.type === 'JSXSpreadAttribute')
+    return
+  if (typeof attribute.name === 'string')
+    return attribute.type === 'EventHandler' ? 'on' : attribute.name
+  return getJsxElementName(attribute.name)
+}
+
 function jsxDfs(children: any, parent: any, position: vscode.Position, code: string) {
   for (const child of children) {
     let { loc, type, openingElement, body: children, argument, declarations, init } = child
-    if (openingElement?.name.name)
-      child.name = openingElement.name.name
+    const openingElementName = getJsxElementName(openingElement?.name)
+    if (openingElementName)
+      child.name = openingElementName
     if (!loc)
       loc = convertPositionToLoc(child, code)
 
@@ -348,15 +377,26 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
         if (!prop.loc)
           prop.loc = convertPositionToLoc(prop, code)
         if (isInPosition(prop.loc, position)) {
+          if (prop.type === 'JSXSpreadAttribute') {
+            return {
+              tag: openingElementName,
+              props: openingElement.attributes,
+              propType: prop.type,
+              type: 'props',
+              isInTemplate,
+              isValue: false,
+              parent,
+              isDynamicFlag: true,
+              isEvent: false,
+            }
+          }
           if (prop.value?.type === 'JSXExpressionContainer') {
             children = prop.value.expression
           }
           else {
             return {
-              tag: openingElement.name.type === 'JSXMemberExpression'
-                ? `${openingElement.name.object.name}.${openingElement.name.property.name}`
-                : openingElement.name.name,
-              propName: typeof prop.name === 'string' ? prop.type === 'EventHandler' ? 'on' : prop.name : prop.name.name,
+              tag: openingElementName,
+              propName: getJsxAttributeName(prop),
               props: openingElement.attributes,
               propType: prop.type,
               type: 'props',
@@ -370,7 +410,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
                 : false,
               parent,
               isDynamicFlag: prop.value?.type === 'JSXExpressionContainer',
-              isEvent: prop.type === 'EventHandler' || (prop.type === 'JSXAttribute' && prop.name.name.startsWith('on')),
+              isEvent: prop.type === 'EventHandler' || (prop.type === 'JSXAttribute' && !!getJsxAttributeName(prop)?.startsWith('on')),
             }
           }
         }
@@ -393,6 +433,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
       else
         children = child.declaration.arguments
     }
+    else if (type === 'ExpressionStatement') { children = child.expression }
     else if (type === 'JSXExpressionContainer' || type === 'ChainExpression') {
       if (child.expression.type === 'CallExpression') { children = child.expression.arguments }
       else if (child.expression.type === 'ConditionalExpression') {
@@ -433,14 +474,14 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
       children = [children]
 
     if (children && children.length) {
-      const p = child.type === 'JSXElement' ? { ...child, name: openingElement.name.name, props: openingElement.attributes } : null
+      const p = child.type === 'JSXElement' ? { ...child, name: openingElementName, props: openingElement.attributes } : null
       const result = jsxDfs(children, p, position, code) as any
       if (result)
         return result
     }
 
     if ((type === 'JSXElement' || type === 'Element' || type === 'InlineComponent') && isInPosition(openingElement.loc, position)) {
-      const target = openingElement.attributes.find((item: any) => isInPosition(item.loc, position) || item.value == null)
+      const target = openingElement.attributes.find((item: any) => isInPosition(item.loc, position))
       if (!openingElement) {
         openingElement = {
           name: {
@@ -452,17 +493,9 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
       if (target) {
         return {
           type: 'props',
-          tag: openingElement.name.type === 'JSXMemberExpression'
-            ? `${openingElement.name.object.name}.${openingElement.name.property.name}`
-            : openingElement.name.name,
+          tag: openingElementName,
           props: openingElement.attributes,
-          propName: target.value
-            ? typeof target.name === 'string'
-              ? target.type === 'EventHandler'
-                ? 'on'
-                : target.name
-              : target.name.name
-            : '',
+          propName: target.type === 'JSXSpreadAttribute' ? undefined : getJsxAttributeName(target) || '',
           propType: target.type,
           isDynamicFlag: target.value?.type === 'JSXExpressionContainer',
           isInTemplate,
@@ -485,9 +518,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
       }, position)
       return {
         type: isTag ? 'tag' : 'props',
-        tag: openingElement.name.type === 'JSXMemberExpression'
-          ? `${openingElement.name.object.name}.${openingElement.name.property.name}`
-          : openingElement.name.name,
+        tag: openingElementName,
         props: openingElement.attributes,
         isInTemplate,
         parent,
@@ -525,7 +556,7 @@ function findJsxRefs(childrens: any, map: any = {}, refs: any = []) {
       }
     }
     else if (type === 'ExpressionStatement') {
-      children = expression.arguments
+      children = expression?.arguments || expression
     }
     else if (type === 'ReturnStatement') {
       children = argument
@@ -545,10 +576,11 @@ function findJsxRefs(childrens: any, map: any = {}, refs: any = []) {
       children = [children]
     if (openingElement && openingElement.attributes.length) {
       for (const prop of openingElement.attributes) {
-        if (prop.name && prop.name.name === 'ref') {
+        if (getJsxAttributeName(prop) === 'ref') {
           const value = prop.value?.expression?.name ?? prop.value?.value
-          if (value)
-            map[value] = transformTagName(openingElement.name.name)
+          const tagName = getJsxElementName(openingElement.name)
+          if (value && tagName)
+            map[value] = transformTagName(tagName)
         }
       }
     }
