@@ -226,6 +226,29 @@ describe('fetch service additional tests (mocked)', () => {
     nowSpy.mockRestore()
   })
 
+  it('backs off after a stale-cache refresh failure', async () => {
+    const ofetchMod = await import('ofetch')
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { ButtonProps: () => ({ value: 1 }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    nowSpy.mockReturnValue(1000 + 6 * 60 * 1000)
+    vi.mocked(ofetchMod.ofetch).mockRejectedValue(new Error('offline'))
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
+
+    nowSpy.mockReturnValue(1000 + 6 * 60 * 1000 + 31_000)
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { ButtonProps: () => ({ value: 2 }) }')
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(2)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(3)
+    nowSpy.mockRestore()
+  })
+
   it('blocks custom executable adapters unless legacy mode is explicitly enabled', async () => {
     allowLegacyAdapters = false
     const ofetchMod = await import('ofetch')

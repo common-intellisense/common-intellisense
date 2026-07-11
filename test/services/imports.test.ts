@@ -27,6 +27,28 @@ describe('import transforms', () => {
     expect(output).toContain('import DefaultThing, { Existing as Alias, Button } from "ui"')
   })
 
+  it('promotes a declaration-level type-only import to runtime', () => {
+    const code = `import type { Button, ButtonProps } from "ui"\n'use client'\nexport default () => <Button />\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button']))
+
+    expect(output).toContain('import { Button, type ButtonProps } from "ui"')
+    expect(output).not.toContain('import type { Button')
+    expect(output.indexOf('import { Button')).toBeLessThan(output.indexOf(`'use client'`))
+  })
+
+  it('promotes inline type-only specifiers and preserves aliases', () => {
+    const code = `import { type Button as X, type ButtonProps, Existing } from "ui"\nconst value = X\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['X', 'Input']))
+
+    expect(output).toContain('import { Button as X, type ButtonProps, Existing, Input } from "ui"')
+    expect(output).not.toContain('type Button as X')
+  })
+
+  it('keeps type-only bindings from other sources occupied', () => {
+    const code = `import type { Button } from "other-ui"\nexport default () => <Button />\n`
+    expect(createImportEdits(code, 'ui', ['Button'])).toEqual([])
+  })
+
   it('emits one valid statement per default or namespace dependency', () => {
     expect(applyEdits('', createImportEdits('', 'ui/button', ['Button', 'ButtonGroup'], 'default'))).toBe(
       'import Button from "ui/button"\nimport ButtonGroup from "ui/button"\n',

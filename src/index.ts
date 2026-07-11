@@ -8,7 +8,7 @@ import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCach
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui/ui-utils'
 import { clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
@@ -112,8 +112,12 @@ export async function activate(context: vscode.ExtensionContext) {
       return
     const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }
     const cached = getDocumentSlotAnalysis(document.uri)
-    if (cached?.documentVersion === document.version && cached.packagePath === identity.packagePath && cached.contextGeneration === identity.contextGeneration && cached.contextRevision === identity.contextRevision)
-      return
+    if (cached?.documentVersion === document.version && cached.packagePath === identity.packagePath) {
+      if (cached.contextGeneration > identity.contextGeneration || (cached.contextGeneration === identity.contextGeneration && cached.contextRevision > identity.contextRevision))
+        return
+      if (cached.contextGeneration === identity.contextGeneration && cached.contextRevision === identity.contextRevision)
+        return
+    }
     if (cached)
       clearDocumentAnalysis(document.uri)
     const code = document.getText()
@@ -125,8 +129,11 @@ export async function activate(context: vscode.ExtensionContext) {
     for (const editor of vscode.window.visibleTextEditors) {
       const documentPath = getDocumentPath(editor.document)
       void resolvePackagePathForDocument(documentPath).then((nearestPackagePath) => {
-        if (nearestPackagePath === packageContext.pkgPath)
-          return analyzeDocumentSlots(editor.document, packageContext)
+        if (nearestPackagePath !== packageContext.pkgPath)
+          return
+        const latestContext = getContextForPackagePath(nearestPackagePath)
+        if (latestContext)
+          return analyzeDocumentSlots(editor.document, latestContext)
       }).catch(error => logger.error(String(error)))
     }
   }))

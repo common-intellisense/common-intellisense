@@ -353,14 +353,46 @@ function getJsxAttributeName(attribute: any): string | undefined {
   return getJsxElementName(attribute.name)
 }
 
+function findOpeningElementEnd(code: string, start = 0, end = code.length) {
+  let quote = ''
+  let braces = 0
+  for (let index = Math.max(0, start); index < Math.min(end, code.length); index++) {
+    const char = code[index]
+    if (quote) {
+      if (char === quote && code[index - 1] !== '\\')
+        quote = ''
+      continue
+    }
+    if (char === '"' || char === '\'' || char === '`') {
+      quote = char
+      continue
+    }
+    if (char === '{')
+      braces++
+    else if (char === '}')
+      braces = Math.max(0, braces - 1)
+    else if (char === '>' && braces === 0)
+      return index + 1
+  }
+  return Math.min(end, code.length)
+}
+
 function jsxDfs(children: any, parent: any, position: vscode.Position, code: string) {
   for (const child of children) {
     let { loc, type, openingElement, body: children, argument, declarations, init } = child
-    const openingElementName = getJsxElementName(openingElement?.name)
-    if (openingElementName)
-      child.name = openingElementName
     if (!loc)
       loc = convertPositionToLoc(child, code)
+    if (!openingElement && child.attributes) {
+      const openingEnd = findOpeningElementEnd(code, child.start, child.end)
+      openingElement = {
+        name: child.name,
+        attributes: child.attributes,
+        loc: convertPositionToLoc({ start: child.start, end: openingEnd }, code),
+      }
+    }
+    const openingElementName = getJsxElementName(openingElement?.name) || (typeof child.name === 'string' ? child.name : undefined)
+    if (openingElementName)
+      child.name = openingElementName
 
     if (!isInPosition(loc, position))
       continue
@@ -368,20 +400,15 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
     if (parent)
       child.parent = parent
 
-    if (!openingElement && child.attributes) {
-      openingElement = {
-        name: {
-          name: child.name,
-        },
-        attributes: child.attributes,
-      }
-    }
+    if (type === 'JSXElement' || type === 'Element' || type === 'InlineComponent' || (type === 'ReturnStatement' && argument && (argument.type === 'JSXElement' || argument.type === 'JSXFragment')))
+      isInTemplate = true
+
     if (openingElement && openingElement.attributes.length) {
       for (const prop of openingElement.attributes) {
         if (!prop.loc)
           prop.loc = convertPositionToLoc(prop, code)
         if (isInPosition(prop.loc, position)) {
-          if (prop.type === 'JSXSpreadAttribute') {
+          if (prop.type === 'JSXSpreadAttribute' || prop.type === 'Spread') {
             return {
               tag: openingElementName,
               props: openingElement.attributes,
@@ -420,9 +447,6 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
         }
       }
     }
-
-    if (type === 'JSXElement' || type === 'Element' || (type === 'ReturnStatement' && argument && (argument.type === 'JSXElement' || argument.type === 'JSXFragment')))
-      isInTemplate = true
 
     if (children) {
       // skip
@@ -478,28 +502,20 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
       children = [children]
 
     if (children && children.length) {
-      const p = child.type === 'JSXElement' ? { ...child, name: openingElementName, props: openingElement.attributes } : null
+      const p = ['JSXElement', 'Element', 'InlineComponent'].includes(child.type) ? { ...child, name: openingElementName, props: openingElement?.attributes || [] } : null
       const result = jsxDfs(children, p, position, code) as any
       if (result)
         return result
     }
 
-    if ((type === 'JSXElement' || type === 'Element' || type === 'InlineComponent') && isInPosition(openingElement.loc, position)) {
+    if ((type === 'JSXElement' || type === 'Element' || type === 'InlineComponent') && openingElement && isInPosition(openingElement.loc || loc, position)) {
       const target = openingElement.attributes.find((item: any) => isInPosition(item.loc, position))
-      if (!openingElement) {
-        openingElement = {
-          name: {
-            name: child.name,
-          },
-          attributes: child.attributes,
-        }
-      }
       if (target) {
         return {
           type: 'props',
           tag: openingElementName,
           props: openingElement.attributes,
-          propName: target.type === 'JSXSpreadAttribute' ? undefined : getJsxAttributeName(target) || '',
+          propName: target.type === 'JSXSpreadAttribute' || target.type === 'Spread' ? undefined : getJsxAttributeName(target) || '',
           propType: target.type,
           isDynamicFlag: target.value?.type === 'JSXExpressionContainer',
           isInTemplate,
@@ -808,7 +824,7 @@ export interface SlotAnalysis extends SlotAnalysisRequest {
 
 const MAX_DOCUMENT_SLOT_ANALYSES = 20
 const documentSlotAnalyses = new Map<string, SlotAnalysis>()
-const latestSlotRequests = new Map<string, number>()
+const latestSlotRequests = new Map<string, SlotAnalysisRequest>()
 let slotRequestSequence = 0
 let slotAnalysisEpoch = 0
 const codeLensEmitter = new vscode.EventEmitter<void>()
@@ -844,15 +860,29 @@ export function getDocumentSlotAnalysis(uri: string | vscode.Uri) {
   return analysis
 }
 
+function isOlderSlotContext(candidate: SlotAnalysisRequest, current: SlotAnalysisRequest) {
+  if (candidate.uri !== current.uri || candidate.packagePath !== current.packagePath)
+    return false
+  if (candidate.documentVersion !== current.documentVersion)
+    return candidate.documentVersion < current.documentVersion
+  return candidate.contextGeneration < current.contextGeneration
+    || (candidate.contextGeneration === current.contextGeneration && candidate.contextRevision < current.contextRevision)
+}
+
 export function beginDocumentSlotAnalysis(uri: string | vscode.Uri, documentVersion: number, identity: SlotAnalysisIdentity): SlotAnalysisRequest {
   const key = typeof uri === 'string' ? uri : uri.toString()
-  const requestId = ++slotRequestSequence
-  latestSlotRequests.set(key, requestId)
-  return { uri: key, documentVersion, requestId, epoch: slotAnalysisEpoch, ...identity }
+  const request: SlotAnalysisRequest = { uri: key, documentVersion, requestId: ++slotRequestSequence, epoch: slotAnalysisEpoch, ...identity }
+  const latest = latestSlotRequests.get(key)
+  const committed = documentSlotAnalyses.get(key)
+  if ((!latest || !isOlderSlotContext(request, latest)) && (!committed || !isOlderSlotContext(request, committed)))
+    latestSlotRequests.set(key, request)
+  return request
 }
 
 export function commitDocumentSlotAnalysis(request: SlotAnalysisRequest, children: any[]) {
-  if (request.epoch !== slotAnalysisEpoch || latestSlotRequests.get(request.uri) !== request.requestId)
+  const latest = latestSlotRequests.get(request.uri)
+  const committed = documentSlotAnalyses.get(request.uri)
+  if (request.epoch !== slotAnalysisEpoch || latest?.requestId !== request.requestId || (committed && isOlderSlotContext(request, committed)))
     return false
   const analysis: SlotAnalysis = { ...request, children }
   documentSlotAnalyses.delete(request.uri)

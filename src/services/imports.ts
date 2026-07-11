@@ -54,6 +54,26 @@ export function createImportEdits(code: string, source: string, dependencies: st
   const runtimeMatching = matching.filter(node => !node.importClause?.isTypeOnly)
   const existing = collectRuntimeBindings(runtimeMatching, importWay)
   const occupied = collectTopLevelBindings(sourceFile)
+
+  if (importWay === 'specifier') {
+    const promotion = findTypeOnlyPromotion(matching, names.filter(name => !existing.has(name)))
+    if (promotion) {
+      const promoted = new Set(promotion.elements.map(element => element.name.text).filter(name => names.includes(name)))
+      const additional = names.filter(name => !promoted.has(name) && !existing.has(name) && !occupied.has(name))
+      const named = promotion.elements.map((element) => {
+        const text = getImportSpecifierText(element)
+        const isTypeOnly = promotion.declaration.importClause?.isTypeOnly || element.isTypeOnly
+        return isTypeOnly && !promoted.has(element.name.text) ? `type ${text}` : text
+      })
+      named.push(...additional)
+      const clause = promotion.declaration.importClause!
+      const prefix = !clause.isTypeOnly && clause.name ? `${clause.name.text}, ` : ''
+      const preservedTypeDefault = clause.isTypeOnly && clause.name ? `import type ${clause.name.text} from ${JSON.stringify(source)}\n` : ''
+      const text = `${preservedTypeDefault}import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
+      return [{ start: script.offset + promotion.declaration.getStart(sourceFile), end: script.offset + promotion.declaration.end, text }]
+    }
+  }
+
   const missing = names.filter(name => !existing.has(name) && !occupied.has(name))
   if (!missing.length)
     return []
@@ -90,6 +110,23 @@ export function createImportEdits(code: string, source: string, dependencies: st
     : beforeInsertion.endsWith('\n') ? '' : '\n'
   const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
   return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }]
+}
+
+function findTypeOnlyPromotion(imports: ts.ImportDeclaration[], names: string[]) {
+  const requested = new Set(names)
+  for (const declaration of imports) {
+    const clause = declaration.importClause
+    const bindings = clause?.namedBindings
+    if (!clause || !bindings || !ts.isNamedImports(bindings))
+      continue
+    const promotable = bindings.elements.some(element => requested.has(element.name.text) && (clause.isTypeOnly || element.isTypeOnly))
+    if (promotable)
+      return { declaration, elements: [...bindings.elements] }
+  }
+}
+
+function getImportSpecifierText(element: ts.ImportSpecifier) {
+  return element.propertyName ? `${element.propertyName.text} as ${element.name.text}` : element.name.text
 }
 
 function getPrologueInsertion(sourceFile: ts.SourceFile, code: string) {

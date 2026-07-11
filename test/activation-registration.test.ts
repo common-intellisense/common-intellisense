@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     detectSlots: vi.fn(),
     clearDocumentAnalysis: vi.fn(),
     getSlotAnalysis: vi.fn(),
+    getPackageContext: vi.fn(),
     resolvePackagePath: vi.fn(),
     contextUpdatedListener: undefined as undefined | ((context: any) => void),
     textChangeListener: undefined as undefined | ((event: any) => void),
@@ -39,6 +40,7 @@ vi.mock('../src/ui/ui-find', () => ({
   deactivateUICache: vi.fn(),
   ensureContextForPath: mocks.ensureContext,
   getContextForDocumentPath: vi.fn(),
+  getContextForPackagePath: mocks.getPackageContext,
   getCurrentPkgUiNames: vi.fn(),
   invalidateContexts: vi.fn(),
   onPackageContextsInvalidated: vi.fn(() => ({ dispose: vi.fn() })),
@@ -115,6 +117,7 @@ describe('activation registration', () => {
     mocks.detectSlots.mockClear()
     mocks.clearDocumentAnalysis.mockClear()
     mocks.getSlotAnalysis.mockReset()
+    mocks.getPackageContext.mockReset()
     mocks.resolvePackagePath.mockReset()
     mocks.contextUpdatedListener = undefined
     mocks.textChangeListener = undefined
@@ -161,13 +164,20 @@ describe('activation registration', () => {
     ;(vscode.window.visibleTextEditors as any).push({ document })
     mocks.resolvePackagePath.mockResolvedValue('/workspace/package.json')
     mocks.getSlotAnalysis.mockReturnValue({ documentVersion: 1, packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 1 })
+    mocks.getPackageContext.mockReturnValue({
+      pkgPath: '/workspace/package.json',
+      generation: 1,
+      revision: 2,
+      uiCompletions: {},
+      optionsComponents: { prefix: [] },
+    })
     const { activate } = await import('../src/index')
     await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
 
     mocks.contextUpdatedListener?.({
       pkgPath: '/workspace/package.json',
       generation: 1,
-      revision: 2,
+      revision: 1,
       uiCompletions: {},
       optionsComponents: { prefix: [] },
     })

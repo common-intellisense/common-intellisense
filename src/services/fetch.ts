@@ -56,6 +56,8 @@ const maxAdapterObjectKeys = 10_000
 const maxAdapterExports = 500
 const blockedExportKeys = new Set(['__proto__', 'prototype', 'constructor'])
 const remoteUriFetchedAt = new Map<string, number>()
+const remoteUriRetry = new Map<string, { failureCount: number, nextRetryAt: number }>()
+const remoteRetryDelays = [30_000, 2 * 60_000, 5 * 60_000]
 const isZh = getLocale()?.includes('zh')
 
 function mergeComponentsWithTypeFallback(remote: any[], fallback: any[]) {
@@ -625,7 +627,9 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
     }
     const cached = cacheFetch.has(uri) ? cacheFetch.get(uri) : ''
     const lastFetchedAt = remoteUriFetchedAt.get(uri) || 0
-    const needsRefresh = !cached || now - lastFetchedAt >= remoteUriCacheTTL
+    const retryState = remoteUriRetry.get(uri)
+    const retryDeferred = !!cached && !!retryState && now < retryState.nextRetryAt
+    const needsRefresh = !cached || (!retryDeferred && now - lastFetchedAt >= remoteUriCacheTTL)
     return { uri, cached, needsRefresh }
   }).filter(Boolean) as Array<{ uri: string, cached: string, needsRefresh: boolean }>
 
@@ -656,10 +660,14 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
           throw new Error(`Remote adapter configuration changed while loading: ${uri}`)
         cacheFetch.set(uri, fetched)
         remoteUriFetchedAt.set(uri, Date.now())
+        remoteUriRetry.delete(uri)
         return [uri, fetched] as const
       }
       catch (error) {
         if (cached) {
+          const failureCount = (remoteUriRetry.get(uri)?.failureCount || 0) + 1
+          const delay = remoteRetryDelays[Math.min(failureCount - 1, remoteRetryDelays.length - 1)]
+          remoteUriRetry.set(uri, { failureCount, nextRetryAt: Date.now() + delay })
           logger.error(isZh ? `刷新失败，使用缓存: ${uri}` : `Refresh failed, using cached module: ${uri}`)
           return [uri, cached] as const
         }
@@ -872,6 +880,7 @@ export function clearFetchCaches() {
   latestVersionCache.clear()
   latestVersionInFlight.clear()
   remoteUriFetchedAt.clear()
+  remoteUriRetry.clear()
   localUrisMap.clear()
   remoteHttpTasks.clear()
   remoteNpmTasks.clear()

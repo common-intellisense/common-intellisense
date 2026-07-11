@@ -132,6 +132,29 @@ describe('parser edge cases', () => {
     expect(mod.isInAttribute(child, { line: 1, character: 6 } as any, 0, 26)).toBe(true)
   })
 
+  it.each([
+    ['<Button disabled />', 10, { type: 'props', tag: 'Button', propName: 'disabled' }],
+    ['<Button {disabled} />', 12, { type: 'props', tag: 'Button', propName: 'disabled' }],
+    ['<Button {...props} />', 12, { type: 'props', tag: 'Button' }],
+    ['<Button on:click={handleClick} />', 11, { type: 'props', tag: 'Button', propName: 'on' }],
+  ])('parses real Svelte component attributes: %s', async (code, character, expected) => {
+    const mod = await import('../src/parser')
+    expect(mod.parser(code, { line: 0, character } as any, {
+      languageId: 'svelte',
+      uri: 'file:///App.svelte',
+      offset: character,
+    })).toMatchObject(expected)
+  })
+
+  it('parses a real Svelte component tag without JSX openingElement data', async () => {
+    const mod = await import('../src/parser')
+    expect(mod.parser('<Button />', { line: 0, character: 3 } as any, {
+      languageId: 'svelte',
+      uri: 'file:///App.svelte',
+      offset: 3,
+    })).toMatchObject({ type: 'tag', tag: 'Button' })
+  })
+
   it('falls back safely for unterminated vue tags in attribute checks', async () => {
     const mod = await import('../src/parser')
     const child = {

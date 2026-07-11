@@ -83,6 +83,10 @@ export function getContextForDocumentPath(cwd: string) {
   return packagePath ? contexts.get(packagePath) : contexts.get(cwd)
 }
 
+export function getContextForPackagePath(pkgPath: string) {
+  return contexts.get(pkgPath)
+}
+
 export async function resolvePackagePathForDocument(cwd: string, refresh = false) {
   if (!cwd || cwd === 'exthhost')
     return

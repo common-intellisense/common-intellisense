@@ -46,6 +46,24 @@ describe('per-document slot analysis', () => {
     })
   })
 
+  it('does not let a lower revision started later replace a committed higher revision', () => {
+    const uri = 'file:///workspace/a.vue'
+    commit(uri, 7, [{ id: 'new' }], { ...identity, contextRevision: 2 })
+    const stale = beginDocumentSlotAnalysis(uri, 7, identity)
+
+    expect(commitDocumentSlotAnalysis(stale, [{ id: 'old' }])).toBe(false)
+    expect(getDocumentSlotAnalysis(uri)?.children).toEqual([{ id: 'new' }])
+  })
+
+  it('does not let a lower revision supersede an in-flight higher revision', () => {
+    const uri = 'file:///workspace/a.vue'
+    const newer = beginDocumentSlotAnalysis(uri, 7, { ...identity, contextRevision: 2 })
+    const stale = beginDocumentSlotAnalysis(uri, 7, identity)
+
+    expect(commitDocumentSlotAnalysis(stale, [{ id: 'old' }])).toBe(false)
+    expect(commitDocumentSlotAnalysis(newer, [{ id: 'new' }])).toBe(true)
+  })
+
   it('does not let a cleared in-flight request revive stale analysis', () => {
     const uri = 'file:///workspace/a.vue'
     const stale = beginDocumentSlotAnalysis(uri, 7, identity)
