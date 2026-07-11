@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { findUpMock, fetchMock, remoteFetchMock } = vi.hoisted(() => ({
+const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock } = vi.hoisted(() => ({
   findUpMock: vi.fn(),
   fetchMock: vi.fn(),
+  localFetchMock: vi.fn(async () => ({})),
   remoteFetchMock: vi.fn(async () => ({})),
+  npmFetchMock: vi.fn(async () => ({})),
 }))
 
 vi.mock('find-up', () => ({ findUp: findUpMock }))
@@ -16,8 +18,8 @@ vi.mock('node:fs/promises', () => ({
 }))
 vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchMock,
-  fetchFromLocalUris: vi.fn(async () => ({})),
-  fetchFromRemoteNpmUrls: vi.fn(async () => ({})),
+  fetchFromLocalUris: localFetchMock,
+  fetchFromRemoteNpmUrls: npmFetchMock,
   fetchFromRemoteUrls: remoteFetchMock,
   getLocalCache: Promise.resolve('done'),
   writeLocalCache: vi.fn(async () => {}),
@@ -34,7 +36,9 @@ describe('package context generations', () => {
     vi.resetModules()
     findUpMock.mockReset()
     fetchMock.mockReset()
+    localFetchMock.mockReset().mockResolvedValue({})
     remoteFetchMock.mockReset().mockResolvedValue({})
+    npmFetchMock.mockReset().mockResolvedValue({})
   })
 
   it('does not let a context started before global invalidation commit later', async () => {
@@ -142,6 +146,26 @@ describe('package context generations', () => {
     expect(remoteFetchMock).toHaveBeenCalled()
   })
 
+  it('publishes fast custom sources without waiting for a pending remote URL', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    remoteFetchMock.mockReturnValue(new Promise(() => {}))
+    localFetchMock.mockResolvedValue({ LocalProps: () => ({ LocalButton: { source: 'local' } }) })
+    npmFetchMock.mockResolvedValue({ NpmProps: () => ({ NpmButton: { source: 'npm' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const updated = vi.fn()
+    mod.onPackageContextUpdated(updated)
+
+    await mod.ensureContextForPath('/workspace/src/App.tsx', {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => {
+      const contexts = updated.mock.calls.map(call => call[0])
+      expect(contexts.some(value => value.uiCompletions?.LocalButton)).toBe(true)
+      expect(contexts.some(value => value.uiCompletions?.NpmButton)).toBe(true)
+    })
+    expect(remoteFetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('does not republish stale custom enhancement after global invalidation', async () => {
     findUpMock.mockResolvedValue('/workspace/package.json')
     fetchMock.mockResolvedValue({})
@@ -204,6 +228,52 @@ describe('package context generations', () => {
     // One lookup resolves the document; findPkgUI performs one lookup while the
     // context is initially built. Subsequent provider calls perform neither.
     expect(findUpMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns cached context and revalidates stale custom sources once in the background', async () => {
+    let now = 1_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    remoteFetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const baseline = await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customSourcesCheckedAt).toBe(now))
+    now += 6 * 60 * 1000
+
+    const existing = await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+    await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+
+    expect(existing?.generation).toBe(baseline?.generation)
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(2))
+    nowSpy.mockRestore()
+  })
+
+  it('deduplicates stale official source revalidation while returning cached context', async () => {
+    let now = 2_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const baseline = await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalled())
+    now += 11 * 60 * 1000
+    const [first, second] = await Promise.all([
+      mod.ensureContextForPath(documentPath, extensionContext, () => {}),
+      mod.ensureContextForPath(documentPath, extensionContext, () => {}),
+    ])
+
+    expect(first).toBe(second)
+    expect(first?.generation).toBe(baseline?.generation)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    nowSpy.mockRestore()
   })
 
   it('discovers a nested package instead of reusing a loaded parent context', async () => {

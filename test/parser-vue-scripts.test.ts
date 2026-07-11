@@ -33,6 +33,19 @@ describe('vue script block selection', () => {
     })
   })
 
+  it('uses script-relative coordinates while retaining the Vue host for TSX', () => {
+    const code = `<template><div /></template>
+
+<script setup lang="tsx">
+const button = <ElButton size="small" />
+</script>`
+    const tag = parseAt(code, 'ElButton') as any
+    const prop = parseAt(code, 'size') as any
+    expect(tag).toMatchObject({ type: 'tag', tag: 'ElButton', hostFramework: 'vue' })
+    expect(prop).toMatchObject({ type: 'props', tag: 'ElButton', propName: 'size', hostFramework: 'vue' })
+    expect(tag.template).toBeDefined()
+  })
+
   it('uses either active block and aggregates refs from both blocks', () => {
     const code = `<script>
 const normalRef = ref()

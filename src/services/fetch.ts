@@ -17,7 +17,7 @@ import { logger } from '../ui/ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
 import { getPrefix } from '../ui/ui-utils'
 import { fetchFromTypes } from '../type-extract'
-import { createAdapterVmContext } from './adapter-vm'
+import { createAdapterVmContext, runAdapterExports } from './adapter-vm'
 
 const prefix = '@common-intellisense/'
 
@@ -162,8 +162,12 @@ function isPrivateIpv4(host: string) {
   return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224
 }
 
+export function normalizeHostname(hostname: string) {
+  return hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
+}
+
 function isPrivateNetworkHost(hostname: string) {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '')
+  const host = normalizeHostname(hostname)
   if (host === 'localhost' || host.endsWith('.localhost'))
     return true
   const ipVersion = isIP(host)
@@ -201,7 +205,8 @@ type ResolveHost = (hostname: string) => Promise<Array<{ address: string, family
 
 function isExplicitlyTrustedHost(hostname: string) {
   const trustedHosts = getConfiguration('common-intellisense.trustedHosts') as string[] | undefined
-  return Array.isArray(trustedHosts) && trustedHosts.includes(hostname)
+  const normalized = normalizeHostname(hostname)
+  return Array.isArray(trustedHosts) && trustedHosts.some(host => normalizeHostname(host) === normalized)
 }
 
 function isTrustedRemoteUri(uri: string) {
@@ -212,10 +217,11 @@ function isTrustedRemoteUri(uri: string) {
     if (target.protocol !== 'http:')
       return false
 
-    if (['localhost', '127.0.0.1', '::1'].includes(target.hostname))
+    const hostname = normalizeHostname(target.hostname)
+    if (['localhost', '127.0.0.1', '::1'].includes(hostname))
       return true
 
-    return isExplicitlyTrustedHost(target.hostname)
+    return isExplicitlyTrustedHost(hostname)
   }
   catch {
     return false
@@ -307,32 +313,23 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
   sandbox.exports = sandbox.module.exports
   const context = createAdapterVmContext(sandbox)
   new vm.Script(scriptContent, { filename: source }).runInContext(context, { timeout: remoteExecTimeout })
-  const keys = new vm.Script('Object.keys(module.exports)').runInContext(context, { timeout: remoteExecTimeout }) as string[]
-  validateLegacyAdapterLimits(keys, [], source)
+  const serializedJson = runAdapterExports(context, remoteExecTimeout)
+  if (typeof serializedJson !== 'string')
+    throw new Error(`Adapter result is invalid or too large: ${source}`)
+  const serialized = JSON.parse(serializedJson) as Array<[string, unknown]>
+  if (!Array.isArray(serialized))
+    throw new Error(`Adapter result is invalid or too large: ${source}`)
   const result: Record<string, unknown> = {}
-  let totalResultSize = 0
-  for (const key of keys) {
-    if (blockedExportKeys.has(key))
-      continue
-    sandbox.__key = key
-    const json = new vm.Script(`(() => {
-      const value = module.exports[__key]
-      const data = typeof value === 'function' ? value(__key.endsWith('Components') ? __localeZh : undefined) : value
-      return JSON.stringify(data)
-    })()`).runInContext(context, { timeout: remoteExecTimeout })
+  const resultSizes: number[] = []
+  for (const [key, json] of serialized) {
     if (typeof json !== 'string')
       throw new Error(`Adapter result is invalid or too large: ${source}#${key}`)
-    const resultSize = Buffer.byteLength(json)
-    validateLegacyAdapterLimits([key], [resultSize], source, {
-      maxExports: maxAdapterExports,
-      maxSingleResultSize: maxAdapterResultSize,
-      maxTotalResultSize: maxTotalAdapterResultSize - totalResultSize,
-    })
-    totalResultSize += resultSize
+    resultSizes.push(Buffer.byteLength(json))
     const data = JSON.parse(json)
     validateAdapterData(data, `${source}#${key}`)
     result[key] = data
   }
+  validateLegacyAdapterLimits(serialized.map(([key]) => key), resultSizes, source)
   return result
 }
 
@@ -613,7 +610,7 @@ type RemoteTrustClass
 
 async function getRemoteTrustClass(uri: string): Promise<RemoteTrustClass | undefined> {
   const target = new URL(uri)
-  const hostname = target.hostname.toLowerCase()
+  const hostname = normalizeHostname(target.hostname)
   if (target.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname))
     return { kind: 'localhostHttp', hostname }
   if ((target.protocol === 'http:' || target.protocol === 'https:') && isExplicitlyTrustedHost(hostname))
@@ -624,7 +621,7 @@ async function getRemoteTrustClass(uri: string): Promise<RemoteTrustClass | unde
 
 function isRedirectAllowed(uri: string, trust: RemoteTrustClass) {
   const target = new URL(uri)
-  const hostname = target.hostname.toLowerCase()
+  const hostname = normalizeHostname(target.hostname)
   if (trust.kind === 'publicHttps')
     return isTrustedRedirectUri(uri)
   return hostname === trust.hostname && (target.protocol === 'http:' || target.protocol === 'https:')
@@ -637,7 +634,7 @@ function normalizeAddress(address: string) {
 
 async function resolvePinnedAddress(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
   const target = new URL(uri)
-  const hostname = target.hostname.replace(/^\[|\]$/g, '')
+  const hostname = normalizeHostname(target.hostname)
   const addresses = isIP(hostname)
     ? [{ address: hostname, family: isIP(hostname) }]
     : await resolveHost(hostname)

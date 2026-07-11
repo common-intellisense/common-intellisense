@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 import { getConfiguration } from '@vscode-use/utils'
 import { findUp } from 'find-up'
+import ts from 'typescript'
 import { nameMap } from '../constants'
 import { toCamel } from '../ui/utils'
 // import { componentsReducer, propsReducer } from './ui/utils'
@@ -70,29 +71,48 @@ export function getSelectedUIs(pkgPath?: string): string[] {
   return normalizeSelectedUIs(getConfiguration('common-intellisense.ui'), pkgPath)
 }
 
-const UIIMPORT_REG = /import\s+\{([^}]+)\}\s+from\s+['"]([^"']+)['"]/g
-const UIIMPORTDefault_REG = /import\s+(\S+)\s+from\s+['"]([^"']+)['"]/g
+const uiImportedNames = new WeakMap<Record<string, string>, Record<string, string>>()
+
+export function getUiImportedName(deps: Record<string, string> | undefined, localName: string) {
+  return deps ? uiImportedNames.get(deps)?.[localName] || localName : localName
+}
+
 export function getUiDeps(text: string) {
   if (!text)
     return
-  text = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
   const deps: Record<string, string> = {}
-  for (const match of text.matchAll(UIIMPORT_REG)) {
-    if (!match)
+  const importedNames: Record<string, string> = {}
+  const scriptBlocks = [...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(match => match[1])
+  const sourceText = scriptBlocks.length ? scriptBlocks.join('\n') : text
+  const sourceFile = ts.createSourceFile('component.tsx', sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.importClause?.isTypeOnly)
       continue
-    const from = match[2]
-    const _deps = match[1].trim().replace(/\s+/g, ' ').split(/,\s*/).filter(Boolean)
-    _deps.forEach((d) => {
-      deps[d] = from
-    })
-  }
-  for (const match of text.matchAll(UIIMPORTDefault_REG)) {
-    if (!match)
+    const from = statement.moduleSpecifier.text
+    const clause = statement.importClause
+    if (!clause)
       continue
-    const from = match[2]
-    const key = match[1]
-    deps[key] = from
+    if (clause.name) {
+      deps[clause.name.text] = from
+      // A default import's local identifier is also the component name used in
+      // templates/JSX; only named aliases need remapping to an imported name.
+      importedNames[clause.name.text] = clause.name.text
+    }
+    const bindings = clause.namedBindings
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      deps[bindings.name.text] = from
+      importedNames[bindings.name.text] = '*'
+    }
+    else if (bindings) {
+      for (const element of bindings.elements) {
+        if (!element.isTypeOnly) {
+          deps[element.name.text] = from
+          importedNames[element.name.text] = element.propertyName?.text || element.name.text
+        }
+      }
+    }
   }
+  uiImportedNames.set(deps, importedNames)
   return deps
 }
 

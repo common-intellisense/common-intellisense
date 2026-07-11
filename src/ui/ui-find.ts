@@ -20,6 +20,8 @@ export interface PackageContext {
   workspaceRoot: string
   generation: number
   revision: number
+  officialCheckedAt: number
+  customSourcesCheckedAt: number
   uiNames: string[]
   currentPkgUiNames: string[]
   optionsComponents: OptionsComponents
@@ -37,6 +39,9 @@ const contextLoads = new Map<string, ContextLoad>()
 const generations = new Map<string, number>()
 const documentPackageCache = new Map<string, string | null>()
 const mainWatchers = new Map<string, () => void>()
+const sourceRefreshes = new Set<string>()
+const officialSourceTTL = 10 * 60 * 1000
+const customSourceTTL = 5 * 60 * 1000
 let registryEpoch = 0
 let activeContext: PackageContext | undefined
 const contextInvalidationListeners = new Set<(packagePaths?: string[]) => void>()
@@ -138,6 +143,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   const existing = contexts.get(pkgPath)
   if (existing) {
     applyContext(existing)
+    revalidateStaleContext(existing, extensionContext, detectSlots, workspaceRoot || existing.workspaceRoot)
     return existing
   }
   const loading = contextLoads.get(pkgPath)
@@ -158,7 +164,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
       documentPackageCache.set(cwd, context.pkgPath)
       applyContext(context)
       notifyContextUpdated(context)
-      void enhanceContextWithOtherSources(context, epoch).catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
+      startTrackedContextEnhancements(context, epoch)
       return context
     }
     finally {
@@ -168,6 +174,43 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   })()
   contextLoads.set(pkgPath, load)
   return load.task
+}
+
+function revalidateStaleContext(context: PackageContext, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, workspaceRoot: string) {
+  const contextKey = context.pkgPath || context.cwd
+  const now = Date.now()
+  if (now - context.officialCheckedAt < officialSourceTTL) {
+    if (now - context.customSourcesCheckedAt >= customSourceTTL) {
+      const refreshKey = `custom:${contextKey}`
+      if (!sourceRefreshes.has(refreshKey)) {
+        sourceRefreshes.add(refreshKey)
+        startContextEnhancements(context, registryEpoch, () => sourceRefreshes.delete(refreshKey))
+      }
+    }
+    return
+  }
+  // An official refresh also restarts custom enhancements. Do not publish an
+  // old-baseline custom revision concurrently or it could invalidate the
+  // official refresh's context identity guard.
+  const refreshKey = `official:${contextKey}`
+  if (sourceRefreshes.has(refreshKey))
+    return
+  sourceRefreshes.add(refreshKey)
+  const expectedEpoch = registryEpoch
+  void buildContext(context.cwd, extensionContext, detectSlots, context.generation, workspaceRoot)
+    .then((refreshed) => {
+      const registered = contexts.get(contextKey)
+      if (!refreshed || registryEpoch !== expectedEpoch || !registered || registered.generation !== context.generation || registered.officialCheckedAt !== context.officialCheckedAt || generations.get(contextKey) !== context.generation)
+        return
+      refreshed.revision = registered.revision + 1
+      refreshed.customSourcesCheckedAt = registered.customSourcesCheckedAt
+      contexts.set(contextKey, refreshed)
+      applyContext(refreshed)
+      notifyContextUpdated(refreshed)
+      startTrackedContextEnhancements(refreshed, expectedEpoch)
+    })
+    .catch(error => logger.error(`official source refresh failed: ${String(error)}`))
+    .finally(() => sourceRefreshes.delete(refreshKey))
 }
 
 export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache?: boolean) {
@@ -220,7 +263,8 @@ export async function updateCompletions(uis: Uis, options: UpdateCompletionsOpti
   contexts.set(context.pkgPath || cwd, context)
   applyContext(context)
   notifyContextUpdated(context)
-  return await enhanceContextWithOtherSources(context, registryEpoch) || context
+  startTrackedContextEnhancements(context, registryEpoch)
+  return context
 }
 
 async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd: string, generation: number): Promise<PackageContext> {
@@ -265,50 +309,104 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     : []
   const uiNames = hasExplicitSelection ? [...new Set(selected)] : availableNames
 
-  // Deliberately sequential: configured library order defines collision precedence.
-  for (const name of uiNames) {
+  // Fetch independently, then merge in configured order so network timing never
+  // changes collision precedence.
+  const loadedLibraries = await Promise.all(uiNames.map(async (name) => {
+    const pkgInfo = formatToPkg.get(name)
     try {
-      const pkgInfo = formatToPkg.get(name)
       const exports = await fetchFromCommonIntellisense(
         name.replace(/([A-Z])/g, '-$1').toLowerCase(),
         pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath, installedVersion: pkgInfo.installedVersion, adapterMajor: pkgInfo.adapterMajor } : { uiName: name, resolveFrom: pkgPath },
       )
-      if (exports)
-        Object.assign(localUI, exports)
-      const componentsKey = `${name}Components`
-      const components = localUI[componentsKey]?.()
-      if (components) {
-        localCache.set(componentsKey, components)
-        mergeComponents(localOptions, components, userPrefix, originNames, name)
-      }
-      const completion = await localUI[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion, adapterMajor: pkgInfo?.adapterMajor })
-      if (completion) {
-        localCache.set(name, completion)
-        localCompletions ||= {} as PropsConfig
-        Object.assign(localCompletions, completion)
-      }
+      return { name, pkgInfo, exports }
     }
     catch (error) {
       logger.error(`fetch fetchFromCommonIntellisense [${name}] error: ${String(error)}`)
+      return { name, pkgInfo, exports: undefined }
+    }
+  }))
+
+  for (const { name, pkgInfo, exports } of loadedLibraries) {
+    if (!exports)
+      continue
+    Object.assign(localUI, exports)
+    const componentsKey = `${name}Components`
+    const components = exports[componentsKey]?.()
+    if (components) {
+      localCache.set(componentsKey, components)
+      mergeComponents(localOptions, components, userPrefix, originNames, name)
+    }
+    const completion = await exports[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion, adapterMajor: pkgInfo?.adapterMajor })
+    if (completion) {
+      localCache.set(name, completion)
+      localCompletions ||= {} as PropsConfig
+      Object.assign(localCompletions, completion)
     }
   }
 
   await writeLocalCache()
 
-  return { cwd, pkgPath, workspaceRoot, generation, revision: 1, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
+  const checkedAt = Date.now()
+  return { cwd, pkgPath, workspaceRoot, generation, revision: 1, officialCheckedAt: checkedAt, customSourcesCheckedAt: 0, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
 }
 
-async function enhanceContextWithOtherSources(context: PackageContext, expectedEpoch: number) {
+function startTrackedContextEnhancements(context: PackageContext, expectedEpoch: number) {
+  const refreshKey = `custom:${context.pkgPath || context.cwd}`
+  if (sourceRefreshes.has(refreshKey))
+    return
+  sourceRefreshes.add(refreshKey)
+  startContextEnhancements(context, expectedEpoch, () => sourceRefreshes.delete(refreshKey))
+}
+
+function startContextEnhancements(context: PackageContext, expectedEpoch: number, onSettled?: () => void) {
+  const loaders = [
+    () => fetchFromLocalUris(context.workspaceRoot),
+    fetchFromRemoteUrls,
+    fetchFromRemoteNpmUrls,
+  ]
+  const sourceResults: Array<Record<string, any> | undefined> = Array.from({ length: loaders.length })
+  let publishQueue: Promise<unknown> = Promise.resolve()
+
+  let settled = 0
+  loaders.forEach((loader, index) => {
+    void Promise.resolve()
+      .then(loader)
+      .then((exports) => {
+        if (!exports)
+          return
+        sourceResults[index] = exports
+        // Serialize publications, but never source loading. Rebuild from the
+        // official baseline in fixed loader order so completion timing cannot
+        // change collision precedence.
+        publishQueue = publishQueue
+          .then(() => publishContextEnhancement(context, expectedEpoch, sourceResults))
+          .catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
+      })
+      .catch(error => logger.error(`custom source failed: ${String(error)}`))
+      .finally(() => {
+        settled++
+        if (settled === loaders.length) {
+          const current = contexts.get(context.pkgPath || context.cwd)
+          if (registryEpoch === expectedEpoch && current?.generation === context.generation && current.officialCheckedAt === context.officialCheckedAt)
+            current.customSourcesCheckedAt = Date.now()
+          onSettled?.()
+        }
+      })
+  })
+}
+
+async function publishContextEnhancement(context: PackageContext, expectedEpoch: number, sourceResults: Array<Record<string, any> | undefined>) {
   if (registryEpoch !== expectedEpoch)
     return
   const contextKey = context.pkgPath || context.cwd
-  const registered = contexts.get(contextKey)
-  const currentGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
-  if ((registered && registered !== context) || currentGeneration !== context.generation)
+  const current = contexts.get(contextKey)
+  const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
+  if (!current || current.generation !== context.generation || current.officialCheckedAt !== context.officialCheckedAt || latestGeneration !== context.generation)
     return
+
   const enhanced: PackageContext = {
     ...context,
-    revision: context.revision + 1,
+    revision: current.revision + 1,
     cacheMap: new Map(context.cacheMap),
     optionsComponents: {
       prefix: [...context.optionsComponents.prefix],
@@ -318,69 +416,45 @@ async function enhanceContextWithOtherSources(context: PackageContext, expectedE
     },
     uiCompletions: context.uiCompletions ? { ...context.uiCompletions } : null,
   }
-  const customUI: Record<string, (options?: { resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) => any> = {}
-  let completions = enhanced.uiCompletions
-  await loadOtherSources(customUI, enhanced.cacheMap, enhanced.optionsComponents, enhanced.workspaceRoot, enhanced.pkgPath, () => completions, value => completions = value)
-  const current = contexts.get(contextKey)
-  const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
-  if (registryEpoch !== expectedEpoch || (current && current !== context) || latestGeneration !== context.generation)
+
+  for (const exports of sourceResults) {
+    if (!exports)
+      continue
+    for (const key of Object.keys(exports)) {
+      try {
+        if (key.endsWith('Components')) {
+          const components = exports[key]?.()
+          if (components) {
+            enhanced.cacheMap.set(key, components)
+            mergeComponents(enhanced.optionsComponents, components, {}, [], key.slice(0, -10))
+          }
+        }
+        else {
+          const completion = await exports[key]?.({ resolveFrom: enhanced.pkgPath })
+          if (completion) {
+            enhanced.cacheMap.set(key, completion)
+            enhanced.uiCompletions ||= {} as PropsConfig
+            Object.assign(enhanced.uiCompletions, completion)
+          }
+        }
+      }
+      catch (error) {
+        logger.error(`custom source export [${key}] failed: ${String(error)}`)
+      }
+    }
+  }
+
+  const registered = contexts.get(contextKey)
+  const generation = generations.get(contextKey) ?? generations.get(context.cwd)
+  if (registryEpoch !== expectedEpoch || !registered || registered.generation !== context.generation || generation !== context.generation)
     return
-  enhanced.uiCompletions = completions
+  enhanced.revision = registered.revision + 1
+  enhanced.customSourcesCheckedAt = Date.now()
   contexts.set(contextKey, enhanced)
   applyContext(enhanced)
   notifyContextUpdated(enhanced)
   await writeLocalCache()
   return enhanced
-}
-
-async function loadOtherSources(
-  ui: Record<string, (options?: { resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) => any>,
-  targetCache: Map<string, any>,
-  targetOptions: OptionsComponents,
-  workspaceRoot: string,
-  pkgPath: string,
-  getCompletions: () => PropsConfig | null,
-  setCompletions: (value: PropsConfig) => void,
-) {
-  const loaders = [
-    () => fetchFromLocalUris(workspaceRoot),
-    fetchFromRemoteUrls,
-    fetchFromRemoteNpmUrls,
-  ]
-  for (const loader of loaders) {
-    try {
-      const exports = await loader()
-      if (!exports)
-        continue
-      Object.assign(ui, exports)
-      for (const key of Object.keys(exports)) {
-        try {
-          if (key.endsWith('Components')) {
-            const components = exports[key]?.()
-            if (components) {
-              targetCache.set(key, components)
-              mergeComponents(targetOptions, components, {}, [], key.slice(0, -10))
-            }
-          }
-          else {
-            const completion = await exports[key]?.({ resolveFrom: pkgPath })
-            if (completion) {
-              targetCache.set(key, completion)
-              const merged = getCompletions() || {} as PropsConfig
-              Object.assign(merged, completion)
-              setCompletions(merged)
-            }
-          }
-        }
-        catch (error) {
-          logger.error(`custom source export [${key}] failed: ${String(error)}`)
-        }
-      }
-    }
-    catch (error) {
-      logger.error(`custom source failed: ${String(error)}`)
-    }
-  }
 }
 
 function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string) {
@@ -616,6 +690,7 @@ export function invalidateContexts() {
   registryEpoch++
   contexts.clear()
   contextLoads.clear()
+  sourceRefreshes.clear()
   documentPackageCache.clear()
   urlCache.clear()
   cacheMap.clear()

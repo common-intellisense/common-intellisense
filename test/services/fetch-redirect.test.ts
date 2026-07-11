@@ -30,6 +30,14 @@ async function mockedRequester(uri: string) {
 describe('remote redirect validation', () => {
   beforeEach(() => vi.resetAllMocks())
 
+  it('allows an IPv6 loopback remote source', async () => {
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+    const requester = vi.fn(async () => ({ status: 200, body: 'manifest' }))
+
+    await expect(fetchRemoteText('http://[::1]/adapter', undefined, requester)).resolves.toBe('manifest')
+    expect(requester).toHaveBeenCalledWith('http://[::1]/adapter', expect.objectContaining({ address: '::1', family: 6 }), expect.objectContaining({ kind: 'localhostHttp', hostname: '::1' }))
+  })
+
   it('pins the validated address into the actual request lookup', async () => {
     const server = createServer((_request, response) => response.end('manifest'))
     server.listen(0, '127.0.0.1')

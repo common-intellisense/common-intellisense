@@ -15,6 +15,7 @@ import {
 } from '@vue-vine/compiler'
 
 import * as vscode from 'vscode'
+import { nameMap } from './constants'
 import { convertPrefixedComponentName, findPrefixedComponent, hyphenate, toCamel } from './ui/utils'
 import { logger } from './ui/ui-find'
 
@@ -118,9 +119,13 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
   const scripts = [script, scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
   const activeScript = scripts.find(block => isInPosition(block.loc, position, offset))
   if (activeScript?.lang === 'tsx') {
-    const result = parserJSX(activeScript.content, position)
-    if (result)
+    const relativeOffset = Math.max(0, Math.min(cursorOffset - activeScript.loc.start.offset, activeScript.content.length))
+    const result = parserJSX(activeScript.content, getSourcePosition(activeScript.content, relativeOffset))
+    if (result) {
       result.loc = activeScript.loc
+      result.template = template
+      result.hostFramework = 'vue'
+    }
     return result
   }
   if (activeScript) {
@@ -788,6 +793,11 @@ function getSourceOffset(code: string, position: vscode.Position) {
   return Math.min(lineStart + position.character, code.length)
 }
 
+function getSourcePosition(code: string, offset: number): vscode.Position {
+  const loc = convertCodeOffsetToLineColumn(code, offset)
+  return { line: loc.line - 1, character: loc.column - 1 } as vscode.Position
+}
+
 function convertCodeOffsetToLineColumn(code: string, offset: number) {
   const starts = getLineStarts(code)
   let low = 0
@@ -999,7 +1009,7 @@ export function registerCodeLensProviderFn() {
             const { name, description, description_zh, version } = s
             // 计算偏移量
             let codeLensRange = null
-            if (isVineDocument) {
+            if (offset) {
               const fixedStart = getPosition(range.start.offset + offset, document.getText()).position
               const fixedEnd = getPosition(range.end.offset + offset, document.getText()).position
               codeLensRange = createRange(fixedStart, fixedEnd)
@@ -1038,17 +1048,16 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
     const {
       descriptor: { template, script, scriptSetup },
     } = getVueSfcParseResult(code)
-    const _script = script || scriptSetup
-    if (!template) {
-      if (_script?.lang === 'tsx') {
-        const children = findAllJsxElements(_script.content)
-        return [{
-          children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
-          offset: _script.loc.start.offset,
-        }]
-      }
-      return []
+    const tsxScript = [scriptSetup, script].find(block => block?.lang === 'tsx')
+    if (tsxScript) {
+      const children = findAllJsxElements(tsxScript.content)
+      return [{
+        children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
+        offset: tsxScript.loc.start.offset,
+      }]
     }
+    if (!template)
+      return []
     return [{
       children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix),
       offset: 0,
@@ -1456,13 +1465,11 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
   if (!UiCompletions)
     return
 
-  let target: PropsConfigItem | null = UiCompletions[tag]
-  if (target && from && target.lib !== from) {
-    target = null
-  }
-  else if (UiCompletions[hyphenate(tag[0].toLocaleLowerCase() + tag.slice(1))]) {
-    target = UiCompletions[hyphenate(tag[0].toLocaleLowerCase() + tag.slice(1))]
-  }
+  const normalizedFrom = from ? (nameMap[from] || from) : undefined
+  const acceptsSource = (candidate: PropsConfigItem | undefined | null) => !!candidate && (!normalizedFrom || (nameMap[candidate.lib] || candidate.lib) === normalizedFrom)
+  const direct = UiCompletions[tag]
+  const hyphenated = UiCompletions[hyphenate(tag[0].toLocaleLowerCase() + tag.slice(1))]
+  let target: PropsConfigItem | null = acceptsSource(direct) ? direct : acceptsSource(hyphenated) ? hyphenated : null
 
   if (!target) {
     for (const p of prefix) {
@@ -1472,11 +1479,7 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
       // Try prefix + PascalCase: P + Button = PButton
       const prefixedPascalCase = p[0].toUpperCase() + p.slice(1) + tag
       const t1 = UiCompletions[prefixedPascalCase]
-      if (from && t1 && t1.lib === from) {
-        target = t1
-        break
-      }
-      else if (!from && t1) {
+      if (acceptsSource(t1)) {
         target = t1
         break
       }
@@ -1488,11 +1491,7 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
         const standardName = convertPrefixedComponentName(kebabWithPrefix, p)
         if (standardName) {
           const t2 = UiCompletions[standardName]
-          if (from && t2 && t2.lib === from) {
-            target = t2
-            break
-          }
-          else if (!from && t2) {
+          if (acceptsSource(t2)) {
             target = t2
             break
           }
@@ -1512,8 +1511,9 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
         continue
       // prefer matches with same lib when `from` specified
       const candidate = UiCompletions[key]
-      if (from && candidate && candidate.lib === from) {
-        // immediate winner
+      if (!acceptsSource(candidate))
+        continue
+      if (normalizedFrom) {
         target = candidate
         break
       }

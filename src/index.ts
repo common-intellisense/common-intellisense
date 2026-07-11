@@ -4,12 +4,12 @@ import { createFilter } from '@rollup/pluginutils'
 import { addEventListener, createCompletionItem, createHover, createMarkdownString, createSelect, getConfiguration, getLocale, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
-import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri } from './services/fetch'
+import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri, normalizeHostname } from './services/fetch'
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
 import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
-import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui/ui-utils'
+import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getUiImportedName } from './ui/ui-utils'
 import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
@@ -22,13 +22,24 @@ interface DocumentAnalysisCacheEntry {
 }
 const documentAnalysisCache = new Map<string, DocumentAnalysisCacheEntry>()
 const maxDocumentAnalysisEntries = 10
+let excludeFilter = createFilter([])
+
+function refreshExcludeFilter() {
+  excludeFilter = createFilter(getConfiguration('common-intellisense.exclude') || [])
+}
+
+export function normalizeScopedSource(from: string | undefined, alias: Record<string, string>): string | undefined {
+  if (!from)
+    return
+  const packageName = from.startsWith('@') ? from.split('/').slice(0, 2).join('/') : from.split('/')[0]
+  const configured = alias[from] || alias[packageName] || nameMap[from] || nameMap[packageName] || packageName
+  return configured.replace(/\d+$/, '')
+}
 
 export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>): PropsConfig {
   if (!from || cacheMap.size <= 2)
     return current
-  let fixedFrom = nameMap[from] || from
-  if (fixedFrom in alias)
-    fixedFrom = alias[fixedFrom].replace(/\d+$/, '')
+  const fixedFrom = normalizeScopedSource(from, alias) || from
   const adapterName = toCamel(fixedFrom)
   const targetKey = Array.from(cacheMap.keys()).find(key => typeof key === 'string' && key.startsWith(adapterName) && /^\d+$/.test(key.slice(adapterName.length)))
   const targetValue = targetKey ? cacheMap.get(targetKey) : undefined
@@ -42,6 +53,16 @@ export function getRefMembers(completions: PropsConfig, refName: string | undefi
   if (!component)
     return
   return [...(component.methods || []), ...(component.exposed || [])]
+}
+
+export async function resolveRefMembers(localName: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[]) {
+  if (!localName)
+    return
+  const source = uiDeps[localName]
+  const importedName = getUiImportedName(uiDeps, localName)
+  const scoped = source ? selectScopedCompletions(completions, cacheMap, source, alias) : completions
+  const component = await findDynamicComponent(importedName, {}, scoped, prefixes, normalizeScopedSource(source, alias))
+  return component ? [...(component.methods || []), ...(component.exposed || [])] : undefined
 }
 
 export function getDocumentAnalysis(document: vscode.TextDocument) {
@@ -78,7 +99,7 @@ export function clearLocalDocumentAnalysis(uri: string | vscode.Uri) {
 }
 
 function isExcluded(filePath: string) {
-  return createFilter(getConfiguration('common-intellisense.exclude') || [])(filePath)
+  return excludeFilter(filePath)
 }
 
 function isSkip(document?: vscode.TextDocument) {
@@ -113,6 +134,7 @@ function getCompletionRenderContext(document: vscode.TextDocument): CompletionRe
 // todo: 补充类型
 // todo: 补充example
 export async function activate(context: vscode.ExtensionContext) {
+  refreshExcludeFilter()
   configureCacheStorage(context.globalStorageUri)
   // todo: createWebviewPanel
   // createWebviewPanel(context)
@@ -157,11 +179,13 @@ export async function activate(context: vscode.ExtensionContext) {
     const code = document.getText()
     await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, identity)
   }
-  const rebuildVisibleDocumentContexts = async () => {
+  const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
     await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
       if (isSkip(document))
         return
-      const packageContext = await ensureDocumentContext(document)
+      const packageContext = existingOnly
+        ? getContextForDocumentPath(getDocumentPath(document))
+        : await ensureDocumentContext(document)
       await analyzeDocumentSlots(document, packageContext)
     }))
   }
@@ -272,10 +296,22 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(addEventListener('config-change', (e) => {
-    const keys = ['ui', 'prefix', 'alias', 'exclude', 'remoteUris', 'remoteNpmUris', 'localUris', 'trustedHosts', 'allowLegacyAdapters', 'showSlots', 'translate']
-    if (!keys.some(key => e.affectsConfiguration(`common-intellisense.${key}`)))
+    const affects = (key: string) => e.affectsConfiguration(`common-intellisense.${key}`)
+    if (affects('exclude'))
+      refreshExcludeFilter()
+
+    if (affects('showSlots')) {
+      clearDocumentAnalysis()
+      void rebuildVisibleDocumentContexts(true).catch(error => logger.error(`Failed to refresh slots after configuration change: ${String(error)}`))
+    }
+
+    const rebuildContexts = ['ui', 'prefix', 'alias', 'translate'].some(affects)
+    const rebuildSources = ['remoteUris', 'remoteNpmUris', 'localUris', 'trustedHosts', 'allowLegacyAdapters'].some(affects)
+    if (!rebuildContexts && !rebuildSources)
       return
-    clearFetchCaches()
+
+    if (rebuildSources)
+      clearFetchCaches()
     invalidateContexts()
     clearDocumentAnalysis()
     documentAnalysisCache.clear()
@@ -344,14 +380,14 @@ export async function activate(context: vscode.ExtensionContext) {
     if (lastChild) {
       if (isVineDocument && lastChild.codegenNode)
         lastChild = lastChild.codegenNode
-      const at = lastChild.loc.end.offset + (isVineDocument ? offset : 0)
+      const at = lastChild.loc.end.offset + offset
       insertAt(at, `
 <template ${slotName}></template>`)
     }
     else {
       const empty = ' '.repeat(Math.max(child.loc.start.column - 1, 0))
       if (child.isSelfClosing) {
-        const end = child.loc.end.offset + (isVineDocument ? offset : 0)
+        const end = child.loc.end.offset + offset
         replaceAt(Math.max(0, end - 2), end, `>
   <template ${slotName}></template>
 </${child.tag}>`)
@@ -360,7 +396,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const sameLine = child.loc.start.line === child.loc.end.line
         const at = child.loc.start.offset + child.loc.source.indexOf(`</${child.tag}`)
           - (sameLine ? 0 : (child.loc.end.column - `</${child.tag}>`.length - 1))
-          + (isVineDocument ? offset : 0)
+          + offset
         insertAt(at, `${sameLine ? '\n' : empty}  <template ${slotName}></template>
 `)
       }
@@ -422,7 +458,7 @@ export async function activate(context: vscode.ExtensionContext) {
       return
 
     const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
-    const isVue = (document.languageId === 'vue' && result.template) || isVineDocument
+    const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
     const renderContext = getCompletionRenderContext(document)
     const analysis = getDocumentAnalysis(document)
     const deps = isVue ? analysis.getImportDeps() : {}
@@ -435,10 +471,10 @@ export async function activate(context: vscode.ExtensionContext) {
       if (lineText?.slice(-1)[0] === '.') {
         for (const key in result.refsMap) {
           const value = result.refsMap[key]
-          if (isVue && (lineText.endsWith(`.$refs.${key}.`) || lineText.endsWith(`${key}.value.`)) && UiCompletions[value])
-            return [...UiCompletions[value].methods, ...UiCompletions[value].exposed]
-          else if (!isVue && lineText.endsWith(`${key}.current.`) && UiCompletions[value])
-            return [...UiCompletions[value].methods, ...UiCompletions[value].exposed]
+          if (isVue && (lineText.endsWith(`.$refs.${key}.`) || lineText.endsWith(`${key}.value.`)))
+            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix)
+          else if (!isVue && lineText.endsWith(`${key}.current.`))
+            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix)
         }
       }
       if (isVue && lineText.slice(character, character + 6) !== '.value' && /\.value\.?$/.test(lineText.slice(0, character)))
@@ -456,22 +492,32 @@ export async function activate(context: vscode.ExtensionContext) {
     ) {
       const parentTag = result.parent?.tag || result.parent?.name || result.parentTag
       if (parentTag) {
-        let matchedComponent = findPrefixedComponent(parentTag, componentsPrefix, UiCompletions)
-        if (!matchedComponent) {
-          matchedComponent = UiCompletions[fixedTagName(parentTag)]
-        }
+        const localName = fixedTagName(parentTag)
+        const source = uiDeps?.[localName]
+        const importedName = getUiImportedName(uiDeps, localName)
+        const scoped = source
+          ? selectScopedCompletions(UiCompletions, packageContext.cacheMap, source, alias)
+          : UiCompletions
+        const matchedComponent = await findDynamicComponent(importedName, {}, scoped, componentsPrefix, normalizeScopedSource(source, alias))
         const slots = matchedComponent?.slots
         if (slots)
           return slots
+        if (source)
+          return
       }
     }
 
-    let matchedComponent = result.tag ? findPrefixedComponent(result.tag, componentsPrefix, UiCompletions) : null
-    if (result.tag && !matchedComponent)
-      matchedComponent = UiCompletions[fixedTagName(result.tag)]
-    const matchedSource = result.tag ? uiDeps?.[fixedTagName(result.tag)] : undefined
-    if (matchedComponent && matchedSource && matchedComponent.lib !== matchedSource)
-      matchedComponent = await findDynamicComponent(fixedTagName(result.tag), {}, UiCompletions, componentsPrefix, matchedSource)
+    const localComponentName = result.tag ? fixedTagName(result.tag) : undefined
+    const componentName = localComponentName ? getUiImportedName(uiDeps, localComponentName) : undefined
+    const matchedSource = localComponentName ? uiDeps?.[localComponentName] : undefined
+    const normalizedSource = normalizeScopedSource(matchedSource, alias)
+    if (matchedSource)
+      UiCompletions = selectScopedCompletions(UiCompletions, packageContext.cacheMap, matchedSource, alias)
+    let matchedComponent = normalizedSource && componentName
+      ? await findDynamicComponent(componentName, {}, UiCompletions, componentsPrefix, normalizedSource)
+      : result.tag ? findPrefixedComponent(result.tag, componentsPrefix, UiCompletions) : null
+    if (componentName && !matchedComponent && !matchedSource)
+      matchedComponent = UiCompletions[componentName] || await findDynamicComponent(componentName, {}, UiCompletions, componentsPrefix)
     if (matchedComponent) {
       if (result.propName === 'icon')
         return matchedComponent.icons
@@ -495,30 +541,10 @@ export async function activate(context: vscode.ExtensionContext) {
       const propName = result.propName
       const from = uiDeps?.[name]
       const cacheMap = packageContext.cacheMap
-      if (from && cacheMap.size > 2) {
-        // 存在多个 UI 库
-        let fixedFrom = nameMap[from] || from
-        if (fixedFrom in alias) {
-          const v = alias[fixedFrom]
-          fixedFrom = v.replace(/\d+$/, '')
-        }
-
-        UiCompletions = selectScopedCompletions(UiCompletions, cacheMap, fixedFrom, {})
-      }
-      let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, from, getDocumentPath(document))
-      const importUiSource = uiDeps?.[name]
-      if (importUiSource && (!target || target.uiName !== importUiSource)) {
-        for (const p of optionsComponents.prefix.filter(Boolean)) {
-          const realName = p[0].toUpperCase() + p.slice(1) + name
-          const newTarget = UiCompletions[realName]
-          if (!newTarget)
-            continue
-          if (newTarget.uiName === importUiSource) {
-            target = newTarget
-            break
-          }
-        }
-      }
+      if (from)
+        UiCompletions = selectScopedCompletions(UiCompletions, cacheMap, from, alias)
+      const normalizedFrom = normalizeScopedSource(from, alias)
+      const target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, normalizedFrom, getDocumentPath(document))
 
       if (!target) {
         if (result.isEvent && propName !== 'on') {
@@ -774,15 +800,20 @@ export async function activate(context: vscode.ExtensionContext) {
         if (result.type === 'tag') {
           if (!word)
             return createHover('')
-          const tag = fixedTagName(result.tag)
-          const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
+          const localTag = fixedTagName(result.tag)
+          const source = uiDeps?.[localTag]
+          const tag = getUiImportedName(uiDeps, localTag)
+          const scoped = source ? selectScopedCompletions(UiCompletions, packageContext.cacheMap, source, alias) : UiCompletions
+          const target = await findDynamicComponent(tag, {}, scoped, componentsPrefix, normalizeScopedSource(source, alias))
           if (target?.tableDocument)
             return createHover(target.tableDocument)
+          if (source)
+            return
 
           const fixedWord = fixedTagName(word)
           const direct = UiCompletions[fixedWord]
             || findPrefixedComponent(fixedWord, componentsPrefix, UiCompletions)
-            || await findDynamicComponent(fixedWord, {}, UiCompletions, componentsPrefix, uiDeps?.[fixedWord])
+            || await findDynamicComponent(fixedWord, {}, UiCompletions, componentsPrefix, normalizeScopedSource(uiDeps?.[fixedWord], alias))
           if (direct?.tableDocument)
             return createHover(direct.tableDocument)
         }
@@ -791,26 +822,19 @@ export async function activate(context: vscode.ExtensionContext) {
           if (!parentTag)
             return
 
-          const name = fixedTagName(parentTag)
+          const localName = fixedTagName(parentTag)
+          const name = getUiImportedName(uiDeps, localName)
           const slotName = result.props.find((item: any) => item.name === 'slot')?.arg?.content
 
           if (!slotName)
             return
 
-          const from = uiDeps?.[name]
+          const from = uiDeps?.[localName]
           const cacheMap = packageContext.cacheMap
 
-          if (from && cacheMap.size > 2) {
-            // 存在多个 UI 库
-            let fixedFrom = nameMap[from] || from
-            if (fixedFrom in alias) {
-              const v = alias[fixedFrom]
-              fixedFrom = v.replace(/\d+$/, '')
-            }
-
-            UiCompletions = selectScopedCompletions(UiCompletions, cacheMap, fixedFrom, {})
-          }
-          const target = await findDynamicComponent(name, {}, UiCompletions, componentsPrefix, from)
+          if (from)
+            UiCompletions = selectScopedCompletions(UiCompletions, cacheMap, from, alias)
+          const target = await findDynamicComponent(name, {}, UiCompletions, componentsPrefix, normalizeScopedSource(from, alias))
           if (!target)
             return
           const targetSlot = target.rawSlots?.find(s => s.name === slotName)
@@ -838,8 +862,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
-        const tag = fixedTagName(result.tag)
-        const r = UiCompletions[tag] || await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
+        const localTag = fixedTagName(result.tag)
+        const source = uiDeps?.[localTag]
+        const tag = getUiImportedName(uiDeps, localTag)
+        const scoped = source ? selectScopedCompletions(UiCompletions, packageContext.cacheMap, source, alias) : UiCompletions
+        const direct = scoped[tag]
+        const r = direct && (!source || normalizeScopedSource(direct.lib, {}) === normalizeScopedSource(source, alias))
+          ? direct
+          : await findDynamicComponent(tag, {}, scoped, componentsPrefix, normalizeScopedSource(source, alias))
         if (!r)
           return
         const completions = result.isEvent ? r.events[0]?.(renderContext) : r.completions[0]?.(renderContext)
@@ -862,7 +892,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = refsMap[key]
-            const refMembers = getRefMembers(UiCompletions, refName)
+            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix)
             if (!refMembers)
               return
 
@@ -900,7 +930,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = r.refsMap[key]
-            const refMembers = getRefMembers(UiCompletions, refName)
+            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix)
             if (!refMembers)
               return
             if (lineText.slice(range.start.character, range.end.character) === 'value') {
@@ -936,7 +966,7 @@ export async function activate(context: vscode.ExtensionContext) {
           const index = word.indexOf('.current.')
           const key = word.slice(0, index)
           const refName = r.refsMap?.[key]
-          const refMembers = getRefMembers(UiCompletions, refName)
+          const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix)
           if (!refMembers)
             return
 
@@ -963,14 +993,20 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
 
+      const explicitSource = uiDeps?.[word]
+      if (explicitSource) {
+        const importedName = getUiImportedName(uiDeps, word)
+        const scoped = selectScopedCompletions(UiCompletions, packageContext.cacheMap, explicitSource, alias)
+        const target = await findDynamicComponent(importedName, {}, scoped, optionsComponents.prefix, normalizeScopedSource(explicitSource, alias))
+        return target?.tableDocument ? createHover(target.tableDocument) : undefined
+      }
+
       const matchedComponent = findPrefixedComponent(word, componentsPrefix, UiCompletions)
-      if (matchedComponent && matchedComponent.tableDocument) {
+      if (matchedComponent?.tableDocument)
         return createHover(matchedComponent.tableDocument)
-      }
-      if (UiCompletions[word] && UiCompletions[word].tableDocument) {
+      if (UiCompletions[word]?.tableDocument)
         return createHover(UiCompletions[word].tableDocument)
-      }
-      const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix, uiDeps?.[word])
+      const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix)
       if (target?.tableDocument)
         return createHover(target.tableDocument)
 
@@ -978,7 +1014,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const parsed = getParsedResult()
         if (parsed?.type === 'tag' && parsed.tag) {
           const tag = fixedTagName(parsed.tag)
-          const fallbackTarget = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
+          const fallbackTarget = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, normalizeScopedSource(uiDeps?.[tag], alias))
           if (fallbackTarget?.tableDocument)
             return createHover(fallbackTarget.tableDocument)
         }
@@ -1008,7 +1044,7 @@ function getTrustedDocumentationUrl(value: unknown) {
     const url = new URL(value)
     if (url.protocol === 'https:')
       return url.toString()
-    if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(url.hostname))
+    if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(normalizeHostname(url.hostname)))
       return url.toString()
   }
   catch {}
