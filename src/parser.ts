@@ -785,7 +785,7 @@ export function refreshCodeLenses() {
 export function clearDocumentAnalysis(uri?: string | vscode.Uri) {
   if (uri) {
     const key = typeof uri === 'string' ? uri : uri.toString()
-    latestSlotRequests.set(key, ++slotRequestSequence)
+    latestSlotRequests.delete(key)
     const deleted = documentSlotAnalyses.delete(key)
     if (deleted)
       refreshCodeLenses()

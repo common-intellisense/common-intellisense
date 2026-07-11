@@ -123,7 +123,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
     documentPackageCache.set(cwd, context.pkgPath)
     applyContext(context)
     notifyContextUpdated(context)
-    void enhanceContextWithOtherSources(context).catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
+    void enhanceContextWithOtherSources(context, epoch).catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
     return context
   }
   finally {
@@ -148,6 +148,7 @@ async function buildContext(cwd: string, extensionContext: vscode.ExtensionConte
   const onChange = () => {
     invalidatePackageContext(cwd)
     void ensureContextForPath(cwd, extensionContext, detectSlots, false, workspaceRoot)
+      .catch(error => logger.error(`Failed to rebuild package context: ${String(error)}`))
   }
   const discovered = urlCache.get(cwd) || await findPkgUI(cwd, onChange, workspaceRoot)
   if (!discovered)
@@ -181,7 +182,7 @@ export async function updateCompletions(uis: Uis, options: UpdateCompletionsOpti
   contexts.set(context.pkgPath || cwd, context)
   applyContext(context)
   notifyContextUpdated(context)
-  return await enhanceContextWithOtherSources(context) || context
+  return await enhanceContextWithOtherSources(context, registryEpoch) || context
 }
 
 async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd: string, generation: number): Promise<PackageContext> {
@@ -199,7 +200,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   for (const [declaredName, version] of uis) {
     let uiName = declaredName
     let major = extractMajor(version) || '0'
-    let installedVersion = version
+    let installedVersion = semver.valid(version) || undefined
     if (uiName in alias) {
       const parsedAlias = parseAlias(alias[uiName])
       uiName = parsedAlias.name || uiName
@@ -259,7 +260,9 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   return { cwd, pkgPath, workspaceRoot, generation, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
 }
 
-async function enhanceContextWithOtherSources(context: PackageContext) {
+async function enhanceContextWithOtherSources(context: PackageContext, expectedEpoch: number) {
+  if (registryEpoch !== expectedEpoch)
+    return
   const contextKey = context.pkgPath || context.cwd
   const registered = contexts.get(contextKey)
   const currentGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
@@ -281,7 +284,7 @@ async function enhanceContextWithOtherSources(context: PackageContext) {
   await loadOtherSources(customUI, enhanced.cacheMap, enhanced.optionsComponents, enhanced.workspaceRoot, enhanced.pkgPath, () => completions, value => completions = value)
   const current = contexts.get(contextKey)
   const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
-  if ((current && current !== context) || latestGeneration !== context.generation)
+  if (registryEpoch !== expectedEpoch || (current && current !== context) || latestGeneration !== context.generation)
     return
   enhanced.uiCompletions = completions
   contexts.set(contextKey, enhanced)

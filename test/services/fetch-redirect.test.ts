@@ -5,7 +5,23 @@ vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsRe
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: vi.fn(), error: vi.fn() } }))
 
 describe('remote redirect validation', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => vi.resetAllMocks())
+
+  it('rejects a private initial HTTPS target before issuing a request', async () => {
+    const ofetchMod = await import('ofetch')
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+
+    await expect(fetchRemoteText('https://169.254.169.254/metadata')).rejects.toThrow('not a trusted public target')
+    expect(vi.mocked(ofetchMod.ofetch)).not.toHaveBeenCalled()
+  })
+
+  it('rejects an initial hostname resolving to a private address before issuing a request', async () => {
+    const ofetchMod = await import('ofetch')
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+
+    await expect(fetchRemoteText('https://internal.example/adapter', async () => [{ address: '169.254.169.254', family: 4 }])).rejects.toThrow('not a trusted public target')
+    expect(vi.mocked(ofetchMod.ofetch)).not.toHaveBeenCalled()
+  })
 
   it('rejects redirects to loopback before issuing the second request', async () => {
     const ofetchMod = await import('ofetch')
@@ -15,7 +31,7 @@ describe('remote redirect validation', () => {
     })
     const { fetchRemoteText } = await import('../../src/services/fetch')
 
-    await expect(fetchRemoteText('https://public.example/adapter')).rejects.toThrow('untrusted URL')
+    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }])).rejects.toThrow('untrusted URL')
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
   })
 
@@ -27,7 +43,10 @@ describe('remote redirect validation', () => {
     })
     const { fetchRemoteText } = await import('../../src/services/fetch')
 
-    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '169.254.169.254', family: 4 }])).rejects.toThrow('untrusted URL')
+    const resolveHost = vi.fn()
+      .mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }])
+      .mockResolvedValueOnce([{ address: '169.254.169.254', family: 4 }])
+    await expect(fetchRemoteText('https://public.example/adapter', resolveHost)).rejects.toThrow('untrusted URL')
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
   })
 

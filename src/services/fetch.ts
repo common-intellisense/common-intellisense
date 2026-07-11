@@ -158,6 +158,11 @@ async function validateRedirectTarget(uri: string, resolveHost: ResolveHost) {
   }
 }
 
+function isExplicitlyTrustedHost(hostname: string) {
+  const trustedHosts = getConfiguration('common-intellisense.trustedHosts') as string[] | undefined
+  return Array.isArray(trustedHosts) && trustedHosts.includes(hostname)
+}
+
 function isTrustedRemoteUri(uri: string) {
   try {
     const target = new URL(uri)
@@ -169,8 +174,7 @@ function isTrustedRemoteUri(uri: string) {
     if (['localhost', '127.0.0.1', '::1'].includes(target.hostname))
       return true
 
-    const trustedHosts = getConfiguration('common-intellisense.trustedHosts') as string[] | undefined
-    return Array.isArray(trustedHosts) && trustedHosts.includes(target.hostname)
+    return isExplicitlyTrustedHost(target.hostname)
   }
   catch {
     return false
@@ -542,6 +546,10 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
 const maxRemoteRedirects = 5
 
 export async function fetchRemoteText(uri: string, resolveHost: ResolveHost = hostname => dns.lookup(hostname, { all: true, verbatim: true })) {
+  const initial = new URL(uri)
+  const isLocalHttp = initial.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(initial.hostname)
+  if (!isLocalHttp && !isExplicitlyTrustedHost(initial.hostname) && !await validateRedirectTarget(uri, resolveHost))
+    throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
   let current = uri
   for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
     let status = 0

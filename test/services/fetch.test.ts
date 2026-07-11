@@ -18,6 +18,8 @@ vi.mock('@vscode-use/utils', () => ({
       return []
     if (k === 'common-intellisense.allowLegacyAdapters')
       return true
+    if (k === 'common-intellisense.trustedHosts')
+      return ['fake']
     if (k === 'common-intellisense.remoteNpmUris')
       return []
     return undefined

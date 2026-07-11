@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let remoteUris: string[] = ['https://fake/remote.js']
 let remoteNpmUris: ({ name: string, resource?: string } | string)[] = [{ name: '@common-intellisense/button', resource: undefined }]
-let trustedHosts: string[] = []
+let trustedHosts: string[] = ['fake']
 let allowLegacyAdapters = true
 const fetchFromTypesMock = vi.fn()
 
@@ -44,7 +44,7 @@ describe('fetch service additional tests (mocked)', () => {
     vi.clearAllMocks()
     remoteUris = ['https://fake/remote.js']
     remoteNpmUris = [{ name: '@common-intellisense/button', resource: undefined }]
-    trustedHosts = []
+    trustedHosts = ['fake']
     allowLegacyAdapters = true
     fetchFromTypesMock.mockReset()
   })

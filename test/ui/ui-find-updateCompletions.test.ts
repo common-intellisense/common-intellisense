@@ -84,6 +84,23 @@ describe('ui-find updateCompletions', () => {
     )
   })
 
+  it('treats a declared-major fallback as adapterMajor, not an exact installed version', async () => {
+    const mod = await import('../../src/ui/ui-find')
+    await mod.updateCompletions([['element-plus', '2']] as any, {
+      selectedUIs: [],
+      alias: {},
+      detectSlots: () => {},
+      prefix: {},
+      pkgPath: '/repo/packages/a/package.json',
+      workspaceRoot: '/repo',
+    })
+
+    expect(fetchFromCommonIntellisense).toHaveBeenCalledWith(
+      'element-plus2',
+      expect.objectContaining({ pkgName: 'element-plus', installedVersion: undefined, adapterMajor: '2' }),
+    )
+  })
+
   it('uses the workspace root rather than the nested package root for local adapters', async () => {
     const mod = await import('../../src/ui/ui-find')
     await mod.updateCompletions([], {

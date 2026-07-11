@@ -222,7 +222,7 @@ export async function activate(context: vscode.ExtensionContext) {
     documentAnalysisCache.clear()
     const editor = vscode.window.activeTextEditor
     if (editor && !isSkip(editor.document))
-      void ensureDocumentContext(editor.document)
+      void ensureDocumentContext(editor.document).catch(error => logger.error(`Failed to reload context after configuration change: ${String(error)}`))
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.import', async (params, _loc, _lineOffset) => {
@@ -321,17 +321,20 @@ export async function activate(context: vscode.ExtensionContext) {
     const previous = slotTimers.get(key)
     if (previous)
       clearTimeout(previous)
-    slotTimers.set(key, setTimeout(async () => {
+    slotTimers.set(key, setTimeout(() => {
       slotTimers.delete(key)
-      if (document.isClosed)
-        return
-      const packageContext = await ensureDocumentContext(document)
-      if (document.isClosed || !packageContext?.uiCompletions)
-        return
-      const code = document.getText()
-      if (document.isClosed)
-        return
-      await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation })
+      const analyze = async () => {
+        if (document.isClosed)
+          return
+        const packageContext = await ensureDocumentContext(document)
+        if (document.isClosed || !packageContext?.uiCompletions)
+          return
+        const code = document.getText()
+        if (document.isClosed)
+          return
+        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation })
+      }
+      void analyze().catch(error => logger.error(`Slot analysis failed: ${String(error)}`))
     }, 200))
   }))
 

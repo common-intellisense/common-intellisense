@@ -116,6 +116,27 @@ describe('package context generations', () => {
     expect(remoteFetchMock).toHaveBeenCalled()
   })
 
+  it('does not republish stale custom enhancement after global invalidation', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    let resolveRemote!: (value: any) => void
+    remoteFetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRemote = resolve }))
+      .mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidateContexts()
+    resolveRemote({ StaleProps: () => ({ stale: true }) })
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('discovers a nested package instead of reusing a loaded parent context', async () => {
     findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/nested/')
       ? '/workspace/nested/package.json'
