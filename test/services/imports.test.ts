@@ -53,6 +53,15 @@ describe('import transforms', () => {
     expect(output).toContain(`'use client'\nimport { Existing } from "other"\nimport { Button } from "ui"\n`)
   })
 
+  it('skips names occupied by other imports or top-level declarations', () => {
+    const code = `import { Button } from "other-ui"\nconst Card = {}\nfunction Dialog() {}\nclass Table {}\n`
+    expect(createImportEdits(code, 'ui', ['Button', 'Card', 'Dialog', 'Table'])).toEqual([])
+
+    const mixed = createImportEdits(code, 'ui', ['Button', 'Input'])
+    expect(applyEdits(code, mixed)).toContain('import { Input } from "ui"')
+    expect(applyEdits(code, mixed)).not.toContain('import { Button, Input } from "ui"')
+  })
+
   it('inserts into Vue script setup and creates one when absent', () => {
     const vue = `<template><Button /></template>\n<script setup lang="ts">\nconst x = 1\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))

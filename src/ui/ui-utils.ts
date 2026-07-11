@@ -20,34 +20,54 @@ export interface UIconfig {
  * @description 获取是否显示插槽配置
  */
 export const getIsShowSlots = () => getConfiguration('common-intellisense.showSlots')
-/**
- * @description 获取组件别名配置，支持按 package.json 路径区分的配置映射
- * 如果用户配置为对象映射 { [pkgPath]: aliasMap }，则优先返回对应 pkgPath 的值，
- * 否则回退到老的直接返回值（兼容旧配置）
- */
-export function getAlias(pkgPath?: string) {
-  const raw = getConfiguration('common-intellisense.alias') as any
-  if (pkgPath && raw && typeof raw === 'object' && !Array.isArray(raw) && raw[pkgPath])
-    return raw[pkgPath] as Record<string, string>
-  return raw as Record<string, string>
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
-/**
- * @description 获取组件前缀配置，支持按 package.json 路径区分的配置映射
- */
-export function getPrefix(pkgPath?: string) {
-  const raw = getConfiguration('common-intellisense.prefix') as any
-  if (pkgPath && raw && typeof raw === 'object' && !Array.isArray(raw) && raw[pkgPath])
-    return raw[pkgPath] as Record<string, string>
-  return raw as Record<string, string>
+
+export function normalizePackageRecordConfiguration(raw: unknown, pkgPath?: string): Record<string, string> {
+  if (!isRecord(raw))
+    return {}
+
+  if (pkgPath && Object.prototype.hasOwnProperty.call(raw, pkgPath)) {
+    const scoped = raw[pkgPath]
+    if (isRecord(scoped))
+      return Object.fromEntries(Object.entries(scoped).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    return {}
+  }
+
+  // A record-valued entry identifies the package-scoped shape. Never leak that
+  // outer package-path mapping to callers expecting an alias/prefix map.
+  if (Object.values(raw).some(isRecord))
+    return {}
+
+  return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
-/**
- * @description 获取运行组件配置，支持按 package.json 路径区分的配置映射
- */
-export function getSelectedUIs(pkgPath?: string) {
-  const raw = getConfiguration('common-intellisense.ui') as any
-  if (pkgPath && raw && typeof raw === 'object' && !Array.isArray(raw) && raw[pkgPath])
-    return raw[pkgPath] as string[]
-  return raw as string[]
+
+/** @description 获取组件别名配置，支持按 package.json 路径区分的配置映射 */
+export function getAlias(pkgPath?: string): Record<string, string> {
+  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.alias'), pkgPath)
+}
+
+/** @description 获取组件前缀配置，支持按 package.json 路径区分的配置映射 */
+export function getPrefix(pkgPath?: string): Record<string, string> {
+  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.prefix'), pkgPath)
+}
+
+/** @description 获取运行组件配置，支持按 package.json 路径区分的配置映射 */
+export function normalizeSelectedUIs(raw: unknown, pkgPath?: string): string[] {
+  if (Array.isArray(raw))
+    return raw.filter((value): value is string => typeof value === 'string')
+  if (pkgPath && isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, pkgPath)) {
+    const scoped = raw[pkgPath]
+    return Array.isArray(scoped)
+      ? scoped.filter((value): value is string => typeof value === 'string')
+      : ['auto']
+  }
+  return ['auto']
+}
+
+export function getSelectedUIs(pkgPath?: string): string[] {
+  return normalizeSelectedUIs(getConfiguration('common-intellisense.ui'), pkgPath)
 }
 
 const UIIMPORT_REG = /import\s+\{([^}]+)\}\s+from\s+['"]([^"']+)['"]/g

@@ -25,10 +25,12 @@ const maxCacheSize = 16 * 1024 * 1024
 export let localCacheUri = path.join(os.tmpdir(), 'common-intellisense', 'mapping.json')
 let cacheReadTask: Promise<string> | null = null
 let cacheWriteTask: Promise<void> = Promise.resolve()
+let cacheWriteEpoch = 0
 
 export function configureCacheStorage(storageUri: vscode.Uri | string) {
   const storagePath = typeof storageUri === 'string' ? storageUri : storageUri.fsPath
   localCacheUri = path.join(storagePath, 'mapping.json')
+  cacheWriteEpoch++
   cacheReadTask = null
 }
 
@@ -343,8 +345,15 @@ export const getLocalCache: PromiseLike<string> = {
   },
 }
 
+export function awaitCacheWrites() {
+  return cacheWriteTask
+}
+
 export function writeLocalCache() {
+  const epoch = cacheWriteEpoch
   cacheWriteTask = cacheWriteTask.then(async () => {
+    if (epoch !== cacheWriteEpoch)
+      return
     const payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: Array.from(cacheFetch.entries()) })
     if (Buffer.byteLength(payload) > maxCacheSize)
       throw new Error(`Cache payload exceeds ${maxCacheSize} bytes`)
@@ -352,6 +361,8 @@ export function writeLocalCache() {
     const temporary = `${localCacheUri}.${process.pid}.${Date.now()}.tmp`
     try {
       await fsp.writeFile(temporary, payload, 'utf8')
+      if (epoch !== cacheWriteEpoch)
+        return
       await fsp.rename(temporary, localCacheUri)
     }
     finally {
@@ -855,6 +866,7 @@ async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspa
 
 export function clearFetchCaches() {
   sourceEpoch++
+  cacheWriteEpoch++
   cacheFetch.clear()
   commonIntellisenseInFlight.clear()
   latestVersionCache.clear()

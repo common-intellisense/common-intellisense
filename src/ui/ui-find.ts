@@ -19,6 +19,7 @@ export interface PackageContext {
   pkgPath: string
   workspaceRoot: string
   generation: number
+  revision: number
   uiNames: string[]
   currentPkgUiNames: string[]
   optionsComponents: OptionsComponents
@@ -257,7 +258,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
 
   await writeLocalCache()
 
-  return { cwd, pkgPath, workspaceRoot, generation, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
+  return { cwd, pkgPath, workspaceRoot, generation, revision: 1, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache }
 }
 
 async function enhanceContextWithOtherSources(context: PackageContext, expectedEpoch: number) {
@@ -270,6 +271,7 @@ async function enhanceContextWithOtherSources(context: PackageContext, expectedE
     return
   const enhanced: PackageContext = {
     ...context,
+    revision: context.revision + 1,
     cacheMap: new Map(context.cacheMap),
     optionsComponents: {
       prefix: [...context.optionsComponents.prefix],

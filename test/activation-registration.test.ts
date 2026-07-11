@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     ensureContext: vi.fn(),
     detectSlots: vi.fn(),
     clearDocumentAnalysis: vi.fn(),
+    getSlotAnalysis: vi.fn(),
     resolvePackagePath: vi.fn(),
     contextUpdatedListener: undefined as undefined | ((context: any) => void),
     textChangeListener: undefined as undefined | ((event: any) => void),
@@ -51,7 +52,7 @@ vi.mock('../src/ui/ui-find', () => ({
 vi.mock('../src/parser', () => ({
   clearDocumentAnalysis: mocks.clearDocumentAnalysis,
   detectSlots: mocks.detectSlots,
-  getDocumentSlotAnalysis: vi.fn(),
+  getDocumentSlotAnalysis: mocks.getSlotAnalysis,
   findDynamicComponent: vi.fn(),
   getImportDeps: vi.fn(() => ({})),
   parser: vi.fn(),
@@ -113,6 +114,7 @@ describe('activation registration', () => {
     mocks.ensureContext.mockClear()
     mocks.detectSlots.mockClear()
     mocks.clearDocumentAnalysis.mockClear()
+    mocks.getSlotAnalysis.mockReset()
     mocks.resolvePackagePath.mockReset()
     mocks.contextUpdatedListener = undefined
     mocks.textChangeListener = undefined
@@ -139,11 +141,42 @@ describe('activation registration', () => {
     mocks.contextUpdatedListener?.({
       pkgPath: '/workspace/package.json',
       generation: 1,
+      revision: 1,
       uiCompletions: {},
       optionsComponents: { prefix: [] },
     })
     await vi.waitFor(() => expect(mocks.resolvePackagePath).toHaveBeenCalled())
     expect(mocks.detectSlots).not.toHaveBeenCalled()
+    ;(vscode.window.visibleTextEditors as any).length = 0
+  })
+
+  it('re-analyzes slots when a custom-source context revision is published', async () => {
+    const document = {
+      languageId: 'vue',
+      version: 1,
+      uri: { fsPath: '/workspace/App.vue', toString: () => 'file:///workspace/App.vue' },
+      getText: () => '<template />',
+    }
+    const vscode = await import('vscode')
+    ;(vscode.window.visibleTextEditors as any).push({ document })
+    mocks.resolvePackagePath.mockResolvedValue('/workspace/package.json')
+    mocks.getSlotAnalysis.mockReturnValue({ documentVersion: 1, packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 1 })
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    mocks.contextUpdatedListener?.({
+      pkgPath: '/workspace/package.json',
+      generation: 1,
+      revision: 2,
+      uiCompletions: {},
+      optionsComponents: { prefix: [] },
+    })
+    await vi.waitFor(() => expect(mocks.detectSlots).toHaveBeenCalled())
+    expect(mocks.detectSlots).toHaveBeenCalledWith(document, {}, {}, [], expect.objectContaining({
+      packagePath: '/workspace/package.json',
+      contextGeneration: 1,
+      contextRevision: 2,
+    }))
     ;(vscode.window.visibleTextEditors as any).length = 0
   })
 

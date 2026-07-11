@@ -115,6 +115,23 @@ describe('parser edge cases', () => {
     expect(result?.refsMap).toEqual({ headerRef: 'Modal.Header' })
   })
 
+  it('uses the provider source offset for multiline Vue attribute checks', async () => {
+    const mod = await import('../src/parser')
+    const child = {
+      tag: 'Comp',
+      props: [],
+      loc: {
+        start: { line: 2, column: 1, offset: 20 },
+        end: { line: 2, column: 18, offset: 37 },
+        source: '<Comp foo="bar">',
+      },
+      isSelfClosing: false,
+      children: [],
+    }
+
+    expect(mod.isInAttribute(child, { line: 1, character: 6 } as any, 0, 26)).toBe(true)
+  })
+
   it('falls back safely for unterminated vue tags in attribute checks', async () => {
     const mod = await import('../src/parser')
     const child = {

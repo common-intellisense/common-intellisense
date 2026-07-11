@@ -4,7 +4,7 @@ import { createFilter } from '@rollup/pluginutils'
 import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveTextEditor, getConfiguration, getLocale, getPosition, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
-import { clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri } from './services/fetch'
+import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri } from './services/fetch'
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
@@ -73,6 +73,13 @@ function getDocumentWorkspaceRoot(document: vscode.TextDocument) {
   return vscode.workspace.getWorkspaceFolder?.(document.uri)?.uri.fsPath
 }
 
+function getDocumentOffset(document: vscode.TextDocument, position: vscode.Position, code = document.getText()) {
+  if (typeof document.offsetAt === 'function')
+    return document.offsetAt(position)
+  const lines = code.split('\n')
+  return lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.character
+}
+
 function getCompletionRenderContext(document: vscode.TextDocument): CompletionRenderContext {
   const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
   return {
@@ -103,10 +110,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const analyzeDocumentSlots = async (document: vscode.TextDocument, packageContext: Awaited<ReturnType<typeof ensureContextForPath>>) => {
     if (!getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
       return
-    const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation }
+    const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }
     const cached = getDocumentSlotAnalysis(document.uri)
-    if (cached?.documentVersion === document.version && cached.packagePath === identity.packagePath && cached.contextGeneration === identity.contextGeneration)
+    if (cached?.documentVersion === document.version && cached.packagePath === identity.packagePath && cached.contextGeneration === identity.contextGeneration && cached.contextRevision === identity.contextRevision)
       return
+    if (cached)
+      clearDocumentAnalysis(document.uri)
     const code = document.getText()
     await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, identity)
   }
@@ -123,13 +132,14 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.cleanCache', async () => {
+    clearFetchCaches()
+    invalidateContexts()
+    clearDocumentAnalysis()
+    await awaitCacheWrites()
     try {
       await fsp.rm(localCacheUri, { force: true })
     }
     catch {}
-    clearFetchCaches()
-    invalidateContexts()
-    clearDocumentAnalysis()
     const editor = vscode.window.activeTextEditor
     if (editor && !isSkip(editor.document))
       await ensureDocumentContext(editor.document)
@@ -264,7 +274,7 @@ export async function activate(context: vscode.ExtensionContext) {
       return
     if (!child) {
       const code = editor.document.getText()
-      await detectSlots(editor.document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation })
+      await detectSlots(editor.document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision })
       return
     }
     if (!child.children)
@@ -318,6 +328,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!getIsShowSlots() || contentChanges.length === 0 || document.languageId === 'Log' || isSkip(document))
       return
     const key = document.uri.toString()
+    clearDocumentAnalysis(document.uri)
     const previous = slotTimers.get(key)
     if (previous)
       clearTimeout(previous)
@@ -332,7 +343,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const code = document.getText()
         if (document.isClosed)
           return
-        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation })
+        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision })
       }
       void analyze().catch(error => logger.error(`Slot analysis failed: ${String(error)}`))
     }, 200))
@@ -354,7 +365,8 @@ export async function activate(context: vscode.ExtensionContext) {
     let completionsCallback: SubCompletionItem[] | undefined
     let eventCallback: SubCompletionItem[] | undefined
     const activeText = getEffectWord(preText)
-    const result = parser(document.getText(), p, { languageId: document.languageId, uri: document.uri.toString() })
+    const documentCode = document.getText()
+    const result = parser(documentCode, p, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, p, documentCode) })
     if (!result)
       return
     if (activeText === ':' && result.type === 'text')
@@ -691,7 +703,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const getParsedResult = () => {
         if (!parsedResolved) {
           parsedResolved = true
-          parsedResult = parser(code, position as any, { languageId: document.languageId, uri: document.uri.toString() })
+          parsedResult = parser(code, position as any, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, position as any, code) })
         }
         return parsedResult
       }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beginDocumentSlotAnalysis, clearDocumentAnalysis, commitDocumentSlotAnalysis, getDocumentSlotAnalysis, registerCodeLensProviderFn } from '../src/parser'
 
-const identity = { packagePath: '/workspace/package.json', contextGeneration: 1 }
+const identity = { packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 1 }
 
 function commit(uri: string, documentVersion: number, children: any[], slotIdentity = identity) {
   const request = beginDocumentSlotAnalysis(uri, documentVersion, slotIdentity)
@@ -33,6 +33,19 @@ describe('per-document slot analysis', () => {
     })
   })
 
+  it('tracks context revision when enhanced sources replace the baseline', () => {
+    const uri = 'file:///workspace/a.vue'
+    commit(uri, 7, [{ id: 'baseline' }], identity)
+    commit(uri, 7, [{ id: 'enhanced' }], { ...identity, contextRevision: 2 })
+
+    expect(getDocumentSlotAnalysis(uri)).toMatchObject({
+      documentVersion: 7,
+      contextGeneration: 1,
+      contextRevision: 2,
+      children: [{ id: 'enhanced' }],
+    })
+  })
+
   it('does not let a cleared in-flight request revive stale analysis', () => {
     const uri = 'file:///workspace/a.vue'
     const stale = beginDocumentSlotAnalysis(uri, 7, identity)
@@ -40,6 +53,20 @@ describe('per-document slot analysis', () => {
 
     expect(commitDocumentSlotAnalysis(stale, [{ id: 'stale' }])).toBe(false)
     expect(getDocumentSlotAnalysis(uri)).toBeUndefined()
+  })
+
+  it('does not return CodeLens from an older document version', () => {
+    const uri = 'file:///workspace/a.vue'
+    commit(uri, 1, [{ id: 'old' }])
+    const provider = registerCodeLensProviderFn() as any
+    const document = {
+      languageId: 'vue',
+      version: 2,
+      uri: { toString: () => uri },
+      getText: () => '<template />',
+    }
+
+    expect(provider.provideCodeLenses(document)).toEqual([])
   })
 
   it('notifies CodeLens consumers after analysis commits', () => {

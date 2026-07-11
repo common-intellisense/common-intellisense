@@ -53,7 +53,8 @@ export function createImportEdits(code: string, source: string, dependencies: st
   const matching = imports.filter(node => ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === source)
   const runtimeMatching = matching.filter(node => !node.importClause?.isTypeOnly)
   const existing = collectRuntimeBindings(runtimeMatching, importWay)
-  const missing = names.filter(name => !existing.has(name))
+  const occupied = collectTopLevelBindings(sourceFile)
+  const missing = names.filter(name => !existing.has(name) && !occupied.has(name))
   if (!missing.length)
     return []
 
@@ -103,6 +104,45 @@ function getPrologueInsertion(sourceFile: ts.SourceFile, code: string) {
     insertion = statement.end
   }
   return insertion
+}
+
+function collectTopLevelBindings(sourceFile: ts.SourceFile) {
+  const result = new Set<string>()
+  const addBindingName = (name: ts.BindingName) => {
+    if (ts.isIdentifier(name)) {
+      result.add(name.text)
+      return
+    }
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element))
+        addBindingName(element.name)
+    }
+  }
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause
+      if (!clause)
+        continue
+      if (clause.name)
+        result.add(clause.name.text)
+      const bindings = clause.namedBindings
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        result.add(bindings.name.text)
+      }
+      else if (bindings) {
+        for (const element of bindings.elements)
+          result.add(element.name.text)
+      }
+    }
+    else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations)
+        addBindingName(declaration.name)
+    }
+    else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name) {
+      result.add(statement.name.text)
+    }
+  }
+  return result
 }
 
 function collectRuntimeBindings(imports: ts.ImportDeclaration[], importWay: ImportWay) {

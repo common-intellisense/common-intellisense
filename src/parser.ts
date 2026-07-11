@@ -6,7 +6,7 @@ import path from 'node:path'
 import { parse as babelParse } from '@babel/parser'
 import traverse from '@babel/traverse'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
-import { createRange, getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
+import { createRange, getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 // @ts-expect-error no problem
 import { parse } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import {
@@ -32,6 +32,7 @@ let vueSfcParseCache: { code: string, value: ReturnType<typeof parse> } | null =
 let jsxAstCache: { code: string, value: any } | null = null
 let svelteHtmlCache: { code: string, value: any } | null = null
 let vineCtxCache: { key: string, value: VineFileCtxResult } | null = null
+let lineIndexCache: { code: string, starts: number[] } | null = null
 
 function getVueSfcParseResult(code: string) {
   if (vueSfcParseCache?.code === code)
@@ -60,13 +61,14 @@ function getSvelteHtml(code: string) {
 export interface ParserDocumentContext {
   languageId?: string
   uri?: string
+  offset?: number
 }
 
 export function parser(code: string, position: vscode.Position, documentContext: ParserDocumentContext = {}) {
   const entry = documentContext.uri || getCurrentFileUrl()
   const isVineDocument = entry?.endsWith('.vine.ts')
   if (isVineDocument)
-    return parserVine(code, position)
+    return parserVine(code, position, documentContext.offset ?? getSourceOffset(code, position))
 
   const languageId = documentContext.languageId
   const suffix = entry?.slice(entry.lastIndexOf('.') + 1)
@@ -74,7 +76,8 @@ export function parser(code: string, position: vscode.Position, documentContext:
     return
   isInTemplate = false
   if (languageId === 'vue' || suffix === 'vue') {
-    const result = transformVue(code, position, 0, code)
+    const cursorOffset = documentContext.offset ?? getSourceOffset(code, position)
+    const result = transformVue(code, position, 0, cursorOffset)
     if (!result)
       return
     if (!result.refs?.length || !result.template)
@@ -91,7 +94,7 @@ export function parser(code: string, position: vscode.Position, documentContext:
   return true
 }
 
-export function transformVue(code: string, position: vscode.Position, offset = 0, _sourceCode = code) {
+export function transformVue(code: string, position: vscode.Position, offset = 0, cursorOffset = getSourceOffset(code, position)) {
   const {
     descriptor: { template, script, scriptSetup },
     errors,
@@ -130,7 +133,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
   // 在template中
   const { ast } = template
 
-  const r = dfs(ast.children, template, position, offset)
+  const r = dfs(ast.children, template, position, offset, cursorOffset)
   if (r) {
     r.loc = _script?.loc
     return r
@@ -138,7 +141,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
   return r
 }
 
-export function transformVine(vineFileCtx: VineFileCtx, position: vscode.Position) {
+export function transformVine(vineFileCtx: VineFileCtx, position: vscode.Position, cursorOffset?: number) {
   const targetInPositionNode = vineFileCtx.vineCompFns.find(item => item.fnDeclNode.loc ? isInPosition(item.fnDeclNode.loc, position) : false)
   if (!targetInPositionNode)
     return
@@ -148,7 +151,8 @@ export function transformVine(vineFileCtx: VineFileCtx, position: vscode.Positio
   if (!children)
     return
   const parent = fnDeclNode
-  const result = dfs(children, parent, position, templateStringNode?.quasi.quasis[0].start || 0)
+  const templateOffset = templateStringNode?.quasi.quasis[0].start || 0
+  const result = dfs(children, parent, position, templateOffset, cursorOffset)
   const refsMap = findRef(children, {})
   if (result)
     return Object.assign(result, refsMap)
@@ -159,7 +163,7 @@ export function transformVine(vineFileCtx: VineFileCtx, position: vscode.Positio
   }
 }
 
-function dfs(children: any, parent: any, position: vscode.Position, offset = 0) {
+function dfs(children: any, parent: any, position: vscode.Position, offset = 0, cursorOffset?: number) {
   for (const child of children) {
     const { loc, tag, props, children } = child
     if (!isInPosition(loc, position, offset))
@@ -196,7 +200,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
     if (props && props.length) {
       for (const prop of props) {
         if (isInPosition(prop.loc, position, offset)) {
-          if (!isInAttribute(child, position, offset))
+          if (!isInAttribute(child, position, offset, cursorOffset))
             return false
           if ((prop.name === 'bind' || prop.name === 'on') && prop.exp && isInPosition(prop.exp.loc, position)) {
             return {
@@ -252,7 +256,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0) 
       }
     }
     if (children && children.length) {
-      const result = dfs(children, child, position, offset) as any
+      const result = dfs(children, child, position, offset, cursorOffset) as any
       if (result)
         return result
     }
@@ -680,7 +684,7 @@ export function transformTagName(name: string) {
   return name[0].toUpperCase() + name.replace(/(-\w)/g, (match: string) => match[1].toUpperCase()).slice(1)
 }
 
-export function isInAttribute(child: any, position: any, offset: number) {
+export function isInAttribute(child: any, position: any, offset: number, cursorOffset?: number) {
   const len = child.props.length
   let end = null
   const start = {
@@ -712,8 +716,9 @@ export function isInAttribute(child: any, position: any, offset: number) {
         const endOffset = match?.index !== undefined
           ? startOffset + match.index
           : child.loc.end?.offset ?? (startOffset + tail.length)
-        const _offset = getOffsetFromPosition(position)!
-        return (startOffset + offset < _offset) && (_offset <= endOffset + offset)
+        if (cursorOffset === undefined)
+          return isInPosition({ start, end: { line: child.loc.end.line, column: child.loc.end.column, offset: endOffset } }, position, offset)
+        return (startOffset + offset < cursorOffset) && (cursorOffset <= endOffset + offset)
       }
     }
   }
@@ -729,10 +734,11 @@ export function isInAttribute(child: any, position: any, offset: number) {
     }
   }
 
-  const _offset = getOffsetFromPosition(position)!
+  if (cursorOffset === undefined)
+    return isInPosition({ start, end }, position, offset)
   const startOffset = start.offset
   const endOffset = end.offset
-  return (startOffset + offset < _offset) && (_offset <= endOffset + offset)
+  return (startOffset + offset < cursorOffset) && (cursorOffset <= endOffset + offset)
 }
 
 export function convertPositionToLoc(data: any, code: string) {
@@ -743,14 +749,42 @@ export function convertPositionToLoc(data: any, code: string) {
   }
 }
 
+function getLineStarts(code: string) {
+  if (lineIndexCache?.code === code)
+    return lineIndexCache.starts
+  const starts = [0]
+  for (let index = 0; index < code.length; index++) {
+    if (code.charCodeAt(index) === 10)
+      starts.push(index + 1)
+  }
+  lineIndexCache = { code, starts }
+  return starts
+}
+
+function getSourceOffset(code: string, position: vscode.Position) {
+  const starts = getLineStarts(code)
+  const lineStart = starts[Math.max(0, Math.min(position.line, starts.length - 1))] || 0
+  return Math.min(lineStart + position.character, code.length)
+}
+
 function convertCodeOffsetToLineColumn(code: string, offset: number) {
-  const before = code.slice(0, offset)
-  const lines = before.split('\n')
-  const lineText = code.split('\n')[lines.length - 1] || ''
+  const starts = getLineStarts(code)
+  let low = 0
+  let high = starts.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (starts[middle] <= offset)
+      low = middle + 1
+    else
+      high = middle
+  }
+  const lineIndex = Math.max(0, low - 1)
+  const lineStart = starts[lineIndex]
+  const lineEnd = code.indexOf('\n', lineStart)
   return {
-    line: lines.length,
-    column: (lines.at(-1)?.length || 0) + 1,
-    lineText,
+    line: lineIndex + 1,
+    column: offset - lineStart + 1,
+    lineText: code.slice(lineStart, lineEnd === -1 ? code.length : lineEnd),
     lineOffset: offset,
   }
 }
@@ -758,6 +792,7 @@ function convertCodeOffsetToLineColumn(code: string, offset: number) {
 export interface SlotAnalysisIdentity {
   packagePath: string
   contextGeneration: number
+  contextRevision: number
 }
 
 export interface SlotAnalysisRequest extends SlotAnalysisIdentity {
@@ -842,7 +877,7 @@ export async function detectSlots(documentOrCompletions: vscode.TextDocument | a
   const uiDeps = hasDocument ? depsOrPrefix : completionsOrDeps
   const prefix = (hasDocument ? maybePrefix : depsOrPrefix) || []
   const identity = hasDocument ? maybeIdentity : undefined
-  const request = beginDocumentSlotAnalysis(document.uri, document.version, identity || { packagePath: '', contextGeneration: 0 })
+  const request = beginDocumentSlotAnalysis(document.uri, document.version, identity || { packagePath: '', contextGeneration: 0, contextRevision: 0 })
   const children = (await getTemplateAst(document, UiCompletions, uiDeps, prefix)).filter(item => item.children.length)
 
   if (document.version !== request.documentVersion)
@@ -860,7 +895,10 @@ export function registerCodeLensProviderFn() {
       if (languageId === 'typescript' && !isVineDocument)
         return []
       const result: vscode.CodeLens[] = []
-      const children = getDocumentSlotAnalysis(document.uri)?.children || []
+      const analysis = getDocumentSlotAnalysis(document.uri)
+      if (!analysis || analysis.documentVersion !== document.version)
+        return result
+      const children = analysis.children
       children.forEach((child: any) => {
         const offset = child.offset
         child.children.forEach((m: any) => {
@@ -1071,12 +1109,12 @@ function findAllJsxElements(code: string) {
   }
 }
 
-export function parserVine(code: string, position: vscode.Position) {
+export function parserVine(code: string, position: vscode.Position, cursorOffset = getSourceOffset(code, position)) {
   const { vineFileCtx } = createVineFileCtx('', code)
   if (!vineFileCtx.vineCompFns.length)
     return
 
-  return transformVine(vineFileCtx, position)
+  return transformVine(vineFileCtx, position, cursorOffset)
 }
 
 export function createVineFileCtx(sourceFileName: string, source: string): VineFileCtxResult {
