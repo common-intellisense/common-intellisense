@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const fetchFromCommonIntellisense = vi.fn(async () => ({
-  antd5Components: () => [{
-    prefix: 'a',
-    data: () => [],
-    directives: {},
-    lib: 'antd5',
-  }],
-  antd5: () => ({ Button: { completions: [() => []], events: [() => []], methods: [], exposed: [], suggestions: [] } }),
-}))
+const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => {
+  const uiName = options.uiName
+  return {
+    [`${uiName}Components`]: () => [{
+      prefix: uiName,
+      data: () => [],
+      directives: {},
+      lib: uiName,
+    }],
+    [uiName]: () => ({
+      [`${uiName}Button`]: { completions: [() => []], events: [() => []], methods: [], exposed: [], suggestions: [] },
+    }),
+  }
+})
 
 vi.mock('../../src/services/fetch', () => ({
   cacheFetch: new Map(),
@@ -27,11 +32,11 @@ describe('ui-find updateCompletions', () => {
     fetchFromCommonIntellisense.mockClear()
   })
 
-  it('keeps aliased ui when selectedUIs includes the origin name', async () => {
+  it('selects only the aliased adapter when selectedUIs uses the origin name', async () => {
     const mod = await import('../../src/ui/ui-find')
 
-    await mod.updateCompletions(
-      [['my-ui', '2.1.0']] as any,
+    const context = await mod.updateCompletions(
+      [['my-ui', '2.1.0'], ['element-plus', '2.9.0']] as any,
       {
         selectedUIs: ['my-ui5'],
         alias: { 'my-ui': 'antd5' },
@@ -49,5 +54,23 @@ describe('ui-find updateCompletions', () => {
         uiName: 'antd5',
       }),
     )
+    expect(context.uiNames).toEqual(['antd5'])
+  })
+
+  it('keeps an unmatched explicit selection empty instead of loading every detected UI', async () => {
+    const mod = await import('../../src/ui/ui-find')
+    const context = await mod.updateCompletions(
+      [['antd', '5.0.0'], ['element-plus', '2.9.0']] as any,
+      {
+        selectedUIs: ['unknown-ui'],
+        alias: {},
+        detectSlots: () => {},
+        prefix: {},
+        pkgPath: '/tmp/pkg.json',
+      },
+    )
+
+    expect(fetchFromCommonIntellisense).not.toHaveBeenCalled()
+    expect(context.uiNames).toEqual([])
   })
 })

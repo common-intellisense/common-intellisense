@@ -31,6 +31,32 @@ const documentPackageCache = new Map<string, string | null>()
 const mainWatchers = new Map<string, () => void>()
 let registryEpoch = 0
 let activeContext: PackageContext | undefined
+const contextInvalidationListeners = new Set<(packagePaths?: string[]) => void>()
+const contextUpdateListeners = new Set<(context: PackageContext) => void>()
+
+export function onPackageContextsInvalidated(listener: (packagePaths?: string[]) => void) {
+  contextInvalidationListeners.add(listener)
+  return { dispose: () => contextInvalidationListeners.delete(listener) }
+}
+
+export function onPackageContextUpdated(listener: (context: PackageContext) => void) {
+  contextUpdateListeners.add(listener)
+  return { dispose: () => contextUpdateListeners.delete(listener) }
+}
+
+function notifyContextInvalidated(packagePaths?: string[]) {
+  for (const listener of contextInvalidationListeners) {
+    try { listener(packagePaths) }
+    catch (error) { logger.error(`context invalidation listener failed: ${String(error)}`) }
+  }
+}
+
+function notifyContextUpdated(context: PackageContext) {
+  for (const listener of contextUpdateListeners) {
+    try { listener(context) }
+    catch (error) { logger.error(`context update listener failed: ${String(error)}`) }
+  }
+}
 
 function emptyOptions(): OptionsComponents {
   return { prefix: [], data: [], directivesMap: {}, libs: [] }
@@ -88,6 +114,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
     contexts.set(context.pkgPath, context)
     documentPackageCache.set(cwd, context.pkgPath)
     applyContext(context)
+    notifyContextUpdated(context)
     return context
   }
   finally {
@@ -142,6 +169,7 @@ export async function updateCompletions(uis: Uis, options: UpdateCompletionsOpti
   const context = await buildCompletions(uis, options, cwd, nextGeneration(cwd))
   contexts.set(cwd, context)
   applyContext(context)
+  contextUpdateListeners.forEach(listener => listener(context))
   return context
 }
 
@@ -155,6 +183,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   const availableNames: string[] = []
   const originNames: string[] = []
   const formatToPkg = new Map<string, { pkgName: string, version: string }>()
+  const selectionToAdapter = new Map<string, string>()
 
   for (const [declaredName, version] of uis) {
     let uiName = declaredName
@@ -169,14 +198,18 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
       originNames.push(`${declaredName}${major}`)
     }
     const formatName = `${formatUIName(uiName)}${major}`
+    const selectionName = `${declaredName}${major}`
     formatToPkg.set(formatName, { pkgName: uiName, version: major })
+    selectionToAdapter.set(formatName, formatName)
+    selectionToAdapter.set(selectionName, formatName)
     availableNames.push(formatName)
   }
 
-  const selected = selectedUIs?.length && !selectedUIs.includes('auto')
-    ? selectedUIs.filter(item => availableNames.includes(item))
+  const hasExplicitSelection = !!selectedUIs?.length && !selectedUIs.includes('auto')
+  const selected = hasExplicitSelection
+    ? selectedUIs.map(item => selectionToAdapter.get(item)).filter((item): item is string => !!item)
     : []
-  const uiNames = selected.length ? selected : availableNames
+  const uiNames = hasExplicitSelection ? [...new Set(selected)] : availableNames
 
   await loadOtherSources(localUI, localCache, localOptions, path.dirname(pkgPath), () => localCompletions, value => localCompletions = value)
 
@@ -314,6 +347,37 @@ function parseAlias(value: string) {
   return { name: match?.[1], major: match?.[2] }
 }
 
+export function collectDependencyScopes(manifest: any, rootPkg: any) {
+  const rootDependencies = {
+    ...(rootPkg?.dependencies || {}),
+    ...(rootPkg?.peerDependencies || {}),
+    ...(rootPkg?.devDependencies || {}),
+    ...(rootPkg?.optionalDependencies || {}),
+  }
+  const localDependencies = {
+    ...(manifest?.dependencies || {}),
+    ...(manifest?.peerDependencies || {}),
+    ...(manifest?.devDependencies || {}),
+    ...(manifest?.optionalDependencies || {}),
+  }
+  return {
+    rootDependencies,
+    localDependencies,
+    dependencies: { ...rootDependencies, ...localDependencies },
+  }
+}
+
+export function getDependencyResolveFrom(key: string, localDependencies: Record<string, unknown>, pkgDir: string, rootPath?: string) {
+  return key in localDependencies ? pkgDir : rootPath
+}
+
+export function selectDependencyVersion(installed: string | undefined, declaredMajor: string | undefined) {
+  if (!installed)
+    return declaredMajor
+  const installedMajor = extractMajor(installed)
+  return declaredMajor && installedMajor !== declaredMajor ? declaredMajor : installed
+}
+
 export async function findPkgUI(cwd?: string, onChange?: () => void) {
   const alias = getAlias() || {}
   if (!cwd)
@@ -379,8 +443,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   }
 
   const manifest = JSON.parse(await fsp.readFile(pkg, 'utf8'))
-  const rootDependencies = { ...(rootPkg?.dependencies || {}), ...(rootPkg?.peerDependencies || {}), ...(rootPkg?.devDependencies || {}) }
-  const deps = { ...rootDependencies, ...(manifest.dependencies || {}), ...(manifest.peerDependencies || {}), ...(manifest.devDependencies || {}) }
+  const { localDependencies, dependencies: deps } = collectDependencyScopes(manifest, rootPkg)
   const aliasUiNames = Object.keys(alias)
   const result: Uis = []
   for (const key of Object.keys(deps)) {
@@ -388,10 +451,10 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
       continue
     const declared = deps[key]
     const parsed = parseDeclaredDependency(declared)
-    const resolveFrom = key in rootDependencies && !(key in (manifest.dependencies || {})) ? rootPath : pkgDir
+    const resolveFrom = getDependencyResolveFrom(key, localDependencies, pkgDir, rootPath)
     const installedName = parsed.packageName || key
     const installed = await resolveInstalledPackageVersion(installedName, resolveFrom)
-    const version = installed || parsed.major
+    const version = selectDependencyVersion(installed, parsed.major)
     if (!version) {
       logger.error(`${key} version is unsupported: ${declared}`)
       continue
@@ -401,24 +464,46 @@ export async function findPkgUI(cwd?: string, onChange?: () => void) {
   return { pkg, uis: result }
 }
 
+function isSameOrWithin(target: string, parent: string) {
+  const relative = path.relative(parent, target)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
 export function invalidatePackageContext(cwdOrPkg: string) {
   const affectedPackages = new Set<string>()
+  const cachedPackage = documentPackageCache.get(cwdOrPkg)
+  if (cachedPackage)
+    affectedPackages.add(cachedPackage)
+  if (path.basename(cwdOrPkg) === 'package.json')
+    affectedPackages.add(cwdOrPkg)
+
   for (const [key, context] of contexts) {
     const root = path.dirname(context.pkgPath)
-    if (key === cwdOrPkg || context.pkgPath === cwdOrPkg || cwdOrPkg.startsWith(root) || root.startsWith(cwdOrPkg)) {
-      contexts.delete(key)
+    if (key === cwdOrPkg || context.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
       affectedPackages.add(context.pkgPath)
-      nextGeneration(context.pkgPath)
-    }
+  }
+  for (const pkgPath of contextLoads.keys()) {
+    const root = path.dirname(pkgPath)
+    if (pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
+      affectedPackages.add(pkgPath)
+  }
+
+  for (const pkgPath of affectedPackages) {
+    nextGeneration(pkgPath)
+    contexts.delete(pkgPath)
+    contextLoads.delete(pkgPath)
   }
   for (const [documentPath, packagePath] of documentPackageCache) {
-    if (packagePath && (affectedPackages.has(packagePath) || documentPath === cwdOrPkg || documentPath.startsWith(cwdOrPkg)))
+    if (packagePath && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg)))
       documentPackageCache.delete(documentPath)
   }
   for (const key of urlCache.keys()) {
-    if (key === cwdOrPkg || key.startsWith(cwdOrPkg))
+    const cached = urlCache.get(key)
+    if (isSameOrWithin(key, cwdOrPkg) || (cached && affectedPackages.has(cached.pkg)))
       urlCache.delete(key)
   }
+  if (affectedPackages.size)
+    notifyContextInvalidated([...affectedPackages])
   clearPackageVersionCache()
   clearTypeCache()
   cacheMap.clear()
@@ -436,6 +521,7 @@ export function invalidateContexts() {
   clearPackageVersionCache()
   clearTypeCache()
   activeContext = undefined
+  notifyContextInvalidated()
 }
 
 export function disposeUIWatchers() {
@@ -461,6 +547,8 @@ export function getUiCompletions() {
 export function deactivateUICache() {
   disposeUIWatchers()
   invalidateContexts()
+  contextInvalidationListeners.clear()
+  contextUpdateListeners.clear()
   deactivateCache()
 }
 

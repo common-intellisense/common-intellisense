@@ -51,6 +51,51 @@ describe('package context generations', () => {
     expect(mod.getContextForDocumentPath('/workspace/src/App.tsx')).toBeUndefined()
   })
 
+  it('rejects a package context invalidated while its first load is in flight', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveFirst!: (value: any) => void
+    let resolveSecond!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const first = mod.ensureContextForPath(documentPath, context, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidatePackageContext(documentPath)
+    const second = mod.ensureContextForPath(documentPath, context, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    resolveFirst({})
+    await expect(first).resolves.toBeUndefined()
+    expect(mod.getContextForDocumentPath(documentPath)).toBeUndefined()
+
+    resolveSecond({})
+    await expect(second).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
+    expect(mod.getContextForDocumentPath(documentPath)?.pkgPath).toBe('/workspace/package.json')
+  })
+
+  it('notifies listeners when a package context is invalidated and rebuilt', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const invalidated = vi.fn()
+    const updated = vi.fn()
+    const invalidationSubscription = mod.onPackageContextsInvalidated(invalidated)
+    const updateSubscription = mod.onPackageContextUpdated(updated)
+
+    await mod.ensureContextForPath('/workspace/src/App.tsx', context, () => {})
+    mod.invalidatePackageContext('/workspace/src/App.tsx')
+
+    expect(updated).toHaveBeenCalledTimes(1)
+    expect(invalidated).toHaveBeenCalledWith(['/workspace/package.json'])
+    invalidationSubscription.dispose()
+    updateSubscription.dispose()
+  })
+
   it('discovers a nested package instead of reusing a loaded parent context', async () => {
     findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/nested/')
       ? '/workspace/nested/package.json'

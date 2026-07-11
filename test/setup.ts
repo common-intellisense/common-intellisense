@@ -88,9 +88,25 @@ vi.mock('vscode', () => {
     }
   }
   class Range {}
+  class EventEmitter<T = void> {
+    listeners = new Set<(value: T) => void>()
+    event = (listener: (value: T) => void) => {
+      this.listeners.add(listener)
+      return { dispose: () => this.listeners.delete(listener) }
+    }
+
+    fire(value: T) {
+      this.listeners.forEach(listener => listener(value))
+    }
+
+    dispose() {
+      this.listeners.clear()
+    }
+  }
   return {
     MarkdownString,
     Range,
+    EventEmitter,
     CodeLens: class CodeLens {
       range: any
       command: any
@@ -109,7 +125,7 @@ vi.mock('vscode', () => {
     ViewColumn: { Beside: 2 },
     languages: { registerHoverProvider: () => ({}) },
     window: { visibleTextEditors: [] },
-    workspace: { isTrusted: true },
+    workspace: { isTrusted: true, onDidCloseTextDocument: () => ({ dispose: () => {} }) },
   }
 })
 

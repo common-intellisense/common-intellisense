@@ -4,6 +4,7 @@ let remoteUris: string[] = ['https://fake/remote.js']
 let remoteNpmUris: ({ name: string, resource?: string } | string)[] = [{ name: '@common-intellisense/button', resource: undefined }]
 let trustedHosts: string[] = []
 let allowLegacyAdapters = true
+const fetchFromTypesMock = vi.fn()
 
 // This test file isolates different mocked behaviors from the other fetch.test.ts
 vi.mock('node:fs', () => ({ existsSync: () => false }))
@@ -13,6 +14,7 @@ vi.mock('@simon_he/latest-version', () => ({ latestVersion: vi.fn(async () => '2
 vi.mock('@simon_he/fetch-npm-cjs', () => ({ fetchFromCjsForCommonIntellisense: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
 vi.mock('ofetch', () => ({ ofetch: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
 vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsReducer: (v: any) => v }))
+vi.mock('../../src/type-extract', () => ({ fetchFromTypes: fetchFromTypesMock }))
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: () => {}, error: () => {} } }))
 vi.mock('@vscode-use/utils', () => ({
   createFakeProgress: ({ callback }: any) => callback(() => {}, () => {}),
@@ -44,6 +46,7 @@ describe('fetch service additional tests (mocked)', () => {
     remoteNpmUris = [{ name: '@common-intellisense/button', resource: undefined }]
     trustedHosts = []
     allowLegacyAdapters = true
+    fetchFromTypesMock.mockReset()
   })
 
   it('fetchFromCommonIntellisense returns parsed exports and caches the result', async () => {
@@ -77,6 +80,56 @@ describe('fetch service additional tests (mocked)', () => {
     expect(comps[0].name).toBe('X')
     const props = res.ButtonProps()
     expect(props.bar).toBe(2)
+  })
+
+  it('isolates official adapter fallback results by package context', async () => {
+    const fetchNpm = await import('@simon_he/fetch-npm')
+    vi.mocked(fetchNpm.fetchAndExtractPackage).mockResolvedValue(`module.exports = {
+      ButtonComponents: () => [{ name: "Button" }],
+      ButtonProps: () => [{ name: "Button", props: { size: { type: "" } } }]
+    }`)
+    fetchFromTypesMock.mockImplementation(async ({ uiName, resolveFrom }: any) => ({
+      [`${uiName}Raw`]: () => [{
+        name: 'Button',
+        props: { size: { type: resolveFrom.includes('/a/') ? 'AType' : 'BType' } },
+      }],
+    }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [a, b] = await Promise.all([
+      mod.fetchFromCommonIntellisense('button', { pkgName: 'button-a', uiName: 'buttonA', resolveFrom: '/workspace/a/package.json' }),
+      mod.fetchFromCommonIntellisense('button', { pkgName: 'button-b', uiName: 'buttonB', resolveFrom: '/workspace/b/package.json' }),
+    ])
+
+    expect(a.ButtonProps()[0].props.size.type).toBe('AType')
+    expect(b.ButtonProps()[0].props.size.type).toBe('BType')
+    expect(fetchFromTypesMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let a stale latest-version request delete or overwrite a newer request', async () => {
+    const latest = await import('@simon_he/latest-version')
+    let resolveOld!: (value: string) => void
+    let resolveNew!: (value: string) => void
+    vi.mocked(latest.latestVersion)
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveOld = resolve }))
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveNew = resolve }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const oldTask = mod.fetchFromCommonIntellisense('button')
+    await Promise.resolve()
+    mod.clearFetchCaches()
+    const newTask = mod.fetchFromCommonIntellisense('button')
+    await Promise.resolve()
+    resolveNew('3.0.0')
+    await newTask
+    resolveOld('1.0.0')
+    await oldTask
+
+    await mod.fetchFromCommonIntellisense('button')
+    expect(vi.mocked(latest.latestVersion)).toHaveBeenCalledTimes(2)
+    expect(mod.cacheFetch.has('@common-intellisense/button@3.0.0')).toBe(true)
   })
 
   it('fetchFromCommonIntellisense supports concurrent fetches for different keys', async () => {

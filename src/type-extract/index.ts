@@ -72,13 +72,14 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
   if (!typeEntry)
     return
   const globalDts = path.resolve(pkgRoot, 'global.d.ts')
+  const snapshotKey = `${pkgRootReal}::${typeEntry}::${version}`
+  const knownFiles = typeCache.getSnapshot(snapshotKey)?.files || [pkgJsonPath, typeEntry, globalDts]
   const signature = await getTypeCacheSignature({
     pkgRoot: pkgRootReal,
-    typeEntry,
-    globalDts,
     version,
+    files: knownFiles,
   })
-  const cacheKey = `${pkgRootReal}::${typeEntry}::${version}::${signature}::${uiName}`
+  const cacheKey = `${snapshotKey}::${signature}::${uiName}`
   const cached = typeCache.get(cacheKey)
   if (cached)
     return cached
@@ -120,6 +121,12 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
       })
     }
     const program = ts.createProgram(rootNames, compilerOptions, host)
+    const packageSourceFiles = program.getSourceFiles()
+      .map(sourceFile => sourceFile.fileName)
+      .filter(fileName => fileName === pkgJsonPath || fileName.startsWith(`${pkgRoot}${path.sep}`))
+    packageSourceFiles.push(pkgJsonPath)
+    const finalSignature = await getTypeCacheSignature({ pkgRoot: pkgRootReal, version, files: packageSourceFiles })
+    const finalCacheKey = `${snapshotKey}::${finalSignature}::${uiName}`
     const checker = program.getTypeChecker()
     const components = collectComponents(program, checker, pkgRoot, typeEntry)
     if (!components.length)
@@ -145,8 +152,10 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
       [`${uiName}`]: () => propsConfig,
       [`${uiName}Raw`]: () => rawComponents,
     }
-    if (typeCache.getEpoch() === cacheEpoch)
-      typeCache.set(cacheKey, result)
+    if (typeCache.getEpoch() === cacheEpoch) {
+      typeCache.setSnapshot(snapshotKey, packageSourceFiles)
+      typeCache.set(finalCacheKey, result)
+    }
     return result
   })()
 
@@ -155,7 +164,7 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
     return await promise
   }
   finally {
-    typeCache.clearInFlight(cacheKey)
+    typeCache.clearInFlight(cacheKey, promise)
     typeCache.prune()
   }
 }
@@ -170,35 +179,21 @@ async function pathExists(target: string) {
   }
 }
 
-async function getTypeCacheSignature(input: { pkgRoot: string, typeEntry: string, globalDts: string, version: string }) {
-  const files = await collectDeclarationFiles(input.pkgRoot)
+async function getTypeCacheSignature(input: { pkgRoot: string, version: string, files: string[] }) {
   const hash = createHash('sha256')
   hash.update(input.pkgRoot)
   hash.update(input.version)
-  for (const file of files) {
-    const stat = await fsp.stat(file)
-    hash.update(path.relative(input.pkgRoot, file))
-    hash.update(`${Number(stat.mtimeMs)}:${Number(stat.size)}`)
-  }
-  return hash.digest('hex')
-}
-
-async function collectDeclarationFiles(root: string) {
-  const files: string[] = []
-  const visit = async (directory: string) => {
-    const entries = await fsp.readdir(directory, { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.name === 'node_modules')
-        continue
-      const target = path.join(directory, entry.name)
-      if (entry.isDirectory())
-        await visit(target)
-      else if (entry.isFile() && /\.d\.(?:c|m)?ts$/.test(entry.name))
-        files.push(target)
+  for (const file of [...new Set(input.files)].sort()) {
+    try {
+      const stat = await fsp.stat(file)
+      hash.update(path.relative(input.pkgRoot, file))
+      hash.update(`${Number(stat.mtimeMs)}:${Number(stat.size)}`)
+    }
+    catch {
+      hash.update(`${path.relative(input.pkgRoot, file)}:missing`)
     }
   }
-  await visit(root)
-  return files.sort()
+  return hash.digest('hex')
 }
 
 function resolveTypesEntry(pkgJson: any, pkgRoot: string) {

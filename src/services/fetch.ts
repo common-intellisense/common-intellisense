@@ -269,10 +269,16 @@ async function getLatestVersion(name: string) {
   const pending = latestVersionInFlight.get(name)
   if (pending)
     return pending
+  const epoch = sourceEpoch
   const task = latestVersion(name, { concurrency: 3 }).then((value) => {
+    if (sourceEpoch !== epoch)
+      throw new Error(`Version request invalidated: ${name}`)
     latestVersionCache.set(name, { value, at: Date.now() })
     return value
-  }).finally(() => latestVersionInFlight.delete(name))
+  }).finally(() => {
+    if (latestVersionInFlight.get(name) === task)
+      latestVersionInFlight.delete(name)
+  })
   latestVersionInFlight.set(name, task)
   return task
 }
@@ -307,7 +313,13 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     return
   }
   logger.info(isZh ? `找到 ${name} 的最新版本: ${version}` : `Found the latest version of ${name}: ${version}`)
-  const key = `${name}@${version}`
+  const scriptKey = `${name}@${version}`
+  const key = JSON.stringify({
+    scriptKey,
+    pkgName: options?.pkgName || '',
+    uiName,
+    resolveFrom: options?.resolveFrom || '',
+  })
   const inFlightTask = commonIntellisenseInFlight.get(key)
   if (inFlightTask)
     return inFlightTask
@@ -316,7 +328,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
   const task = (async () => {
     let resolver: () => void = () => { }
     let rejecter: (msg?: string) => void = () => { }
-    if (!cacheFetch.has(key)) {
+    if (!cacheFetch.has(scriptKey)) {
       createFakeProgress({
         title: isZh ? `正在拉取远程的 ${tag}` : `Pulling remote ${tag}`,
         message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
@@ -329,12 +341,12 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
 
     try {
       let scriptContent = ''
-      if (cacheFetch.has(key)) {
-        logger.info(isZh ? `已缓存的 ${key}` : `cachedKey: ${key}`)
-        scriptContent = cacheFetch.get(key) || ''
+      if (cacheFetch.has(scriptKey)) {
+        logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
+        scriptContent = cacheFetch.get(scriptKey) || ''
       }
       else {
-        logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
+        logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
         scriptContent = await Promise.any([
           fetchAndExtractPackage({
             name,
@@ -346,10 +358,10 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
         ])
       }
       if (scriptContent && sourceEpoch === epoch)
-        cacheFetch.set(key, scriptContent)
+        cacheFetch.set(scriptKey, scriptContent)
       // Official @common-intellisense packages remain a trusted compatibility source.
       // Custom executable adapters are opt-in and should migrate to data-only manifests.
-      const exportsData = evaluateAdapter(scriptContent, key, !!isZh, true)
+      const exportsData = evaluateAdapter(scriptContent, scriptKey, !!isZh, true)
       const result: any = {}
       let fallbackRaw: any[] | undefined
       if (options?.pkgName && options?.resolveFrom) {
@@ -399,7 +411,10 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
         logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
         return fallback
       }
-      return fetchFromLocalUris()
+      const fallbackRoot = options?.resolveFrom
+        ? path.extname(options.resolveFrom) ? path.dirname(options.resolveFrom) : options.resolveFrom
+        : undefined
+      return fetchFromLocalUris(fallbackRoot)
       // todo：增加重试机制
     }
   })()

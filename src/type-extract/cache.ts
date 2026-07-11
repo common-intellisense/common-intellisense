@@ -1,9 +1,14 @@
 type CachedTypeResult = Record<string, () => any>
 
-class TypeCache {
+interface TypeFileSnapshot {
+  files: string[]
+}
+
+export class TypeCache {
   private readonly cache = new Map<string, CachedTypeResult>()
   private readonly inFlight = new Map<string, Promise<CachedTypeResult | undefined>>()
   private readonly order: string[] = []
+  private readonly snapshots = new Map<string, TypeFileSnapshot>()
   private readonly maxEntries: number
   private epoch = 0
 
@@ -33,6 +38,7 @@ class TypeCache {
     this.epoch++
     this.cache.clear()
     this.inFlight.clear()
+    this.snapshots.clear()
     this.order.length = 0
   }
 
@@ -48,8 +54,17 @@ class TypeCache {
     this.inFlight.set(key, promise)
   }
 
-  clearInFlight(key: string) {
-    this.inFlight.delete(key)
+  clearInFlight(key: string, expected?: Promise<CachedTypeResult | undefined>) {
+    if (!expected || this.inFlight.get(key) === expected)
+      this.inFlight.delete(key)
+  }
+
+  getSnapshot(key: string) {
+    return this.snapshots.get(key)
+  }
+
+  setSnapshot(key: string, files: string[]) {
+    this.snapshots.set(key, { files: [...new Set(files)].sort() })
   }
 
   prune() {

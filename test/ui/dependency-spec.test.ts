@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseDeclaredDependency } from '../../src/ui/ui-find'
+import { collectDependencyScopes, getDependencyResolveFrom, parseDeclaredDependency, selectDependencyVersion } from '../../src/ui/ui-find'
 
 describe('dependency spec parsing', () => {
   it.each([
@@ -19,5 +19,20 @@ describe('dependency spec parsing', () => {
 
   it('extracts npm alias package names', () => {
     expect(parseDeclaredDependency('npm:@scope/actual@^12.0.0')).toMatchObject({ packageName: '@scope/actual', major: '12' })
+  })
+
+  it('uses the declared major when a hoisted installed package has a different major', () => {
+    expect(selectDependencyVersion('2.9.0', '1')).toBe('1')
+    expect(selectDependencyVersion('2.9.0', '2')).toBe('2.9.0')
+  })
+
+  it.each(['devDependencies', 'peerDependencies', 'optionalDependencies'])('lets local %s override root dependencies', (field) => {
+    const scopes = collectDependencyScopes({ [field]: { 'element-plus': '^1.0.0' } }, {
+      dependencies: { 'element-plus': '^2.0.0' },
+    })
+
+    expect(scopes.dependencies['element-plus']).toBe('^1.0.0')
+    expect('element-plus' in scopes.localDependencies).toBe(true)
+    expect(getDependencyResolveFrom('element-plus', scopes.localDependencies, '/workspace/packages/a', '/workspace')).toBe('/workspace/packages/a')
   })
 })

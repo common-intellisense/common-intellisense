@@ -728,18 +728,35 @@ export interface SlotAnalysis {
   children: any[]
 }
 
+const MAX_DOCUMENT_SLOT_ANALYSES = 20
 const documentSlotAnalyses = new Map<string, SlotAnalysis>()
+const codeLensEmitter = new vscode.EventEmitter<void>()
+
+export function refreshCodeLenses() {
+  codeLensEmitter.fire()
+}
 
 export function clearDocumentAnalysis(uri?: string | vscode.Uri) {
   if (uri) {
-    documentSlotAnalyses.delete(typeof uri === 'string' ? uri : uri.toString())
+    const deleted = documentSlotAnalyses.delete(typeof uri === 'string' ? uri : uri.toString())
+    if (deleted)
+      refreshCodeLenses()
     return
   }
-  documentSlotAnalyses.clear()
+  if (documentSlotAnalyses.size) {
+    documentSlotAnalyses.clear()
+    refreshCodeLenses()
+  }
 }
 
 export function getDocumentSlotAnalysis(uri: string | vscode.Uri) {
-  return documentSlotAnalyses.get(typeof uri === 'string' ? uri : uri.toString())
+  const key = typeof uri === 'string' ? uri : uri.toString()
+  const analysis = documentSlotAnalyses.get(key)
+  if (analysis) {
+    documentSlotAnalyses.delete(key)
+    documentSlotAnalyses.set(key, analysis)
+  }
+  return analysis
 }
 
 export function commitDocumentSlotAnalysis(uri: string | vscode.Uri, analysis: SlotAnalysis) {
@@ -747,7 +764,11 @@ export function commitDocumentSlotAnalysis(uri: string | vscode.Uri, analysis: S
   const current = documentSlotAnalyses.get(key)
   if (current && current.version > analysis.version)
     return false
+  documentSlotAnalyses.delete(key)
   documentSlotAnalyses.set(key, analysis)
+  while (documentSlotAnalyses.size > MAX_DOCUMENT_SLOT_ANALYSES)
+    documentSlotAnalyses.delete(documentSlotAnalyses.keys().next().value!)
+  refreshCodeLenses()
   return true
 }
 
@@ -773,13 +794,14 @@ export async function detectSlots(documentOrCompletions: vscode.TextDocument | a
 export function registerCodeLensProviderFn() {
   const isZh = getLocale().includes('zh')
   return registerCodeLensProvider(['vue', 'javascriptreact', 'typescriptreact', 'typescript'], {
+    onDidChangeCodeLenses: codeLensEmitter.event,
     provideCodeLenses(document: vscode.TextDocument) {
       const languageId = document.languageId
       const isVineDocument = document.uri.toString().endsWith('.vine.ts')
       if (languageId === 'typescript' && !isVineDocument)
         return []
       const result: vscode.CodeLens[] = []
-      const children = documentSlotAnalyses.get(document.uri.toString())?.children || []
+      const children = getDocumentSlotAnalysis(document.uri)?.children || []
       children.forEach((child: any) => {
         const offset = child.offset
         child.children.forEach((m: any) => {

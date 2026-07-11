@@ -188,6 +188,17 @@ export declare const BazCard: DefineSetupFnComponent<BazProps, BazEmits>
     expect(after).toEqual(['sm', 'lg'])
   })
 
+  it('does not recursively scan declaration directories on cache hits', async () => {
+    const readdirSpy = vi.spyOn(fsp, 'readdir')
+    const mod = await import('../../src/type-extract')
+    await mod.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'scanUi' })
+    readdirSpy.mockClear()
+
+    await mod.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'scanUi' })
+    expect(readdirSpy).not.toHaveBeenCalled()
+    readdirSpy.mockRestore()
+  })
+
   it('deduplicates concurrent requests for the same cache key', async () => {
     await import('../../src/type-extract')
     const fresh = await import('../../src/type-extract')

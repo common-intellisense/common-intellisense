@@ -1,5 +1,6 @@
 import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
+import path from 'node:path'
 import { createFilter } from '@rollup/pluginutils'
 import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveTextEditor, getConfiguration, getCurrentFileUrl, getLocale, getPosition, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import { findUp } from 'find-up'
@@ -9,9 +10,9 @@ import { clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri }
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getCurrentPkgUiNames, invalidateContexts, logger } from './ui/ui-find'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getCurrentPkgUiNames, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getUiDeps } from './ui/ui-utils'
-import { clearDocumentAnalysis, detectSlots, findDynamicComponent, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
+import { clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
 interface DocumentAnalysisCacheEntry {
@@ -65,7 +66,6 @@ function getDocumentPath(document: vscode.TextDocument) {
 // todo: 补充example
 export async function activate(context: vscode.ExtensionContext) {
   configureCacheStorage(context.globalStorageUri)
-  await getLocalCache
   // todo: createWebviewPanel
   // createWebviewPanel(context)
   logger.info('common-intellisense activate!')
@@ -73,8 +73,24 @@ export async function activate(context: vscode.ExtensionContext) {
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
   const initialEditor = vscode.window.activeTextEditor
-  if (initialEditor && !isSkip(initialEditor.document))
-    await ensureContextForPath(getDocumentPath(initialEditor.document), context, detectSlots)
+  const analyzeDocumentSlots = async (document: vscode.TextDocument, packageContext: Awaited<ReturnType<typeof ensureContextForPath>>) => {
+    if (!getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
+      return
+    if (getDocumentSlotAnalysis(document.uri)?.version === document.version)
+      return
+    const code = document.getText()
+    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix)
+  }
+
+  context.subscriptions.push(onPackageContextsInvalidated(() => clearDocumentAnalysis()))
+  context.subscriptions.push(onPackageContextUpdated((packageContext) => {
+    for (const editor of vscode.window.visibleTextEditors) {
+      const documentPath = getDocumentPath(editor.document)
+      const packageRoot = path.dirname(packageContext.pkgPath)
+      if (documentPath === packageRoot || documentPath.startsWith(`${packageRoot}${path.sep}`))
+        void analyzeDocumentSlots(editor.document, packageContext).catch(error => logger.error(String(error)))
+    }
+  }))
 
   context.subscriptions.push(registerCommand('common-intellisense.cleanCache', async () => {
     try {
@@ -86,7 +102,7 @@ export async function activate(context: vscode.ExtensionContext) {
     clearDocumentAnalysis()
     const editor = vscode.window.activeTextEditor
     if (editor && !isSkip(editor.document))
-      await ensureContextForPath(getDocumentPath(editor.document), context, detectSlots, true)
+      await ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
   }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
@@ -99,9 +115,14 @@ export async function activate(context: vscode.ExtensionContext) {
     // 找到当前活动的编辑器
     const visibleEditors = vscode.window.visibleTextEditors
     const currentEditor = visibleEditors.find(e => e === editor)
-    if (currentEditor)
+    if (currentEditor) {
       void ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
+        .then(packageContext => analyzeDocumentSlots(editor.document, packageContext))
+        .catch(error => logger.error(String(error)))
+    }
   }))
+
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(document => clearDocumentAnalysis(document.uri)))
 
   context.subscriptions.push(registerCommand('intellisense.copyDemo', (demo) => {
     setCopyText(demo)
@@ -174,7 +195,7 @@ export async function activate(context: vscode.ExtensionContext) {
     documentAnalysisCache.clear()
     const editor = vscode.window.activeTextEditor
     if (editor && !isSkip(editor.document))
-      void ensureContextForPath(getDocumentPath(editor.document), context, detectSlots, true)
+      void ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.import', async (params, _loc, _lineOffset) => {
@@ -873,6 +894,13 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     },
   }))
+
+  void Promise.resolve(getLocalCache).then(async () => {
+    if (!initialEditor || isSkip(initialEditor.document))
+      return
+    const packageContext = await ensureContextForPath(getDocumentPath(initialEditor.document), context, detectSlots)
+    await analyzeDocumentSlots(initialEditor.document, packageContext)
+  }).catch(error => logger.error(`Initial context preload failed: ${String(error)}`))
 }
 
 export function deactivate() {
