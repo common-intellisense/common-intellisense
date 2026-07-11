@@ -24,6 +24,8 @@ export interface OptionsComponents {
   data: ((parent?: any, context?: CompletionRenderContext) => vscode.CompletionItem[])[]
   directivesMap: Record<string, Directives | undefined>
   libs: string[]
+  /** Internal identity of merged component providers (`lib\0prefix`). */
+  providerKeys?: Set<string>
 }
 
 export type Uis = [string, string][]

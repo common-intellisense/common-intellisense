@@ -16,8 +16,9 @@ import {
 
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
-import { convertPrefixedComponentName, findPrefixedComponent, hyphenate, toCamel } from './ui/utils'
-import { logger } from './ui/ui-find'
+import { convertPrefixedComponentName, findPrefixedComponent, hyphenate } from './ui/utils'
+import { getSourceScope, logger } from './ui/ui-find'
+import { fixedTagName, getUiImportedName } from './ui/ui-utils'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -226,6 +227,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
                 parent: parent.parent,
               },
               isDynamic: prop.name === 'bind',
+              isDynamicArgument: prop.arg?.isStatic === false,
               isEvent: prop.name === 'on',
               template: parent,
             }
@@ -252,6 +254,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
               props,
               type: 'props',
               isInTemplate: true,
+              isDynamicArgument: prop.arg?.isStatic === false,
               isEvent,
               isValue: prop.value?.content !== undefined || prop.exp?.content !== undefined,
               parent: {
@@ -933,9 +936,14 @@ export function commitDocumentSlotAnalysis(request: SlotAnalysisRequest, childre
   return true
 }
 
-export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[], identity?: SlotAnalysisIdentity): Promise<void>
+export interface SlotSourceContext {
+  cacheMap: Map<string, any>
+  sourceScopes: Map<string, { key: string, lib: string }>
+}
+
+export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[], identity?: SlotAnalysisIdentity, sourceContext?: SlotSourceContext): Promise<void>
 export async function detectSlots(UiCompletions: any, uiDeps: any, prefix: string[]): Promise<void>
-export async function detectSlots(documentOrCompletions: vscode.TextDocument | any, completionsOrDeps: any, depsOrPrefix: any, maybePrefix?: string[], maybeIdentity?: SlotAnalysisIdentity) {
+export async function detectSlots(documentOrCompletions: vscode.TextDocument | any, completionsOrDeps: any, depsOrPrefix: any, maybePrefix?: string[], maybeIdentity?: SlotAnalysisIdentity, maybeSourceContext?: SlotSourceContext) {
   const hasDocument = documentOrCompletions?.uri && typeof documentOrCompletions.getText === 'function'
   const document = hasDocument ? documentOrCompletions as vscode.TextDocument : getActiveTextEditor()?.document
   if (!document)
@@ -944,8 +952,9 @@ export async function detectSlots(documentOrCompletions: vscode.TextDocument | a
   const uiDeps = hasDocument ? depsOrPrefix : completionsOrDeps
   const prefix = (hasDocument ? maybePrefix : depsOrPrefix) || []
   const identity = hasDocument ? maybeIdentity : undefined
+  const sourceContext = hasDocument ? maybeSourceContext : undefined
   const request = beginDocumentSlotAnalysis(document.uri, document.version, identity || { packagePath: '', contextGeneration: 0, contextRevision: 0 })
-  const children = (await getTemplateAst(document, UiCompletions, uiDeps, prefix)).filter(item => item.children.length)
+  const children = (await getTemplateAst(document, UiCompletions, uiDeps, prefix, sourceContext)).filter(item => item.children.length)
 
   if (document.version !== request.documentVersion)
     return
@@ -1038,7 +1047,7 @@ export function registerCodeLensProviderFn() {
   })
 }
 
-async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[]): Promise<Array<{ children: any, offset: number }>> {
+async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[], sourceContext?: SlotSourceContext): Promise<Array<{ children: any, offset: number }>> {
   const code = document.getText()
   const uri = document.uri.toString()
   const isVueDocument = document.languageId === 'vue' || uri.endsWith('.vue')
@@ -1051,7 +1060,7 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
     const analyses: Array<{ children: any, offset: number }> = []
     if (template) {
       analyses.push({
-        children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix),
+        children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
         offset: 0,
       })
     }
@@ -1059,7 +1068,7 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
     if (tsxScript) {
       const children = findAllJsxElements(tsxScript.content)
       analyses.push({
-        children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
+        children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
         offset: tsxScript.loc.start.offset,
       })
     }
@@ -1072,7 +1081,7 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
 
     return await Promise.all(vineFileCtx.vineCompFns.map(async (item: any) => {
       const r = {
-        children: await findUiTag(item.templateAst?.children, UiCompletions, [], new Set(), uiDeps, prefix),
+        children: await findUiTag(item.templateAst?.children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
         offset: item.templateStringNode?.quasi.quasis[0].start || 0,
       }
       return r
@@ -1081,7 +1090,7 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
   else if (['javascriptreact', 'typescriptreact'].includes(document.languageId)) {
     const children = findAllJsxElements(code)
     return [{
-      children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
+      children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
       offset: 0,
     }]
   }
@@ -1089,8 +1098,8 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
 }
 const originTag = ['div', 'span', 'ul', 'li', 'ol', 'p', 'main', 'header', 'footer', 'template', 'img', 'aside', 'body', 'a', 'video', 'table', 'th', 'tr', 'td', 'form', 'input', 'label', 'button', 'article', 'section']
 
-export async function findUiTag(children: any, UiCompletions: any, result: any[] = [], cacheMap = new Set(), uiDeps: any = {}, prefix: string[] = []) {
-  for (const child of children) {
+export async function findUiTag(children: any, UiCompletions: any, result: any[] = [], cacheMap = new Set(), uiDeps: any = {}, prefix: string[] = [], sourceContext?: SlotSourceContext) {
+  for (const child of children || []) {
     let tag: string | undefined = child.tag
     if (child.type === 'JSXElement')
       tag = getJsxElementName(child.openingElement?.name)
@@ -1098,54 +1107,40 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
     if (!tag)
       continue
     const nextChildren = child.children
-
     if (nextChildren?.length)
-      await findUiTag(nextChildren, UiCompletions, result, cacheMap, uiDeps, prefix)
+      await findUiTag(nextChildren, UiCompletions, result, cacheMap, uiDeps, prefix, sourceContext)
+
     const range = child.range ?? child.loc
-
-    if (cacheMap.has(range))
-      continue
-    if (originTag.includes(tag))
+    if (cacheMap.has(range) || originTag.includes(tag))
       continue
 
-    // Use utility function to handle prefix matching
-    const matchedComponent = findPrefixedComponent(tag, prefix.filter(Boolean), UiCompletions)
-    if (matchedComponent) {
-      if (!matchedComponent.rawSlots?.length)
-        continue
-      cacheMap.add(range)
-      result.push({
-        child,
-        slots: matchedComponent.rawSlots,
-      })
-      continue
-    }
-
-    // Fallback to standard conversion if no prefix match
-    const tagName = tag[0]?.toUpperCase() + toCamel(tag.slice(1))
-    let target = UiCompletions[tagName] || await findDynamicComponent(tagName, {}, UiCompletions, prefix)
-    const importUiSource = uiDeps[tagName]
-    if (!target)
-      continue
-    if (importUiSource && target.uiName !== importUiSource) {
-      for (const p of prefix.filter(Boolean)) {
-        const realName = p[0].toUpperCase() + p.slice(1) + tagName
-        const newTarget = UiCompletions[realName]
-        if (!newTarget)
-          continue
-        if (newTarget.uiName === importUiSource) {
-          target = newTarget
-          break
-        }
+    const localName = fixedTagName(tag)
+    const importedName = getUiImportedName(uiDeps, localName)
+    const source = uiDeps?.[localName]
+    let scopedCompletions = UiCompletions
+    let normalizedSource = source
+    if (source && sourceContext) {
+      const scope = getSourceScope(sourceContext, source)
+      if (scope) {
+        const scoped = sourceContext.cacheMap.get(scope.key)
+        if (scoped && typeof scoped === 'object' && !Array.isArray(scoped))
+          scopedCompletions = scoped
+        normalizedSource = scope.lib
       }
     }
-    if (!target || !target.rawSlots?.length)
+
+    const target = source
+      ? await findDynamicComponent(importedName, {}, scopedCompletions, prefix, normalizedSource)
+      : findPrefixedComponent(tag, prefix.filter(Boolean), scopedCompletions)
+        || scopedCompletions[importedName]
+        || await findDynamicComponent(importedName, {}, scopedCompletions, prefix)
+
+    // An explicit import source is authoritative. Never fall back to a same-name
+    // component from the flattened map when its scoped candidate is absent.
+    if (!target?.rawSlots?.length)
       continue
     cacheMap.add(range)
-    result.push({
-      child,
-      slots: target.rawSlots,
-    })
+    result.push({ child, slots: target.rawSlots })
   }
   return result
 }

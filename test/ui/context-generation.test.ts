@@ -209,6 +209,80 @@ describe('package context generations', () => {
     expect(mod.getSourceScope(context, '@vendor/ui/button')).toEqual({ key: 'VendorProps', lib: '@vendor/ui' })
   })
 
+  it('removes metadata deleted by a successful custom-source refresh', async () => {
+    let now = 3_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    localFetchMock
+      .mockResolvedValueOnce({ CustomProps: () => ({ OldButton: { source: 'old' } }) })
+      .mockResolvedValueOnce({ CustomProps: () => ({ NewButton: { source: 'new' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldButton).toBeDefined())
+    now += 6 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.NewButton).toBeDefined())
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldButton).toBeUndefined()
+    nowSpy.mockRestore()
+  })
+
+  it('replays the last successful custom snapshot onto a refreshed official baseline', async () => {
+    let now = 3_500_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV1: { lib: 'antd' } }) })
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV2: { lib: 'antd' } }) })
+    localFetchMock
+      .mockResolvedValueOnce({ CustomProps: () => ({ CustomButton: { source: 'custom' } }) })
+      .mockReturnValueOnce(new Promise(() => {}))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.CustomButton).toBeDefined())
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV2).toBeDefined())
+    const refreshed = mod.getContextForDocumentPath(documentPath)
+    expect(refreshed?.uiCompletions?.CustomButton).toBeDefined()
+    expect(refreshed?.uiCompletions?.OfficialV1).toBeUndefined()
+    nowSpy.mockRestore()
+  })
+
+  it('does not let an old custom reduction overwrite a newer official context', async () => {
+    let now = 4_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV1: { lib: 'antd' } }) })
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV2: { lib: 'antd' } }) })
+    let resolveOld!: (value: any) => void
+    localFetchMock
+      .mockResolvedValueOnce({ SlowProps: () => new Promise((resolve) => { resolveOld = resolve }) })
+      .mockResolvedValueOnce({})
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(localFetchMock).toHaveBeenCalledTimes(1))
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV2).toBeDefined())
+
+    resolveOld({ OldCustom: { source: 'stale' } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV2).toBeDefined()
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV1).toBeUndefined()
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldCustom).toBeUndefined()
+    nowSpy.mockRestore()
+  })
+
   it('does not republish stale custom enhancement after global invalidation', async () => {
     findUpMock.mockResolvedValue('/workspace/package.json')
     fetchMock.mockResolvedValue({})

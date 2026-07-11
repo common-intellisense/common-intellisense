@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beginDocumentSlotAnalysis, clearDocumentAnalysesForPackages, clearDocumentAnalysis, commitDocumentSlotAnalysis, findUiTag, getDocumentSlotAnalysis, registerCodeLensProviderFn } from '../src/parser'
+import { getUiDeps } from '../src/ui/ui-utils'
 
 const identity = { packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 1 }
 
@@ -134,6 +135,26 @@ describe('per-document slot analysis', () => {
     const rawSlots = [{ name: 'label' }]
 
     await expect(findUiTag([child], { 'Form.Item': { rawSlots } })).resolves.toEqual([{ child, slots: rawSlots }])
+  })
+
+  it('uses import aliases and source scopes before flattened Slot candidates', async () => {
+    const makeChild = () => ({
+      type: 'JSXElement',
+      loc: { start: { line: 1, column: 0 }, end: { line: 1, column: 20 } },
+      children: [],
+      openingElement: { name: { type: 'JSXIdentifier', name: 'AppModal' } },
+    })
+    const antdSlots = [{ name: 'antd-slot' }]
+    const muiSlots = [{ name: 'mui-slot' }]
+    const deps = getUiDeps(`import { Modal as AppModal } from '@private/ui/modal'`) || {}
+    const sourceContext = {
+      cacheMap: new Map([['antd5', { Modal: { lib: 'antd', rawSlots: antdSlots } }]]),
+      sourceScopes: new Map([['@private/ui', { key: 'antd5', lib: 'antd' }]]),
+    }
+
+    const child = makeChild()
+    await expect(findUiTag([child], { AppModal: { lib: 'mui', rawSlots: muiSlots } }, [], new Set(), deps, [], sourceContext)).resolves.toEqual([{ child, slots: antdSlots }])
+    await expect(findUiTag([makeChild()], { AppModal: { lib: 'mui', rawSlots: muiSlots } }, [], new Set(), { AppModal: '@unknown/ui' }, [], sourceContext)).resolves.toEqual([])
   })
 
   it('can clear one document without affecting another', () => {

@@ -187,7 +187,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (cached)
       clearDocumentAnalysis(document.uri)
     const code = document.getText()
-    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, identity)
+    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes })
   }
   const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
     await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
@@ -438,7 +438,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const code = document.getText()
         if (document.isClosed)
           return
-        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision })
+        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes })
       }
       void analyze().catch(error => logger.error(`Slot analysis failed: ${String(error)}`))
     }, 200))
@@ -627,10 +627,13 @@ export async function activate(context: vscode.ExtensionContext) {
       else if (propName) {
         const r: any[] = []
         if (isValue) {
+          if (result.isDynamicArgument)
+            return
+          const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
           completionsCallback.filter((item: any) => hasProp(item)).filter((item: any) => {
             const reg = propName === 'bind'
-              ? new RegExp('^:')
-              : new RegExp(`^:?${propName}`)
+              ? /^:/
+              : new RegExp(`^:?${escapedPropName}`)
             return reg.test(item.label)
           }).forEach((item: any) => {
             item.propType?.split('/').forEach((p: string) => {

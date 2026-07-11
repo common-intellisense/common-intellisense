@@ -210,7 +210,7 @@ describe('activation registration', () => {
       packagePath: '/workspace/package.json',
       contextGeneration: 1,
       contextRevision: 2,
-    }))
+    }), { cacheMap: undefined, sourceScopes: undefined })
     ;(vscode.window.visibleTextEditors as any).length = 0
   })
 

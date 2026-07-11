@@ -98,21 +98,26 @@ export function createImportEdits(code: string, source: string, dependencies: st
   }
 
   if (importWay === 'specifier') {
-    const promotion = findTypeOnlyPromotion(matching, names.filter(name => !existing.has(name)))
-    if (promotion) {
-      const promoted = new Set(promotion.elements.map(element => element.name.text).filter(name => names.includes(name)))
-      const additional = names.filter(name => !promoted.has(name) && !existing.has(name) && !occupied.has(name))
-      const named = promotion.elements.map((element) => {
-        const text = getImportSpecifierText(element)
-        const isTypeOnly = promotion.declaration.importClause?.isTypeOnly || element.isTypeOnly
-        return isTypeOnly && !promoted.has(element.name.text) ? `type ${text}` : text
+    const conflicts = collectSpecifierConflicts(sourceFile, new Set(matching))
+    const requested = names.filter(name => !existing.has(name) && !conflicts.has(name))
+    const promotions = findTypeOnlyPromotions(matching, requested)
+    if (promotions.length) {
+      const promoted = new Set(promotions.flatMap(promotion => promotion.promotedNames))
+      const additional = requested.filter(name => !promoted.has(name))
+      return promotions.map((promotion, index) => {
+        const named = promotion.elements.map((element) => {
+          const text = getImportSpecifierText(element)
+          const isTypeOnly = promotion.declaration.importClause?.isTypeOnly || element.isTypeOnly
+          return isTypeOnly && !promotion.promotedNames.includes(element.name.text) ? `type ${text}` : text
+        })
+        if (index === 0)
+          named.push(...additional)
+        const clause = promotion.declaration.importClause!
+        const prefix = !clause.isTypeOnly && clause.name ? `${clause.name.text}, ` : ''
+        const preservedTypeDefault = clause.isTypeOnly && clause.name ? `import type ${clause.name.text} from ${JSON.stringify(source)}\n` : ''
+        const text = `${preservedTypeDefault}import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
+        return { start: script.offset + promotion.declaration.getStart(sourceFile), end: script.offset + promotion.declaration.end, text }
       })
-      named.push(...additional)
-      const clause = promotion.declaration.importClause!
-      const prefix = !clause.isTypeOnly && clause.name ? `${clause.name.text}, ` : ''
-      const preservedTypeDefault = clause.isTypeOnly && clause.name ? `import type ${clause.name.text} from ${JSON.stringify(source)}\n` : ''
-      const text = `${preservedTypeDefault}import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
-      return [{ start: script.offset + promotion.declaration.getStart(sourceFile), end: script.offset + promotion.declaration.end, text }]
     }
   }
 
@@ -167,17 +172,61 @@ function findTypeOnlyValuePromotion(imports: ts.ImportDeclaration[], names: stri
   }
 }
 
-function findTypeOnlyPromotion(imports: ts.ImportDeclaration[], names: string[]) {
+function findTypeOnlyPromotions(imports: ts.ImportDeclaration[], names: string[]) {
   const requested = new Set(names)
+  const promotions: Array<{ declaration: ts.ImportDeclaration, elements: ts.ImportSpecifier[], promotedNames: string[] }> = []
   for (const declaration of imports) {
     const clause = declaration.importClause
     const bindings = clause?.namedBindings
     if (!clause || !bindings || !ts.isNamedImports(bindings))
       continue
-    const promotable = bindings.elements.some(element => requested.has(element.name.text) && (clause.isTypeOnly || element.isTypeOnly))
-    if (promotable)
-      return { declaration, elements: [...bindings.elements] }
+    const promotedNames = bindings.elements
+      .filter(element => requested.has(element.name.text) && (clause.isTypeOnly || element.isTypeOnly))
+      .map(element => element.name.text)
+    if (promotedNames.length)
+      promotions.push({ declaration, elements: [...bindings.elements], promotedNames })
   }
+  return promotions
+}
+
+function collectSpecifierConflicts(sourceFile: ts.SourceFile, ignoredImports: Set<ts.ImportDeclaration>) {
+  const result = new Set<string>()
+  const addBindingName = (name: ts.BindingName) => {
+    if (ts.isIdentifier(name)) {
+      result.add(name.text)
+      return
+    }
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element))
+        addBindingName(element.name)
+    }
+  }
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause
+      if (clause?.name)
+        result.add(clause.name.text)
+      const bindings = clause?.namedBindings
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        result.add(bindings.name.text)
+      }
+      else if (bindings) {
+        for (const element of bindings.elements) {
+          const promotableTypeBinding = ignoredImports.has(statement) && (clause?.isTypeOnly || element.isTypeOnly)
+          if (!promotableTypeBinding)
+            result.add(element.name.text)
+        }
+      }
+    }
+    else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations)
+        addBindingName(declaration.name)
+    }
+    else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name) {
+      result.add(statement.name.text)
+    }
+  }
+  return result
 }
 
 function getImportSpecifierText(element: ts.ImportSpecifier) {

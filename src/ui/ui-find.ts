@@ -14,6 +14,15 @@ import { formatUIName, getAlias, getPrefix, getSelectedUIs } from './ui-utils'
 
 export const logger = createLog('common-intellisense')
 
+interface ContextModel {
+  optionsComponents: OptionsComponents
+  uiCompletions: PropsConfig | null
+  cacheMap: Map<string, any>
+  sourceScopes: Map<string, { key: string, lib: string }>
+}
+
+type CustomSourceSnapshots = Array<Record<string, any> | undefined>
+
 export interface PackageContext {
   cwd: string
   pkgPath: string
@@ -28,6 +37,8 @@ export interface PackageContext {
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
   sourceScopes: Map<string, { key: string, lib: string }>
+  officialModel: ContextModel
+  customSourceSnapshots: CustomSourceSnapshots
 }
 
 const contexts = new Map<string, PackageContext>()
@@ -111,7 +122,22 @@ function notifyContextUpdated(context: PackageContext) {
 }
 
 function emptyOptions(): OptionsComponents {
-  return { prefix: [], data: [], directivesMap: {}, libs: [] }
+  return { prefix: [], data: [], directivesMap: {}, libs: [], providerKeys: new Set() }
+}
+
+function cloneModel(model: ContextModel): ContextModel {
+  return {
+    cacheMap: new Map(model.cacheMap),
+    sourceScopes: new Map(model.sourceScopes),
+    optionsComponents: {
+      prefix: [...model.optionsComponents.prefix],
+      data: [...model.optionsComponents.data],
+      directivesMap: { ...model.optionsComponents.directivesMap },
+      libs: [...model.optionsComponents.libs],
+      providerKeys: new Set(model.optionsComponents.providerKeys),
+    },
+    uiCompletions: model.uiCompletions ? { ...model.uiCompletions } : null,
+  }
 }
 
 function nextGeneration(key: string) {
@@ -237,16 +263,21 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
   sourceRefreshes.add(refreshKey)
   const expectedEpoch = registryEpoch
   void buildContext(context.cwd, extensionContext, detectSlots, context.generation, workspaceRoot)
-    .then((refreshed) => {
+    .then(async (refreshed) => {
       const registered = contexts.get(contextKey)
       if (!refreshed || registryEpoch !== expectedEpoch || !registered || registered.generation !== context.generation || registered.officialCheckedAt !== context.officialCheckedAt || generations.get(contextKey) !== context.generation)
         return
-      refreshed.revision = registered.revision + 1
       refreshed.customSourcesCheckedAt = registered.customSourcesCheckedAt
-      contexts.set(contextKey, refreshed)
-      applyContext(refreshed)
-      notifyContextUpdated(refreshed)
-      startTrackedContextEnhancements(refreshed, expectedEpoch)
+      refreshed.customSourceSnapshots = [...registered.customSourceSnapshots]
+      const composed = await composeContextFromSnapshots(refreshed, refreshed.customSourceSnapshots)
+      const latest = contexts.get(contextKey)
+      if (registryEpoch !== expectedEpoch || latest !== registered || generations.get(contextKey) !== context.generation)
+        return
+      composed.revision = latest.revision + 1
+      contexts.set(contextKey, composed)
+      applyContext(composed)
+      notifyContextUpdated(composed)
+      startTrackedContextEnhancements(composed, expectedEpoch)
     })
     .catch(error => logger.error(`official source refresh failed: ${String(error)}`))
     .finally(() => sourceRefreshes.delete(refreshKey))
@@ -395,7 +426,21 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   await writeLocalCache()
 
   const checkedAt = Date.now()
-  return { cwd, pkgPath, workspaceRoot, generation, revision: 1, officialCheckedAt: checkedAt, customSourcesCheckedAt: 0, uiNames, currentPkgUiNames: availableNames, optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache, sourceScopes }
+  const officialModel: ContextModel = { optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache, sourceScopes }
+  return {
+    cwd,
+    pkgPath,
+    workspaceRoot,
+    generation,
+    revision: 1,
+    officialCheckedAt: checkedAt,
+    customSourcesCheckedAt: 0,
+    uiNames,
+    currentPkgUiNames: availableNames,
+    ...cloneModel(officialModel),
+    officialModel,
+    customSourceSnapshots: Array.from({ length: 3 }),
+  }
 }
 
 function startTrackedContextEnhancements(context: PackageContext, expectedEpoch: number) {
@@ -412,7 +457,7 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
     fetchFromRemoteUrls,
     fetchFromRemoteNpmUrls,
   ]
-  const sourceResults: Array<Record<string, any> | undefined> = Array.from({ length: loaders.length })
+  const sourceResults: CustomSourceSnapshots = [...context.customSourceSnapshots]
   let publishQueue: Promise<unknown> = Promise.resolve()
 
   let settled = 0
@@ -420,9 +465,9 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
     void Promise.resolve()
       .then(loader)
       .then((exports) => {
-        if (!exports)
-          return
-        sourceResults[index] = exports
+        // A successful empty result is a replacement snapshot and removes data
+        // previously published by this source. Rejections retain the old one.
+        sourceResults[index] = exports || {}
         // Serialize publications, but never source loading. Rebuild from the
         // official baseline in fixed loader order so completion timing cannot
         // change collision precedence.
@@ -443,30 +488,15 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
   })
 }
 
-async function publishContextEnhancement(context: PackageContext, expectedEpoch: number, sourceResults: Array<Record<string, any> | undefined>) {
-  if (registryEpoch !== expectedEpoch)
-    return
-  const contextKey = context.pkgPath || context.cwd
-  const current = contexts.get(contextKey)
-  const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
-  if (!current || current.generation !== context.generation || current.officialCheckedAt !== context.officialCheckedAt || latestGeneration !== context.generation)
-    return
-
-  const enhanced: PackageContext = {
+async function composeContextFromSnapshots(context: PackageContext, snapshots: CustomSourceSnapshots) {
+  const snapshotCopy: CustomSourceSnapshots = [...snapshots]
+  const composed: PackageContext = {
     ...context,
-    revision: current.revision + 1,
-    cacheMap: new Map(context.cacheMap),
-    sourceScopes: new Map(context.sourceScopes),
-    optionsComponents: {
-      prefix: [...context.optionsComponents.prefix],
-      data: [...context.optionsComponents.data],
-      directivesMap: { ...context.optionsComponents.directivesMap },
-      libs: [...context.optionsComponents.libs],
-    },
-    uiCompletions: context.uiCompletions ? { ...context.uiCompletions } : null,
+    ...cloneModel(context.officialModel),
+    customSourceSnapshots: snapshotCopy,
   }
 
-  for (const exports of sourceResults) {
+  for (const exports of snapshotCopy) {
     if (!exports)
       continue
     for (const key of Object.keys(exports)) {
@@ -474,18 +504,18 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
         if (key.endsWith('Components')) {
           const components = exports[key]?.()
           if (components) {
-            enhanced.cacheMap.set(key, components)
-            mergeComponents(enhanced.optionsComponents, components, {}, [], key.slice(0, -10))
+            composed.cacheMap.set(key, components)
+            mergeComponents(composed.optionsComponents, components, {}, [], key.slice(0, -10))
           }
         }
         else {
-          const completion = await exports[key]?.({ resolveFrom: enhanced.pkgPath })
+          const completion = await exports[key]?.({ resolveFrom: composed.pkgPath })
           if (completion) {
-            enhanced.cacheMap.set(key, completion)
-            enhanced.uiCompletions ||= {} as PropsConfig
-            Object.assign(enhanced.uiCompletions, completion)
+            composed.cacheMap.set(key, completion)
+            composed.uiCompletions ||= {} as PropsConfig
+            Object.assign(composed.uiCompletions, completion)
             registerCompletionScopes(
-              enhanced.sourceScopes,
+              composed.sourceScopes,
               completion,
               key,
               [key, key.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')],
@@ -498,10 +528,22 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
       }
     }
   }
+  return composed
+}
 
+async function publishContextEnhancement(context: PackageContext, expectedEpoch: number, sourceResults: CustomSourceSnapshots) {
+  if (registryEpoch !== expectedEpoch)
+    return
+  const contextKey = context.pkgPath || context.cwd
+  const current = contexts.get(contextKey)
+  const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
+  if (!current || current.generation !== context.generation || current.officialCheckedAt !== context.officialCheckedAt || latestGeneration !== context.generation)
+    return
+
+  const enhanced = await composeContextFromSnapshots(context, sourceResults)
   const registered = contexts.get(contextKey)
   const generation = generations.get(contextKey) ?? generations.get(context.cwd)
-  if (registryEpoch !== expectedEpoch || !registered || registered.generation !== context.generation || generation !== context.generation)
+  if (registryEpoch !== expectedEpoch || registered !== current || registered.generation !== context.generation || registered.officialCheckedAt !== context.officialCheckedAt || generation !== context.generation)
     return
   enhanced.revision = registered.revision + 1
   enhanced.customSourcesCheckedAt = Date.now()
@@ -512,14 +554,18 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
   return enhanced
 }
 
-function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string) {
+export function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string) {
   for (const component of components) {
     let { prefix, data, directives, lib } = component
     if (userPrefix?.[lib])
       prefix = userPrefix[lib]
-    if (target.libs.includes(lib) && target.prefix.includes(prefix))
+    const providerKey = `${lib}\0${prefix}`
+    target.providerKeys ||= new Set()
+    if (target.providerKeys.has(providerKey))
       continue
-    target.libs.push(lib)
+    target.providerKeys.add(providerKey)
+    if (!target.libs.includes(lib))
+      target.libs.push(lib)
     if (!target.prefix.includes(prefix))
       target.prefix.push(prefix)
     target.data.push(data)

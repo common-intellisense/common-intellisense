@@ -60,6 +60,49 @@ describe('import transforms', () => {
     expect(output).not.toContain('type Button as X')
   })
 
+  it('promotes requested bindings across multiple type-only declarations', () => {
+    const code = `#!/usr/bin/env node
+'use client'
+import type { Button } from "ui"
+import type { Input } from "ui"
+export default () => <><Button /><Input /></>
+`
+    const edits = createImportEdits(code, 'ui', ['Button', 'Input'])
+    const output = applyEdits(code, edits)
+
+    expect(edits).toHaveLength(2)
+    expect(edits[0].end).toBeLessThanOrEqual(edits[1].start)
+    expect(output).toContain('import { Button } from "ui"')
+    expect(output).toContain('import { Input } from "ui"')
+    expect(output).not.toContain('import type { Button')
+    expect(output).not.toContain('import type { Input')
+    expect(output.startsWith('#!/usr/bin/env node\n\'use client\'')).toBe(true)
+  })
+
+  it('promotes aliases across multiple type-only declarations', () => {
+    const code = `import type { Button as AppButton } from "ui"
+import type { Input as AppInput } from "ui"
+const view = [AppButton, AppInput]
+`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['AppButton', 'AppInput']))
+
+    expect(output).toContain('import { Button as AppButton } from "ui"')
+    expect(output).toContain('import { Input as AppInput } from "ui"')
+    expect(output).not.toContain('type Button as AppButton')
+    expect(output).not.toContain('type Input as AppInput')
+  })
+
+  it('promotes a remaining type binding when another binding is already runtime', () => {
+    const code = `import { Button } from "ui"
+import type { Input } from "ui"
+const view = [Button, Input]
+`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button', 'Input']))
+
+    expect(output.match(/import \{ Button \} from "ui"/g)).toHaveLength(1)
+    expect(output).toContain('import { Input } from "ui"')
+  })
+
   it('keeps type-only bindings from other sources occupied', () => {
     const code = `import type { Button } from "other-ui"\nexport default () => <Button />\n`
     expect(createImportEdits(code, 'ui', ['Button'])).toEqual([])
