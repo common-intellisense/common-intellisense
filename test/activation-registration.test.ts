@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     ensureContext: vi.fn(),
     detectSlots: vi.fn(),
     clearDocumentAnalysis: vi.fn(),
+    clearDocumentAnalysesForPackages: vi.fn(),
     getSlotAnalysis: vi.fn(),
     getPackageContext: vi.fn(),
     resolvePackagePath: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock('../src/ui/ui-find', () => ({
   logger: { info: vi.fn(), error: vi.fn() },
 }))
 vi.mock('../src/parser', () => ({
+  clearDocumentAnalysesForPackages: mocks.clearDocumentAnalysesForPackages,
   clearDocumentAnalysis: mocks.clearDocumentAnalysis,
   detectSlots: mocks.detectSlots,
   getDocumentSlotAnalysis: mocks.getSlotAnalysis,

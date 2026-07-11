@@ -183,6 +183,44 @@ describe('utils reducer regressions', () => {
     expect(legacy.Demo.rawSlots).toEqual([])
   })
 
+  it('normalizes object suggestions in snippets and documentation', async () => {
+    const { componentsReducer } = await import('../../src/ui/utils')
+    const parent = { name: 'Parent', suggestions: [{ name: 'Child', description: 'Child component', description_zh: '子组件' }] }
+    const child = { name: 'Child' }
+    const [config] = componentsReducer({
+      lib: 'fixture-lib',
+      map: [[parent, 'Parent detail'], [child, 'Child detail']] as any,
+    })
+
+    const completions = await Promise.all(config.data())
+    const parentCompletion = completions[0] as any
+
+    expect(parentCompletion.snippet).toContain('<child')
+    expect(parentCompletion.snippet).not.toContain('[object Object]')
+    expect(parentCompletion.documentation.value).toContain('- Child')
+    expect(parentCompletion.documentation.value).not.toContain('[object Object]')
+  })
+
+  it('keeps snippet tab stops for missing, invalid, and circular suggestions', async () => {
+    const { componentsReducer } = await import('../../src/ui/utils')
+    const cases = [
+      { name: 'MissingParent', suggestions: [{ name: 'Unknown' }] },
+      { name: 'InvalidParent', suggestions: [{ name: '' }] },
+      { name: 'CircularParent', suggestions: [{ name: 'CircularParent' }] },
+    ]
+    const [config] = componentsReducer({
+      lib: 'fixture-lib',
+      map: cases.map(component => [component, component.name]) as any,
+    })
+
+    const completions = await Promise.all(config.data()) as any[]
+    for (const completion of completions) {
+      expect(completion.snippet).toMatch(/\$\d+/)
+      expect(completion.snippet).not.toContain('[object Object]')
+    }
+    expect(completions[0].snippet).not.toContain('<unknown1>')
+  })
+
   it('componentsReducer uses item-local dynamicLib/importWay without enabling HTML markdown', async () => {
     const { componentsReducer } = await import('../../src/ui/utils')
 

@@ -49,6 +49,29 @@ describe('import transforms', () => {
     expect(createImportEdits(code, 'ui', ['Button'])).toEqual([])
   })
 
+  it('promotes a type-only default import to runtime', () => {
+    const code = `import type Button from "ui"\nexport default () => <Button />\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'default'))
+
+    expect(output).toContain('import Button from "ui"')
+    expect(output).not.toContain('import type Button')
+  })
+
+  it('promotes a type-only namespace import to runtime', () => {
+    const code = `import type * as UI from "ui"\nexport default () => <UI.Button />\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['UI'], 'as default'))
+
+    expect(output).toContain('import * as UI from "ui"')
+    expect(output).not.toContain('import type * as UI')
+  })
+
+  it('promotes a type-only default while preserving named types', () => {
+    const code = `import type Button, { ButtonProps } from "ui"\nexport default () => <Button />\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'default'))
+
+    expect(output).toContain('import Button, { type ButtonProps } from "ui"')
+  })
+
   it('emits one valid statement per default or namespace dependency', () => {
     expect(applyEdits('', createImportEdits('', 'ui/button', ['Button', 'ButtonGroup'], 'default'))).toBe(
       'import Button from "ui/button"\nimport ButtonGroup from "ui/button"\n',

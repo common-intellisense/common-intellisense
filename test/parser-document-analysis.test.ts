@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beginDocumentSlotAnalysis, clearDocumentAnalysis, commitDocumentSlotAnalysis, getDocumentSlotAnalysis, registerCodeLensProviderFn } from '../src/parser'
+import { beginDocumentSlotAnalysis, clearDocumentAnalysesForPackages, clearDocumentAnalysis, commitDocumentSlotAnalysis, getDocumentSlotAnalysis, registerCodeLensProviderFn } from '../src/parser'
 
 const identity = { packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 1 }
 
@@ -104,6 +104,18 @@ describe('per-document slot analysis', () => {
 
     expect(getDocumentSlotAnalysis('file:///workspace/0.vue')).toBeUndefined()
     expect(getDocumentSlotAnalysis('file:///workspace/20.vue')).toBeDefined()
+  })
+
+  it('clears analyses only for affected packages', () => {
+    const a = { ...identity, packagePath: '/workspace/a/package.json' }
+    const b = { ...identity, packagePath: '/workspace/b/package.json' }
+    commit('file:///workspace/a.vue', 1, [], a)
+    commit('file:///workspace/b.vue', 1, [], b)
+
+    clearDocumentAnalysesForPackages(['/workspace/a/package.json'])
+
+    expect(getDocumentSlotAnalysis('file:///workspace/a.vue')).toBeUndefined()
+    expect(getDocumentSlotAnalysis('file:///workspace/b.vue')).toBeDefined()
   })
 
   it('can clear one document without affecting another', () => {

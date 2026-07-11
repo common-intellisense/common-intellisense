@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('ofetch', () => ({ ofetch: vi.fn() }))
+vi.mock('@vscode-use/utils', () => ({
+  createFakeProgress: ({ callback }: any) => callback(() => {}, () => {}),
+  getConfiguration: (key: string) => key === 'common-intellisense.trustedHosts' ? ['trusted.test'] : null,
+  getLocale: () => 'en',
+  getRootPath: () => '',
+  message: { error: vi.fn() },
+}))
 vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsReducer: (v: any) => v }))
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: vi.fn(), error: vi.fn() } }))
 
@@ -65,6 +72,26 @@ describe('remote redirect validation', () => {
 
     await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }])).resolves.toBe('manifest')
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, 'https://cdn.example/adapter', expect.objectContaining({ redirect: 'manual' }))
+  })
+
+  it.each([
+    ['http://localhost/adapter', 'http://localhost/adapter.json'],
+    ['http://trusted.test/adapter', 'http://trusted.test/adapter.json'],
+  ])('allows redirects within the initial trusted host: %s', async (initial, redirected) => {
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch)
+      .mockImplementationOnce(async (_url: any, options: any) => {
+        options.onResponse({ response: { status: 302, headers: { get: () => redirected } } })
+        return ''
+      })
+      .mockImplementationOnce(async (_url: any, options: any) => {
+        options.onResponse({ response: { status: 200, headers: { get: () => null } } })
+        return 'manifest'
+      })
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+
+    await expect(fetchRemoteText(initial)).resolves.toBe('manifest')
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, redirected, expect.objectContaining({ redirect: 'manual' }))
   })
 
   it('stops redirect loops at the configured limit', async () => {

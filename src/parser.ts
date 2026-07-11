@@ -100,7 +100,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
     errors,
   } = getVueSfcParseResult(code)
 
-  if (errors.length)
+  if (errors.length && !template?.ast)
     return
   const _script = script || scriptSetup
   if (!template) {
@@ -128,7 +128,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
       template,
     }
   }
-  if (!isInPosition(template.loc, position, offset))
+  if (!errors.length && !isInPosition(template.loc, position, offset))
     return
   // 在template中
   const { ast } = template
@@ -831,6 +831,28 @@ const codeLensEmitter = new vscode.EventEmitter<void>()
 
 export function refreshCodeLenses() {
   codeLensEmitter.fire()
+}
+
+export function clearDocumentAnalysesForPackages(packagePaths: string[]) {
+  if (!packagePaths.length) {
+    clearDocumentAnalysis()
+    return
+  }
+  const affected = new Set(packagePaths)
+  let deleted = false
+  for (const [uri, analysis] of documentSlotAnalyses) {
+    if (!affected.has(analysis.packagePath))
+      continue
+    documentSlotAnalyses.delete(uri)
+    latestSlotRequests.delete(uri)
+    deleted = true
+  }
+  for (const [uri, request] of latestSlotRequests) {
+    if (affected.has(request.packagePath))
+      latestSlotRequests.delete(uri)
+  }
+  if (deleted)
+    refreshCodeLenses()
 }
 
 export function clearDocumentAnalysis(uri?: string | vscode.Uri) {

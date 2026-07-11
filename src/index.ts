@@ -10,7 +10,7 @@ import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
 import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui/ui-utils'
-import { clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
+import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
 interface DocumentAnalysisCacheEntry {
@@ -123,8 +123,18 @@ export async function activate(context: vscode.ExtensionContext) {
     const code = document.getText()
     await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, identity)
   }
+  const rebuildVisibleDocumentContexts = async () => {
+    await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
+      if (isSkip(document))
+        return
+      const packageContext = await ensureDocumentContext(document)
+      await analyzeDocumentSlots(document, packageContext)
+    }))
+  }
 
-  context.subscriptions.push(onPackageContextsInvalidated(() => clearDocumentAnalysis()))
+  context.subscriptions.push(onPackageContextsInvalidated(packagePaths => packagePaths?.length
+    ? clearDocumentAnalysesForPackages(packagePaths)
+    : clearDocumentAnalysis()))
   context.subscriptions.push(onPackageContextUpdated((packageContext) => {
     for (const editor of vscode.window.visibleTextEditors) {
       const documentPath = getDocumentPath(editor.document)
@@ -147,9 +157,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await fsp.rm(localCacheUri, { force: true })
     }
     catch {}
-    const editor = vscode.window.activeTextEditor
-    if (editor && !isSkip(editor.document))
-      await ensureDocumentContext(editor.document)
+    await rebuildVisibleDocumentContexts()
   }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
@@ -237,9 +245,7 @@ export async function activate(context: vscode.ExtensionContext) {
     invalidateContexts()
     clearDocumentAnalysis()
     documentAnalysisCache.clear()
-    const editor = vscode.window.activeTextEditor
-    if (editor && !isSkip(editor.document))
-      void ensureDocumentContext(editor.document).catch(error => logger.error(`Failed to reload context after configuration change: ${String(error)}`))
+    void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.import', async (params, _loc, _lineOffset) => {

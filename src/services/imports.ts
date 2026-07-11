@@ -55,6 +55,43 @@ export function createImportEdits(code: string, source: string, dependencies: st
   const existing = collectRuntimeBindings(runtimeMatching, importWay)
   const occupied = collectTopLevelBindings(sourceFile)
 
+  if (importWay === 'default' || importWay === 'as default') {
+    const promotion = findTypeOnlyValuePromotion(matching, names, importWay)
+    if (promotion) {
+      const promotedName = importWay === 'default'
+        ? promotion.clause.name!.text
+        : (promotion.clause.namedBindings as ts.NamespaceImport).name.text
+      const additional = names.filter(name => name !== promotedName && !existing.has(name) && !occupied.has(name))
+      const sourceText = JSON.stringify(source)
+      const preserved: string[] = []
+      if (importWay === 'default') {
+        const bindings = promotion.clause.namedBindings
+        if (bindings && ts.isNamedImports(bindings)) {
+          const named = bindings.elements.map(element => `type ${getImportSpecifierText(element)}`)
+          preserved.push(`import ${promotedName}, { ${named.join(', ')} } from ${sourceText}`)
+        }
+        else {
+          preserved.push(`import ${promotedName} from ${sourceText}`)
+          if (bindings && ts.isNamespaceImport(bindings))
+            preserved.push(`import type * as ${bindings.name.text} from ${sourceText}`)
+        }
+      }
+      else {
+        if (promotion.clause.name)
+          preserved.push(`import type ${promotion.clause.name.text} from ${sourceText}`)
+        preserved.push(`import * as ${promotedName} from ${sourceText}`)
+      }
+      const extraStatements = createStatements(source, additional, importWay)
+      if (extraStatements)
+        preserved.push(extraStatements)
+      return [{
+        start: script.offset + promotion.declaration.getStart(sourceFile),
+        end: script.offset + promotion.declaration.end,
+        text: preserved.join('\n'),
+      }]
+    }
+  }
+
   if (importWay === 'specifier') {
     const promotion = findTypeOnlyPromotion(matching, names.filter(name => !existing.has(name)))
     if (promotion) {
@@ -110,6 +147,19 @@ export function createImportEdits(code: string, source: string, dependencies: st
     : beforeInsertion.endsWith('\n') ? '' : '\n'
   const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
   return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }]
+}
+
+function findTypeOnlyValuePromotion(imports: ts.ImportDeclaration[], names: string[], importWay: Exclude<ImportWay, 'specifier'>) {
+  const requested = new Set(names)
+  for (const declaration of imports) {
+    const clause = declaration.importClause
+    if (!clause?.isTypeOnly)
+      continue
+    if (importWay === 'default' && clause.name && requested.has(clause.name.text))
+      return { declaration, clause }
+    if (importWay === 'as default' && clause.namedBindings && ts.isNamespaceImport(clause.namedBindings) && requested.has(clause.namedBindings.name.text))
+      return { declaration, clause }
+  }
 }
 
 function findTypeOnlyPromotion(imports: ts.ImportDeclaration[], names: string[]) {

@@ -31,6 +31,42 @@ describe('persistent fetch cache', () => {
     await expect(Promise.resolve(mod.getLocalCache)).resolves.toBe('done reading')
   })
 
+  it('does not restore an old read after caches are cleared', async () => {
+    vi.resetModules()
+    statMock.mockReset().mockResolvedValue({ size: 10 })
+    readFileMock.mockReset()
+    let releaseRead!: (value: string) => void
+    readFileMock.mockImplementationOnce(() => new Promise<string>((resolve) => { releaseRead = resolve }))
+    const mod = await import('../../src/services/fetch')
+    mod.configureCacheStorage('/tmp/cache')
+
+    const pending = Promise.resolve(mod.getLocalCache)
+    await vi.waitFor(() => expect(readFileMock).toHaveBeenCalled())
+    mod.clearFetchCaches()
+    releaseRead(JSON.stringify({ schemaVersion: 1, entries: [['old', 'payload']] }))
+    await pending
+
+    expect(mod.cacheFetch.has('old')).toBe(false)
+  })
+
+  it('does not restore a read from a previous cache location', async () => {
+    vi.resetModules()
+    statMock.mockReset().mockResolvedValue({ size: 10 })
+    readFileMock.mockReset()
+    let releaseRead!: (value: string) => void
+    readFileMock.mockImplementationOnce(() => new Promise<string>((resolve) => { releaseRead = resolve }))
+    const mod = await import('../../src/services/fetch')
+    mod.configureCacheStorage('/tmp/old-cache')
+
+    const pending = Promise.resolve(mod.getLocalCache)
+    await vi.waitFor(() => expect(readFileMock).toHaveBeenCalled())
+    mod.configureCacheStorage('/tmp/new-cache')
+    releaseRead(JSON.stringify({ schemaVersion: 1, entries: [['old-location', 'payload']] }))
+    await pending
+
+    expect(mod.cacheFetch.has('old-location')).toBe(false)
+  })
+
   it('does not rename an old write after caches are cleared', async () => {
     vi.resetModules()
     let releaseWrite!: () => void

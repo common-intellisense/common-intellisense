@@ -24,12 +24,14 @@ const cacheSchemaVersion = 1
 const maxCacheSize = 16 * 1024 * 1024
 export let localCacheUri = path.join(os.tmpdir(), 'common-intellisense', 'mapping.json')
 let cacheReadTask: Promise<string> | null = null
+let cacheReadEpoch = 0
 let cacheWriteTask: Promise<void> = Promise.resolve()
 let cacheWriteEpoch = 0
 
 export function configureCacheStorage(storageUri: vscode.Uri | string) {
   const storagePath = typeof storageUri === 'string' ? storageUri : storageUri.fsPath
   localCacheUri = path.join(storagePath, 'mapping.json')
+  cacheReadEpoch++
   cacheWriteEpoch++
   cacheReadTask = null
 }
@@ -319,23 +321,30 @@ function appendReducedExports(target: Record<string, any>, exportsData: Record<s
 }
 
 async function readLocalCache() {
+  const epoch = cacheReadEpoch
+  const cachePath = localCacheUri
   try {
-    const stat = await fsp.stat(localCacheUri)
+    const stat = await fsp.stat(cachePath)
     if (stat.size > maxCacheSize)
       throw new Error(`Cache is too large: ${stat.size}`)
-    const text = await fsp.readFile(localCacheUri, 'utf8')
+    const text = await fsp.readFile(cachePath, 'utf8')
     const parsed = JSON.parse(text)
     const entries = Array.isArray(parsed) ? parsed : parsed?.schemaVersion === cacheSchemaVersion ? parsed.entries : null
     if (!Array.isArray(entries))
       throw new Error('Unsupported cache schema')
+    const pendingEntries = new Map<string, string>()
     for (const entry of entries) {
       if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string')
-        cacheFetch.set(entry[0], entry[1])
+        pendingEntries.set(entry[0], entry[1])
+    }
+    if (epoch === cacheReadEpoch && cachePath === localCacheUri) {
+      for (const [key, value] of pendingEntries)
+        cacheFetch.set(key, value)
     }
   }
   catch (error: any) {
     if (error?.code !== 'ENOENT')
-      logger.error(`Failed to read cache ${localCacheUri}: ${String(error)}`)
+      logger.error(`Failed to read cache ${cachePath}: ${String(error)}`)
   }
   return 'done reading'
 }
@@ -558,10 +567,33 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
 
 const maxRemoteRedirects = 5
 
+type RemoteTrustClass
+  = | { kind: 'publicHttps' }
+    | { kind: 'localhostHttp', hostname: string }
+    | { kind: 'explicitTrustedHost', hostname: string }
+
+async function getRemoteTrustClass(uri: string, resolveHost: ResolveHost): Promise<RemoteTrustClass | undefined> {
+  const target = new URL(uri)
+  const hostname = target.hostname.toLowerCase()
+  if (target.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname))
+    return { kind: 'localhostHttp', hostname }
+  if ((target.protocol === 'http:' || target.protocol === 'https:') && isExplicitlyTrustedHost(hostname))
+    return { kind: 'explicitTrustedHost', hostname }
+  if (await validateRedirectTarget(uri, resolveHost))
+    return { kind: 'publicHttps' }
+}
+
+async function isRedirectAllowed(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
+  const target = new URL(uri)
+  const hostname = target.hostname.toLowerCase()
+  if (trust.kind === 'publicHttps')
+    return validateRedirectTarget(uri, resolveHost)
+  return hostname === trust.hostname && (target.protocol === 'http:' || target.protocol === 'https:')
+}
+
 export async function fetchRemoteText(uri: string, resolveHost: ResolveHost = hostname => dns.lookup(hostname, { all: true, verbatim: true })) {
-  const initial = new URL(uri)
-  const isLocalHttp = initial.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(initial.hostname)
-  if (!isLocalHttp && !isExplicitlyTrustedHost(initial.hostname) && !await validateRedirectTarget(uri, resolveHost))
+  const trust = await getRemoteTrustClass(uri, resolveHost)
+  if (!trust)
     throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
   let current = uri
   for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
@@ -584,7 +616,7 @@ export async function fetchRemoteText(uri: string, resolveHost: ResolveHost = ho
       if (redirects === maxRemoteRedirects)
         throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
       const next = new URL(location, current).toString()
-      if (!await validateRedirectTarget(next, resolveHost))
+      if (!await isRedirectAllowed(next, trust, resolveHost))
         throw new Error(`Remote adapter redirected to an untrusted URL: ${next}`)
       current = next
       continue
@@ -874,6 +906,7 @@ async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspa
 
 export function clearFetchCaches() {
   sourceEpoch++
+  cacheReadEpoch++
   cacheWriteEpoch++
   cacheFetch.clear()
   commonIntellisenseInFlight.clear()

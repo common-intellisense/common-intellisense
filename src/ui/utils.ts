@@ -29,6 +29,11 @@ export interface CompletionRenderContext {
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
 
+function normalizeSuggestionName(suggestion: string | SuggestionItem | undefined): string | undefined {
+  const name = typeof suggestion === 'string' ? suggestion : suggestion?.name
+  return typeof name === 'string' && name.trim() ? name.trim() : undefined
+}
+
 function normalizeRenderContext(input?: CompletionRenderInput): CompletionRenderContext {
   if (typeof input === 'object' && input)
     return input
@@ -702,7 +707,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           if (typeof content === 'object' && content.suggestions?.length) {
             documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
             // FIXME: suggestions的Item有对象形式的vant4里面,里面的文案要怎么展示
-            documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${item}`).join('\n')}\n`)
+            documentation.appendMarkdown(`${content.suggestions.map(normalizeSuggestionName).filter((name): name is string => !!name).map(name => `- ${name}`).join('\n')}\n`)
           }
           documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
@@ -752,7 +757,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
           if (typeof content === 'object' && content.suggestions?.length) {
             documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
-            documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
+            documentation.appendMarkdown(`${content.suggestions.map(normalizeSuggestionName).filter((name): name is string => !!name).map(name => `- ${name}`).join('\n')}\n`)
           }
           documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
@@ -805,7 +810,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
       if (typeof content === 'object' && content.suggestions?.length) {
         documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
-        documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
+        documentation.appendMarkdown(`${content.suggestions.map(normalizeSuggestionName).filter((name): name is string => !!name).map(name => `- ${name}`).join('\n')}\n`)
       }
       documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
       documentation.appendCodeblock(demo, 'html')
@@ -1054,9 +1059,8 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
   return [requiredProps, index]
 }
 
-function findTargetMap(maps: any, suggestionTag: string | SuggestionItem) {
-  let label = typeof suggestionTag === 'string' ? suggestionTag : suggestionTag.name
-  label = toCamel(`-${label}`)
+function findTargetMap(maps: any, suggestionTag: string) {
+  const label = toCamel(`-${suggestionTag}`)
   for (const map of maps) {
     if (typeof map[0] === 'object') {
       if (toCamel(`-${map[0].name}`) === label)
@@ -1167,18 +1171,20 @@ async function getTemplateStr(map: any, content: any, index: number, framework: 
 
 async function getSuggestionsTemplateStr(content: any, map: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
   if (content.suggestions?.length) {
-    const suggestionTag = content.suggestions[0]
-    tags.add(suggestionTag)
-    const suggestion = findTargetMap(map, suggestionTag)
-    let [childRequiredProps, _index] = await getRequireProp(suggestion, index, framework, parent)
+    const suggestionName = normalizeSuggestionName(content.suggestions[0])
+    if (!suggestionName)
+      return `$${++index}`
+    const suggestion = findTargetMap(map, suggestionName)
+    const suggestionTag = isSeperatorByHyphen ? hyphenate(suggestionName) : suggestionName
+    const [childRequiredProps, _index] = await getRequireProp(suggestion, index, framework, parent)
 
     if (suggestion) {
-      const children = await getTemplateStr(map, suggestion, ++_index, framework, isSeperatorByHyphen, parent, tags)
-      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index}>${children}</${suggestionTag}>\n`
+      if (tags.has(suggestionTag))
+        return `$${_index + 1}`
+      return getTemplateStr(map, suggestion, _index, framework, isSeperatorByHyphen, parent, tags)
     }
-    else {
-      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>$${++_index}</${suggestionTag}>\n`
-    }
+    tags.add(suggestionTag)
+    return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index + 1}>$${_index + 2}</${suggestionTag}>\n`
   }
   return `$${++index}`
 }
