@@ -8,6 +8,19 @@ import { translate } from '../translate'
 import { resolveInstalledPackageVersion } from '../services/package-version'
 import { logger } from '../ui/ui-find'
 
+const TRUSTED_COMMANDS = {
+  enabledCommands: [
+    'intellisense.openDocument',
+    'intellisense.openDocumentExternal',
+    'intellisense.copyDemo',
+  ],
+}
+
+function enableCommandTrust(documentation: vscode.MarkdownString) {
+  documentation.isTrusted = TRUSTED_COMMANDS
+  return documentation
+}
+
 export interface PropsOptions {
   uiName: string
   lib: string
@@ -124,21 +137,19 @@ export function propsReducer(options: PropsOptions) {
 
       Object.keys(filterProps).forEach((key) => {
         const value = (item.props as any)[key]
+        const normalizedDefault = value.default === undefined || value.default === '' ? undefined : String(value.default)
+        const normalizedType = Array.isArray(value.type) ? value.type.join(' / ') : value.type
         let type = vscode.CompletionItemKind.Property
         if (typeof value.value !== 'string')
           type = vscode.CompletionItemKind.Enum
 
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail = []
 
         detail.push(`**${uiName} [${item.name}]**`)
 
-        if (value.default !== undefined && value.default !== '') {
-          value.default = String(value.default)
-          detail.push(`- 💎 ${isZh ? '默认值' : 'default'}:    ***\`${value.default.replace(/[`\n]/g, '')}\`***`)
-        }
+        if (normalizedDefault !== undefined)
+          detail.push(`- 💎 ${isZh ? '默认值' : 'default'}:    ***\`${normalizedDefault.replace(/[`\n]/g, '')}\`***`)
 
         if (value.version) {
           if (isZh)
@@ -158,12 +169,8 @@ export function propsReducer(options: PropsOptions) {
             detail.push(`- 🔦 description:    ***\`${value.description}\`***`)
         }
 
-        if (value.type) {
-          if (Array.isArray(value.type)) {
-            value.type = value.type.join(' / ')
-          }
-          detail.push(`- 💡 ${isZh ? '类型' : 'type'}:    ***\`${value.type.replace(/`/g, '')}\`***`)
-        }
+        if (normalizedType)
+          detail.push(`- 💡 ${isZh ? '类型' : 'type'}:    ***\`${normalizedType.replace(/`/g, '')}\`***`)
 
         documentation.appendMarkdown(detail.join('\n\n'))
 
@@ -230,10 +237,10 @@ export function propsReducer(options: PropsOptions) {
           content = key
           snippet = `${key}="${value.value}"`
         }
-        else if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'false') {
+        else if (normalizedType && normalizedType.toLowerCase().trim() === 'boolean' && normalizedDefault === 'false') {
           content = snippet = key
         }
-        else if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'true') {
+        else if (normalizedType && normalizedType.toLowerCase().trim() === 'boolean' && normalizedDefault === 'true') {
           if (isVue) {
             content = key
             snippet = `:${key}="false"`
@@ -257,8 +264,8 @@ export function propsReducer(options: PropsOptions) {
         else {
           content = `${key}=""`
 
-          if (value.type?.includes('/'))
-            snippet = `${key}="\${1|${value.type.split('/').map((i: string) => i.replace(/['"`\s]/g, '').replace(/,/g, '\\,')).filter((i: string) => i.length).join(',')}|}"`
+          if (normalizedType?.includes('/'))
+            snippet = `${key}="\${1|${normalizedType.split('/').map((i: string) => i.replace(/['"`\s]/g, '').replace(/,/g, '\\,')).filter((i: string) => i.length).join(',')}|}"`
           else
             snippet = `${key}="\${1}"`
         }
@@ -269,22 +276,22 @@ export function propsReducer(options: PropsOptions) {
             ? `***描述***: ${value.description_zh || value.description}`
             : `***description***: ${value.description}`)
         }
-        if (value.default !== undefined && value.default !== '') {
+        if (normalizedDefault !== undefined) {
           detailsLines.push(isZh
-            ? `***默认***: ${value.default.replace(/\n/g, '')}`
-            : `***default***: ${value.default.replace(/\n/g, '')}`)
+            ? `***默认***: ${normalizedDefault.replace(/\n/g, '')}`
+            : `***default***: ${normalizedDefault.replace(/\n/g, '')}`)
         }
-        if (value.type) {
+        if (normalizedType) {
           detailsLines.push(isZh
-            ? `***类型***: ${value.type.replace(/\n/g, '')}`
-            : `***type***: ${value.type.replace(/\n/g, '')}`)
+            ? `***类型***: ${normalizedType.replace(/\n/g, '')}`
+            : `***type***: ${normalizedType.replace(/\n/g, '')}`)
         }
         const details = detailsLines.join('\n-  ')
         const propDesc = isZh ? (value.description_zh || value.description) : value.description
         if (propDesc)
           content += `  ${propDesc}`
-        if (value.default)
-          content += `  ${isZh ? '默认' : 'default'}：${value.default.replace(/\n/g, '')}`
+        if (normalizedDefault)
+          content += `  ${isZh ? '默认' : 'default'}：${normalizedDefault.replace(/\n/g, '')}`
         data.push(createCompletionItem({
           content,
           details,
@@ -294,7 +301,7 @@ export function propsReducer(options: PropsOptions) {
           preselect: true,
           sortText: '0',
           params: [uiName, key.replace(/^:/, '')],
-          propType: Array.isArray(value.value) ? value.value.join(' / ') : value.type,
+          propType: Array.isArray(value.value) ? value.value.join(' / ') : normalizedType,
           command: {
             command: 'editor.action.triggerSuggest', // 这个命令会触发代码提示
             title: 'Trigger Suggest',
@@ -324,19 +331,20 @@ export function propsReducer(options: PropsOptions) {
             params: [],
           },
         ]
+        const localEvents = [...item.events]
 
         originEvent.forEach((_event) => {
-          if (!item.events.find(event => event.name === _event.name))
-            item.events.push(_event)
+          if (!localEvents.find(event => event.name === _event.name))
+            localEvents.push(_event)
         })
 
         // 过滤在某个版本才增加的新事件
         const filterEvents = localVersion
-          ? item.events.filter((event) => {
+          ? localEvents.filter((event) => {
               const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
               return !(version && compareVersion(version, localVersion!) === 1)
             })
-          : item.events
+          : localEvents
 
         return filterEvents.map((events: any) => {
           const detail: string[] = []
@@ -392,9 +400,7 @@ export function propsReducer(options: PropsOptions) {
               : `***params***: ${params.replace(/\n/g, '')}`)
           }
           const details = detailsLines.join('\n-  ')
-          const documentation = new vscode.MarkdownString()
-          documentation.isTrusted = true
-          documentation.supportHtml = true
+          const documentation = enableCommandTrust(new vscode.MarkdownString())
           documentation.appendMarkdown(detail.join('\n\n'))
           return proxyCreateCompletionItem({ content, snippet, details, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
         },
@@ -412,9 +418,7 @@ export function propsReducer(options: PropsOptions) {
           })
         : item.methods
       methods.push(...filterMethods.map((method) => {
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail: string[] = []
         const { name, description, params, description_zh } = method
 
@@ -448,9 +452,7 @@ export function propsReducer(options: PropsOptions) {
           })
         : item.exposed
       exposed.push(...filterExposed.map((expose) => {
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const details: string[] = []
         const { name, description, detail, description_zh } = expose
 
@@ -485,9 +487,7 @@ export function propsReducer(options: PropsOptions) {
         : item.slots
       filterSlots.forEach((slot) => {
         const { name, description, description_zh } = slot
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail = []
         if (description) {
           if (isZh)
@@ -502,9 +502,7 @@ export function propsReducer(options: PropsOptions) {
     }
 
     const createTableDocument = () => {
-      const documentation = createMarkdownString()
-      documentation.isTrusted = true
-      documentation.supportHtml = true
+      const documentation = enableCommandTrust(createMarkdownString())
       const details: string[] = []
       let text = `**${uiName} [${item.name}]**`
       if (item.link) {
@@ -616,7 +614,7 @@ export function propsReducer(options: PropsOptions) {
     }
     const tableDocument = createTableDocument()
     const name = item.name.split('.')[0]
-    const from = (item.dynamicLib || dynamicLib) ? (dynamicLib || item.dynamicLib)!.replace('${name}', hyphenate(name)) : lib
+    const from = (item.dynamicLib || dynamicLib) ? (item.dynamicLib || dynamicLib)!.replace('${name}', hyphenate(name)) : lib
     result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: item.slots, uiName, lib: from }
     return result
   }, result)
@@ -662,7 +660,7 @@ export interface ComponentsConfigItem {
 
 export type ComponentsConfig = ComponentsConfigItem[]
 export function componentsReducer(options: ComponentOptions): ComponentsConfig {
-  let { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
+  const { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
   const isZh = getLocale().includes('zh')
 
   if (!isReact && prefix) {
@@ -676,11 +674,11 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           let snippet = ''
           let _content = ''
           let description = ''
+          let itemDynamicLib = dynamicLib
+          let itemImportWay = importWay
           if (typeof content === 'object') {
-            if (content.dynamicLib)
-              dynamicLib = content.dynamicLib
-            if (content.importWay)
-              importWay = content.importWay
+            itemDynamicLib = content.dynamicLib || dynamicLib
+            itemImportWay = content.importWay || importWay
 
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
             snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
@@ -693,9 +691,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           }
           if (!demo)
             demo = snippet
-          const documentation = new vscode.MarkdownString()
-          documentation.isTrusted = true
-          documentation.supportHtml = true
+          const documentation = enableCommandTrust(new vscode.MarkdownString())
 
           documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
           if (typeof content === 'object' && content.suggestions?.length) {
@@ -703,12 +699,11 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             // FIXME: suggestions的Item有对象形式的vant4里面,里面的文案要怎么展示
             documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${item}`).join('\n')}\n`)
           }
-          const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
           documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
           // FIXME: 要求输入数组，但是demo类型是字符串，但是都通过JSON.stringify处理了，所以这里转成[demo]?
           const params = setCommandParams(demo as any)
-          documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
+          documentation.appendMarkdown(`\n[Copy](command:intellisense.copyDemo?${params})\n`)
 
           // FIXME: params要求string| string[]
           // const fixParams: FixParams = [content as Component, lib, isReact, prefix, dynamicLib || '', importWay || '']
@@ -717,8 +712,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             lib,
             isReact,
             prefix,
-            dynamicLib,
-            importWay,
+            dynamicLib: itemDynamicLib || '',
+            importWay: itemImportWay || 'specifier',
           }
           return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
@@ -732,7 +727,11 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           let snippet = ''
           let _content = ''
           let description = ''
+          let itemDynamicLib = dynamicLib
+          let itemImportWay = importWay
           if (typeof content === 'object') {
+            itemDynamicLib = content.dynamicLib || dynamicLib
+            itemImportWay = content.importWay || importWay
             snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
             const tag = content.name.slice(prefix.length)
             _content = `${tag}  ${content.tag || detail}`
@@ -744,20 +743,17 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           }
           if (!demo)
             demo = snippet
-          const documentation = new vscode.MarkdownString()
-          documentation.isTrusted = true
-          documentation.supportHtml = true
+          const documentation = enableCommandTrust(new vscode.MarkdownString())
           documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
           if (typeof content === 'object' && content.suggestions?.length) {
             documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
             documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
           }
-          const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
           documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
           // FIXME: 同上
           const params = setCommandParams(demo as any)
-          documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
+          documentation.appendMarkdown(`\n[Copy](command:intellisense.copyDemo?${params})\n`)
 
           // FIXME: params要求string| string[]
           const fixParams: any = {
@@ -765,8 +761,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             lib,
             isReact: true,
             prefix,
-            dynamicLib,
-            importWay,
+            dynamicLib: itemDynamicLib,
+            importWay: itemImportWay,
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]
           return createCompletionItem({ content: _content, detail: description, snippet, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -783,11 +779,11 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       let snippet = ''
       let _content = ''
       let description = ''
+      let itemDynamicLib = dynamicLib
+      let itemImportWay = importWay
       if (typeof content === 'object') {
-        if (content.dynamicLib)
-          dynamicLib = content.dynamicLib
-        if (content.importWay)
-          importWay = content.importWay
+        itemDynamicLib = content.dynamicLib || dynamicLib
+        itemImportWay = content.importWay || importWay
         snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
         const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
         _content = `${tag}  ${content.tag || detail}`
@@ -800,20 +796,17 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       if (!demo)
         demo = snippet
 
-      const documentation = new vscode.MarkdownString()
-      documentation.isTrusted = true
-      documentation.supportHtml = true
+      const documentation = enableCommandTrust(new vscode.MarkdownString())
       documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
       if (typeof content === 'object' && content.suggestions?.length) {
         documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
         documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
       }
-      const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
       documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
       documentation.appendCodeblock(demo, 'html')
       // FIXME: setCommandParams要求 string[]
       const params = setCommandParams(demo as any)
-      documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
+      documentation.appendMarkdown(`\n[Copy](command:intellisense.copyDemo?${params})\n`)
 
       // FIXME: params要求string| string[]
       // const fixParams: any = [content, lib, isReact, prefix, dynamicLib || '', importWay || '']
@@ -822,8 +815,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         lib,
         isReact,
         prefix,
-        dynamicLib,
-        importWay,
+        dynamicLib: itemDynamicLib,
+        importWay: itemImportWay,
       }
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
       return completionItem

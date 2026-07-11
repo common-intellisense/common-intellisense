@@ -28,6 +28,9 @@ vi.mock('@vscode-use/utils', () => ({
   getCurrentFileUrl: vi.fn(() => ''),
   getLineText: () => '',
   getLocale: vi.fn(() => 'en'),
+  getOffsetFromPosition: (position: any, code?: string) => code
+    ? code.split('\n').slice(0, position.line).reduce((total: number, line: string) => total + line.length + 1, 0) + position.character
+    : position.character,
   getPosition: () => ({ position: { line: 0, character: 0 } }),
   getSelection: () => ({ lineText: '' }),
   insertText: () => {},
@@ -40,6 +43,8 @@ vi.mock('@vscode-use/utils', () => ({
   setCommandParams: (value: any) => encodeURIComponent(JSON.stringify(value)),
   updateText: () => {},
   addEventListener: () => () => {},
+  watchFile: () => () => {},
+  watchFiles: () => () => {},
   createFilter: () => () => false,
   // logging helper used in ui-find
   createLog: (_name: string) => ({
@@ -104,6 +109,7 @@ vi.mock('vscode', () => {
     ViewColumn: { Beside: 2 },
     languages: { registerHoverProvider: () => ({}) },
     window: { visibleTextEditors: [] },
+    workspace: { isTrusted: true },
   }
 })
 

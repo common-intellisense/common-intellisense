@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 let remoteUris: string[] = ['https://fake/remote.js']
 let remoteNpmUris: ({ name: string, resource?: string } | string)[] = [{ name: '@common-intellisense/button', resource: undefined }]
 let trustedHosts: string[] = []
+let allowLegacyAdapters = true
 
 // This test file isolates different mocked behaviors from the other fetch.test.ts
 vi.mock('node:fs', () => ({ existsSync: () => false }))
@@ -24,6 +25,8 @@ vi.mock('@vscode-use/utils', () => ({
       return remoteNpmUris
     if (k === 'common-intellisense.trustedHosts')
       return trustedHosts
+    if (k === 'common-intellisense.allowLegacyAdapters')
+      return allowLegacyAdapters
     return undefined
   },
   getLocale: () => 'en',
@@ -40,6 +43,7 @@ describe('fetch service additional tests (mocked)', () => {
     remoteUris = ['https://fake/remote.js']
     remoteNpmUris = [{ name: '@common-intellisense/button', resource: undefined }]
     trustedHosts = []
+    allowLegacyAdapters = true
   })
 
   it('fetchFromCommonIntellisense returns parsed exports and caches the result', async () => {
@@ -145,6 +149,102 @@ describe('fetch service additional tests (mocked)', () => {
     expect(third.ButtonProps().bar).toBe(2)
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
     nowSpy.mockRestore()
+  })
+
+  it('blocks custom executable adapters unless legacy mode is explicitly enabled', async () => {
+    allowLegacyAdapters = false
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { ButtonProps: () => ({ unsafe: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteUrls()
+    expect(result).toEqual({})
+  })
+
+  it('loads data-only manifests while legacy mode is disabled', async () => {
+    allowLegacyAdapters = false
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(JSON.stringify({
+      schemaVersion: 1,
+      exports: {
+        ButtonComponents: [{ name: 'ManifestButton' }],
+        ButtonProps: { safe: true },
+      },
+    }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteUrls()
+    expect(result.ButtonComponents()[0].name).toBe('ManifestButton')
+    expect(result.ButtonProps().safe).toBe(true)
+  })
+
+  it('rejects unknown manifest schema versions', async () => {
+    allowLegacyAdapters = false
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(JSON.stringify({ schemaVersion: 2, exports: { ButtonProps: {} } }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteUrls()).resolves.toEqual({})
+  })
+
+  it('shares a remote source task between concurrent callers', async () => {
+    let resolveRemote!: (value: string) => void
+    const pending = new Promise<string>((resolve) => { resolveRemote = resolve })
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockReturnValue(pending as any)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const first = mod.fetchFromRemoteUrls()
+    const second = mod.fetchFromRemoteUrls()
+    expect(first).not.toBeUndefined()
+    expect(second).not.toBeUndefined()
+    resolveRemote('module.exports = { ButtonProps: () => ({ shared: true }) }')
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(firstResult?.ButtonProps().shared).toBe(true)
+    expect(secondResult?.ButtonProps().shared).toBe(true)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not share in-flight results across different source configurations', async () => {
+    let resolveFirst!: (value: string) => void
+    const firstPending = new Promise<string>((resolve) => { resolveFirst = resolve })
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch)
+      .mockReturnValueOnce(firstPending as any)
+      .mockResolvedValueOnce('module.exports = { SecondProps: () => ({ source: "second" }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    remoteUris = ['https://fake/first.js']
+    const first = mod.fetchFromRemoteUrls()
+    remoteUris = ['https://fake/second.js']
+    const second = mod.fetchFromRemoteUrls()
+    resolveFirst('module.exports = { FirstProps: () => ({ source: "first" }) }')
+
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(firstResult?.FirstProps().source).toBe('first')
+    expect(secondResult?.SecondProps().source).toBe('second')
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
+  })
+
+  it('discards a source result completed after cache invalidation', async () => {
+    let resolveRemote!: (value: string) => void
+    const pending = new Promise<string>((resolve) => { resolveRemote = resolve })
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockReturnValue(pending as any)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const resultPromise = mod.fetchFromRemoteUrls()
+    mod.clearFetchCaches()
+    resolveRemote('module.exports = { StaleProps: () => ({ stale: true }) }')
+
+    await expect(resultPromise).resolves.toEqual({})
+    expect(mod.cacheFetch.has('https://fake/remote.js')).toBe(false)
   })
 
   it('fetchFromRemoteUrls skips untrusted http hosts by default', async () => {

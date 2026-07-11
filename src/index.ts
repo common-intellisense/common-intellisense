@@ -1,85 +1,92 @@
 import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import { createFilter } from '@rollup/pluginutils'
-import { CreateWebview } from '@vscode-use/createwebview'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveTextEditor, getConfiguration, getCurrentFileUrl, getLocale, getPosition, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
 import { findUp } from 'find-up'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
-import { cacheFetch, localCacheUri } from './services/fetch'
+import { clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri } from './services/fetch'
+import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
-import { findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
-import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui/ui-find'
-import { fixedTagName, getAlias, getImportUiComponents, getIsShowSlots, getUiDeps } from './ui/ui-utils'
-import { detectSlots, findDynamicComponent, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
+import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getCurrentPkgUiNames, invalidateContexts, logger } from './ui/ui-find'
+import { fixedTagName, getAlias, getIsShowSlots, getUiDeps } from './ui/ui-utils'
+import { clearDocumentAnalysis, detectSlots, findDynamicComponent, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
-const defaultExclude = getConfiguration('common-intellisense.exclude')
-const filterId = createFilter(defaultExclude)
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
-let documentAnalysisCache: {
+interface DocumentAnalysisCacheEntry {
   uri: string
   version: number
   code: string
   uiDeps?: Record<string, string>
   importDeps?: Record<string, string>
-} | null = null
+}
+const documentAnalysisCache = new Map<string, DocumentAnalysisCacheEntry>()
+const maxDocumentAnalysisEntries = 10
 
 function getDocumentAnalysis(document: vscode.TextDocument) {
   const uri = document.uri.toString()
-  const version = document.version
-  if (!documentAnalysisCache || documentAnalysisCache.uri !== uri || documentAnalysisCache.version !== version) {
-    documentAnalysisCache = {
-      uri,
-      version,
-      code: document.getText(),
-    }
+  const key = `${uri}:${document.version}`
+  let entry = documentAnalysisCache.get(key)
+  if (!entry) {
+    entry = { uri, version: document.version, code: document.getText() }
+    documentAnalysisCache.set(key, entry)
+    while (documentAnalysisCache.size > maxDocumentAnalysisEntries)
+      documentAnalysisCache.delete(documentAnalysisCache.keys().next().value!)
   }
   return {
     get code() {
-      return documentAnalysisCache!.code
+      return entry!.code
     },
     getUiDeps() {
-      if (!documentAnalysisCache!.uiDeps)
-        documentAnalysisCache!.uiDeps = getUiDeps(documentAnalysisCache!.code) || {}
-      return documentAnalysisCache!.uiDeps
+      entry!.uiDeps ||= getUiDeps(entry!.code) || {}
+      return entry!.uiDeps
     },
     getImportDeps() {
-      if (!documentAnalysisCache!.importDeps)
-        documentAnalysisCache!.importDeps = getImportDeps(documentAnalysisCache!.code) || {}
-      return documentAnalysisCache!.importDeps
+      entry!.importDeps ||= getImportDeps(entry!.code) || {}
+      return entry!.importDeps
     },
   }
 }
 
-function isSkip() {
-  const id = getActiveTextEditorLanguageId()
+function isExcluded(filePath: string) {
+  return createFilter(getConfiguration('common-intellisense.exclude') || [])(filePath)
+}
+
+function isSkip(document?: vscode.TextDocument) {
+  const id = document?.languageId || vscode.window.activeTextEditor?.document.languageId
   return !id || !filter.includes(id)
+}
+
+function getDocumentPath(document: vscode.TextDocument) {
+  return document.uri.fsPath || document.uri.toString()
 }
 // todo: 补充类型
 // todo: 补充example
 export async function activate(context: vscode.ExtensionContext) {
+  configureCacheStorage(context.globalStorageUri)
+  await getLocalCache
   // todo: createWebviewPanel
   // createWebviewPanel(context)
   logger.info('common-intellisense activate!')
   logger.info('🌟 please help star this project: https://github.com/common-intellisense/common-intellisense')
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
-  const alias = getAlias()
-  if (!isSkip())
-    findUI(context, detectSlots)
-
-  const provider = new CreateWebview(context, {
-    viewColumn: vscode.ViewColumn.Beside,
-    scripts: ['main.js'],
-  })
+  const initialEditor = vscode.window.activeTextEditor
+  if (initialEditor && !isSkip(initialEditor.document))
+    await ensureContextForPath(getDocumentPath(initialEditor.document), context, detectSlots)
 
   context.subscriptions.push(registerCommand('common-intellisense.cleanCache', async () => {
     try {
       await fsp.rm(localCacheUri, { force: true })
     }
     catch {}
-    cacheFetch.clear()
-    findUI(context, detectSlots, true)
+    clearFetchCaches()
+    invalidateContexts()
+    clearDocumentAnalysis()
+    const editor = vscode.window.activeTextEditor
+    if (editor && !isSkip(editor.document))
+      await ensureContextForPath(getDocumentPath(editor.document), context, detectSlots, true)
   }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
@@ -87,13 +94,13 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!editor || editor.document.languageId === 'Log')
       return
 
-    if (isSkip())
+    if (isSkip(editor.document))
       return
     // 找到当前活动的编辑器
     const visibleEditors = vscode.window.visibleTextEditors
     const currentEditor = visibleEditors.find(e => e === editor)
     if (currentEditor)
-      findUI(context, detectSlots)
+      void ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
   }))
 
   context.subscriptions.push(registerCommand('intellisense.copyDemo', (demo) => {
@@ -158,200 +165,149 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(addEventListener('config-change', (e) => {
-    if (e.affectsConfiguration('common-intellisense.ui'))
-      findUI(context, detectSlots, true)
+    const keys = ['ui', 'prefix', 'alias', 'exclude', 'remoteUris', 'remoteNpmUris', 'localUris', 'trustedHosts', 'allowLegacyAdapters', 'showSlots', 'translate']
+    if (!keys.some(key => e.affectsConfiguration(`common-intellisense.${key}`)))
+      return
+    clearFetchCaches()
+    invalidateContexts()
+    clearDocumentAnalysis()
+    documentAnalysisCache.clear()
+    const editor = vscode.window.activeTextEditor
+    if (editor && !isSkip(editor.document))
+      void ensureContextForPath(getDocumentPath(editor.document), context, detectSlots, true)
   }))
 
-  context.subscriptions.push(registerCommand('common-intellisense.import', async (params, loc, _lineOffset) => {
+  context.subscriptions.push(registerCommand('common-intellisense.import', async (params, _loc, _lineOffset) => {
     if (!params)
       return
-    const { data, lib, prefix, dynamicLib, importWay } = params
+    const { data, lib, prefix = '', dynamicLib, importWay = 'specifier' } = params
+    const editor = getActiveTextEditor()
+    if (!editor)
+      return
+    const code = editor.document.getText()
     const name = data.name.split('.')[0]
-    const fromName = data.from
-    const from = fromName || dynamicLib ? dynamicLib.replace('${name}', hyphenate(name)) : lib
-    const code = getActiveText()!
-    const uiComponents = getImportUiComponents(code)
-    let deps = data.suggestions?.length === 1
-      ? data.suggestions.map((i: any) => {
-          const name = i.split('.')[0]
-          if (i.includes('-'))
-            return toCamel(name.slice(prefix.length))
-
-          return name
-        })
-      : []
-
-    const importTarget = uiComponents[from]
-    if (importTarget)
-      deps.push(...uiComponents[from].components)
-    else
-      deps.push(name)
-
-    deps = [...new Set(deps)]
-    if (importTarget) {
-      const line = importTarget.match[1].startsWith('\n')
-      if (deps.includes(name))
-        return
-      deps.push(name)
-
-      const offsetStart = code.match(importTarget.match[0])!.index!
-      const offsetEnd = offsetStart + importTarget.match[0].length
-      const posStart = getPosition(offsetStart).position
-      const posEnd = getPosition(offsetEnd).position
-      const str = importWay === 'as default'
-        ? `import * as ${deps.join(', ')} from '${from}'`
-        : importWay === 'default'
-          ? `import ${deps.join(', ')} from '${from}'`
-          : line
-            ? `import {\n    ${deps.join(',\n    ')}\n  } from '${from}'`
-            : `import { ${deps.join(', ')} } from '${from}'`
-      updateText(edit => edit.replace(createRange(posStart, posEnd), str))
-    }
-    else {
-      // 顶部导入
-      const _isVue = isVue()
-      let str = importWay === 'as default'
-        ? `${_isVue ? '  ' : ''}import * as ${deps.join(', ')} from '${from}'`
-        : importWay === 'default'
-          ? `${_isVue ? '  ' : ''}import ${deps.join(', ')} from '${from}'`
-          : `${_isVue ? '  ' : ''}import { ${deps.join(', ')} } from '${from}'`
-      let pos: any = null
-      if (_isVue) {
-        if (loc) {
-          if (getLineText(loc.start.line)?.trim()) {
-            str += '\n'
-          }
-          pos = createPosition(loc.start.line, 0)
-        }
-        else {
-          const match = code.match(/<script[^>]*>/)
-          if (match) {
-            const offset = match.index! + match[0].length
-            pos = getPosition(offset)
-            str = `\n${str}`
-          }
-          else {
-            pos = createPosition(0, 0)
-            str = `<script setup>\n${str}</script>`
-          }
-        }
+    const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
+    const deps = [...getSuggestedImportNames(data.suggestions, prefix), name]
+    const edits = createImportEdits(code, from, deps, importWay, editor.document.languageId === 'vue')
+    if (!edits.length)
+      return
+    await updateText((edit) => {
+      for (const item of [...edits].sort((a, b) => b.start - a.start)) {
+        const start = getPosition(item.start, code).position
+        const end = getPosition(item.end, code).position
+        if (item.start === item.end)
+          edit.insert(start, item.text)
+        else
+          edit.replace(createRange(start, end), item.text)
       }
-      else {
-        const match = code.match(/<script[^>]*>/)
-        if (match) {
-          const offset = match.index! + match[0].length
-          pos = getPosition(offset)
-          str = `\n  ${str}`
-        }
-        else {
-          str += '\n'
-          pos = createPosition(0, 0)
-        }
-      }
-
-      updateText(edit => edit.insert(pos, str))
-    }
+    })
   }))
 
   // 监听pkg变化
-  if (getIsShowSlots()) {
-    context.subscriptions.push(registerCommand('common-intellisense.slots', async (child, name, offset, detail) => {
-      const UiCompletions = getUiCompletions()
-      const activeText = getActiveText()
-      if (!activeText)
-        return
-      if (!child && UiCompletions) {
-        const uiDeps = getUiDeps(activeText)
-        const optionsComponents = getOptionsComponents()
-        const componentsPrefix = optionsComponents.prefix
-        detectSlots(UiCompletions, uiDeps, componentsPrefix)
-        return
+  context.subscriptions.push(registerCommand('common-intellisense.slots', async (child, name, offset, detail) => {
+    if (!getIsShowSlots())
+      return
+    const editor = vscode.window.activeTextEditor
+    if (!editor)
+      return
+    const packageContext = getContextForDocumentPath(getDocumentPath(editor.document))
+      || await ensureContextForPath(getDocumentPath(editor.document), context, detectSlots)
+    if (!packageContext?.uiCompletions)
+      return
+    if (!child) {
+      const code = editor.document.getText()
+      await detectSlots(editor.document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix)
+      return
+    }
+    if (!child.children)
+      return
+
+    let lastChild = [...child.children].reverse().find((c: any) => c.type !== 2)
+    let slotName = `#${name}`
+    if (child.range)
+      slotName = `v-slot:${name}`
+    if (detail.params)
+      slotName += '="slotProps"'
+
+    if (lastChild) {
+      if (isVine() && lastChild.codegenNode) {
+        lastChild = lastChild.codegenNode
       }
-      if (!child.children)
-        return
+      const pos = lastChild.loc.end
+      const endColumn = Math.max(pos.column - 1, 0)
+      if (isVine())
+        await insertText(`\n<template ${slotName}></template>`, getPosition(pos.offset + offset).position)
+      else
+        await insertText(`\n<template ${slotName}>$1</template>`, createPosition(pos.line - 1, endColumn))
+    }
+    else {
+      const empty = ' '.repeat(Math.max(child.loc.start.column - 1, 0))
 
-      let lastChild = child.children[child.children.findLastIndex((c: any) => c.type !== 2)]
-      let slotName = `#${name}`
-      if (child.range)
-        slotName = `v-slot:${name}`
-      if (detail.params)
-        slotName += '="slotProps"'
-
-      if (lastChild) {
-        if (isVine() && lastChild.codegenNode) {
-          lastChild = lastChild.codegenNode
-        }
-        const pos = lastChild.loc.end
-        const endColumn = Math.max(pos.column - 1, 0)
+      if (child.isSelfClosing) {
         if (isVine())
-          await insertText(`\n<template ${slotName}></template>`, getPosition(pos.offset + offset).position)
+          await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(getPosition(child.loc.end.offset + offset - 3).position, getPosition(child.loc.end.offset + offset).position))
         else
-          await insertText(`\n<template ${slotName}>$1</template>`, createPosition(pos.line - 1, endColumn))
+          await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(createPosition(child.loc.end.line - 1, child.loc.end.column - 3), createPosition(child.loc.end.line - 1, child.loc.end.column)))
       }
       else {
-        const empty = ' '.repeat(Math.max(child.loc.start.column - 1, 0))
-
-        if (child.isSelfClosing) {
-          if (isVine())
-            await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(getPosition(child.loc.end.offset + offset - 3).position, getPosition(child.loc.end.offset + offset).position))
-          else
-            await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(createPosition(child.loc.end.line - 1, child.loc.end.column - 3), createPosition(child.loc.end.line - 1, child.loc.end.column)))
-        }
-        else {
-          const isNeedLineBlock = child.loc.start.line === child.loc.end.line
-          const index = child.loc.start.offset + child.loc.source.indexOf(`</${child.tag}`) - (isNeedLineBlock ? 0 : (child.loc.end.column - `</${child.tag}>`.length - 1))
-          const pos = getPosition(index)
-          if (isVine())
-            await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, getPosition(index + offset).position)
-          else
-            await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, createPosition(pos.line, pos.column))
-        }
+        const isNeedLineBlock = child.loc.start.line === child.loc.end.line
+        const index = child.loc.start.offset + child.loc.source.indexOf(`</${child.tag}`) - (isNeedLineBlock ? 0 : (child.loc.end.column - `</${child.tag}>`.length - 1))
+        const pos = getPosition(index)
+        if (isVine())
+          await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, getPosition(index + offset).position)
+        else
+          await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, createPosition(pos.line, pos.column))
       }
-    }))
+    }
+  }))
 
-    context.subscriptions.push(addEventListener('text-change', ({ contentChanges, document }) => {
-      if (contentChanges.length === 0 || document.languageId === 'Log')
+  const slotTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  context.subscriptions.push({ dispose() {
+    for (const timer of slotTimers.values())
+      clearTimeout(timer)
+    slotTimers.clear()
+  } })
+  context.subscriptions.push(addEventListener('text-change', ({ contentChanges, document }) => {
+    if (!getIsShowSlots() || contentChanges.length === 0 || document.languageId === 'Log' || isSkip(document))
+      return
+    const key = document.uri.toString()
+    const previous = slotTimers.get(key)
+    if (previous)
+      clearTimeout(previous)
+    slotTimers.set(key, setTimeout(async () => {
+      slotTimers.delete(key)
+      const packageContext = await ensureContextForPath(getDocumentPath(document), context, detectSlots)
+      if (!packageContext?.uiCompletions)
         return
-      const UiCompletions = getUiCompletions()
-      const optionsComponents = getOptionsComponents()
-      const componentsPrefix = optionsComponents.prefix
-      if (isSkip())
-        return
-      const activeText = getActiveText()
-      if (UiCompletions && activeText) {
-        const uiDeps = getUiDeps(activeText)
-        detectSlots(UiCompletions, uiDeps, componentsPrefix)
-      }
-    }))
-  }
+      const code = document.getText()
+      await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix)
+    }, 200))
+  }))
 
   context.subscriptions.push(registerCompletionItemProvider(filter, async (document, position) => {
-    const optionsComponents = getOptionsComponents()
+    if (isSkip(document))
+      return
+    const packageContext = await ensureContextForPath(getDocumentPath(document), context, detectSlots)
+    if (!packageContext?.uiCompletions)
+      return
+    const optionsComponents = packageContext.optionsComponents
     const componentsPrefix = optionsComponents.prefix
-    let UiCompletions = getUiCompletions()
-    if (!UiCompletions)
-      return
-    const { lineText } = getSelection()!
+    let UiCompletions = packageContext.uiCompletions
+    const alias = getAlias(packageContext.pkgPath) || {}
+    const lineText = document.lineAt(position.line).text
     const p = position
-    const activeTextEditor = getActiveTextEditor()
-    if (!activeTextEditor)
-      return
-
-    if (isSkip())
-      return
-
-    const preText = lineText.slice(0, activeTextEditor.selection.active.character)
+    const preText = lineText.slice(0, position.character)
     let completionsCallback: SubCompletionItem[] | undefined
     let eventCallback: SubCompletionItem[] | undefined
     const activeText = getEffectWord(preText)
-    const result = parser(document.getText(), p)
+    const result = parser(document.getText(), p, { languageId: document.languageId, uri: document.uri.toString() })
     if (!result)
       return
     if (activeText === ':' && result.type === 'text')
       return
 
-    const lan = getActiveTextEditorLanguageId()
-    const isVue = (lan === 'vue' && result.template) || isVine()
+    const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+    const isVue = (document.languageId === 'vue' && result.template) || isVineDocument
     const analysis = getDocumentAnalysis(document)
     const deps = isVue ? analysis.getImportDeps() : {}
     const uiDeps = analysis.getUiDeps()
@@ -395,10 +351,11 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     let matchedComponent = result.tag ? findPrefixedComponent(result.tag, componentsPrefix, UiCompletions) : null
-    if (result.tag) {
-      if (!matchedComponent)
-        matchedComponent = UiCompletions[fixedTagName(result.tag)]
-    }
+    if (result.tag && !matchedComponent)
+      matchedComponent = UiCompletions[fixedTagName(result.tag)]
+    const matchedSource = result.tag ? uiDeps?.[fixedTagName(result.tag)] : undefined
+    if (matchedComponent && matchedSource && matchedComponent.lib !== matchedSource)
+      matchedComponent = await findDynamicComponent(fixedTagName(result.tag), {}, UiCompletions, componentsPrefix, matchedSource)
     if (matchedComponent) {
       if (result.propName === 'icon')
         return matchedComponent.icons
@@ -421,7 +378,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const name = fixedTagName(result.tag)
       const propName = result.propName
       const from = uiDeps?.[name]
-      const cacheMap = getCacheMap()
+      const cacheMap = packageContext.cacheMap
       if (from && cacheMap.size > 2) {
         // 存在多个 UI 库
         let fixedFrom = nameMap[from] || from
@@ -436,7 +393,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const targetValue = cacheMap.get(targetKey)! as PropsConfig
         UiCompletions = targetValue
       }
-      let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, from)
+      let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, from, getDocumentPath(document))
       const importUiSource = uiDeps?.[name]
       if (importUiSource && (!target || target.uiName !== importUiSource)) {
         for (const p of optionsComponents.prefix.filter(Boolean)) {
@@ -490,7 +447,7 @@ export async function activate(context: vscode.ExtensionContext) {
               ? `:${item.name}="${JSON.stringify(item.params.reduce((acc, i) => {
                 const key = i.name
                 const type = i.type.toLocaleLowerCase()
-                const value = i.default || type === 'boolean' ? false : type === 'number' ? 0 : type === 'string' ? '' : ''
+                const value = i.default ?? (type === 'boolean' ? false : type === 'number' ? 0 : '')
                 acc[key] = value
                 return acc
               }, {} as Record<string, any>), null, 2).replace(/"([^"]+)":/g, '$1:').replace(/"/g, '`')}"`
@@ -637,66 +594,27 @@ export async function activate(context: vscode.ExtensionContext) {
     return item
   }, ['"', '\'', '-', ' ', '@', '.', ':', '\n']))
 
-  context.subscriptions.push(registerCommand('intellisense.openDocument', (args) => {
-    // 注册全局的 link 点击事件
-    const url = args.link
-    if (!url)
-      return
-    provider.create(`
-      <!DOCTYPE html>
-      <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Webview</title>
-          <style>
-            body{
-              width:100%;
-              height:100vh;
-            }
-          </style>
-        </head>
-        <body>
-          <iframe src="${url}" width="100%" height="100%"></iframe>
-        </body>
-      </html>
-      `, ({ data, type }) => {
-      // callback 获取 js 层的 postMessage 数据
-      if (type === 'copy') {
-        setCopyText(data).then(() => {
-          const isZh = getLocale().includes('zh')
-          message.info(`${isZh ? '复制成功' : 'copy successfully'}!  ✅`)
-        })
-      }
-    })
-  }))
-
-  context.subscriptions.push(registerCommand('intellisense.openDocumentExternal', (args) => {
-    // 注册全局的 link 点击事件
-    const url = args.link
-    if (!url)
-      return
-    openExternalUrl(url)
-  }))
+  const openTrustedDocumentation = (args: any) => {
+    const url = getTrustedDocumentationUrl(args?.link)
+    if (url)
+      openExternalUrl(url)
+  }
+  context.subscriptions.push(registerCommand('intellisense.openDocument', openTrustedDocumentation))
+  context.subscriptions.push(registerCommand('intellisense.openDocumentExternal', openTrustedDocumentation))
 
   context.subscriptions.push(vscode.languages.registerHoverProvider(LANS, {
     async provideHover(document, position) {
-      const optionsComponents = getOptionsComponents()
+      if (isSkip(document))
+        return
+      const packageContext = await ensureContextForPath(getDocumentPath(document), context, detectSlots)
+      if (!packageContext?.uiCompletions)
+        return
+      const optionsComponents = packageContext.optionsComponents
       const componentsPrefix = optionsComponents.prefix
-      let UiCompletions = getUiCompletions()
-      if (!optionsComponents || !UiCompletions)
-        return
-
-      const editor = getActiveTextEditor()
-      if (!editor)
-        return
-
-      const currentFileUrl = getCurrentFileUrl()
-
-      if (!currentFileUrl)
-        return
-
-      if (filterId(currentFileUrl))
+      let UiCompletions = packageContext.uiCompletions
+      const alias = getAlias(packageContext.pkgPath) || {}
+      const currentFileUrl = getDocumentPath(document)
+      if (isExcluded(currentFileUrl))
         return
 
       const range = document.getWordRangeAtPosition(position)
@@ -705,7 +623,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
       let word = document.getText(range)
 
-      const lineText = getLineText(position.line)
+      const lineText = document.lineAt(position.line).text
       if (!lineText)
         return
 
@@ -717,7 +635,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const getParsedResult = () => {
         if (!parsedResolved) {
           parsedResolved = true
-          parsedResult = parser(code, position as any)
+          parsedResult = parser(code, position as any, { languageId: document.languageId, uri: document.uri.toString() })
         }
         return parsedResult
       }
@@ -741,8 +659,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!result)
           return
         if (result.type === 'tag') {
-          const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
-          if (!data?.length || !word)
+          if (!word)
             return createHover('')
           const tag = fixedTagName(result.tag)
           const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
@@ -768,7 +685,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return
 
           const from = uiDeps?.[name]
-          const cacheMap = getCacheMap()
+          const cacheMap = packageContext.cacheMap
 
           if (from && cacheMap.size > 2) {
             // 存在多个 UI 库
@@ -826,7 +743,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return createHover(`**Details** \n\n${detail}`)
       }
       // todo: 优化这里的条件,在 react 中, 也可以减少更多的处理步骤
-      if (isVue()) {
+      if (document.languageId === 'vue') {
         const r = getParsedResult()
         if (r) {
           if (!r.template)
@@ -866,7 +783,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return
         }
       }
-      else if (isVine()) {
+      else if (document.uri.fsPath.endsWith('.vine.ts')) {
         const r = getParsedResult()
         if (r) {
           if (word.includes('.value.') && r.type === 'script' && Object.keys(r.refsMap || {}).length) {
@@ -900,7 +817,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return
         }
       }
-      else if (getActiveTextEditorLanguageId()?.includes('react')) {
+      else if (document.languageId.includes('react')) {
         if (word.includes('.current.')) {
           const r = getParsedResult()
           if (!r)
@@ -945,7 +862,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (target?.tableDocument)
         return createHover(target.tableDocument)
 
-      if (isVue()) {
+      if (document.languageId === 'vue') {
         const parsed = getParsedResult()
         if (parsed?.type === 'tag' && parsed.tag) {
           const tag = fixedTagName(parsed.tag)
@@ -959,7 +876,23 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
+  clearDocumentAnalysis()
+  documentAnalysisCache.clear()
+  clearFetchCaches()
   deactivateUICache()
+}
+
+function getTrustedDocumentationUrl(value: unknown) {
+  if (typeof value !== 'string')
+    return
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'https:')
+      return url.toString()
+    if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(url.hostname))
+      return url.toString()
+  }
+  catch {}
 }
 
 function stripLeadingMarkdownTitle(content: string) {

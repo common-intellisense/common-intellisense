@@ -1,0 +1,136 @@
+import ts from 'typescript'
+
+export type ImportWay = 'as default' | 'default' | 'specifier'
+
+export interface ImportEdit {
+  start: number
+  end: number
+  text: string
+}
+
+export function resolveImportSource(dataFrom: unknown, dynamicLib: unknown, lib: string, componentName: string, hyphenate: (name: string) => string) {
+  if (typeof dataFrom === 'string' && dataFrom.trim())
+    return dataFrom
+  if (typeof dynamicLib === 'string' && dynamicLib.trim())
+    return dynamicLib.replace('${name}', hyphenate(componentName))
+  return lib
+}
+
+export function getSuggestedImportNames(suggestions: unknown, prefix: string) {
+  if (!Array.isArray(suggestions) || suggestions.length !== 1)
+    return []
+
+  const suggestion = suggestions[0]
+  const rawName = typeof suggestion === 'string'
+    ? suggestion
+    : suggestion && typeof suggestion === 'object' && 'name' in suggestion && typeof suggestion.name === 'string'
+      ? suggestion.name
+      : ''
+  if (!rawName)
+    return []
+
+  const name = rawName.split('.')[0]
+  if (name.includes('-')) {
+    const withoutPrefix = prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name
+    return [withoutPrefix.replace(/-(\w)/g, (_: string, char: string) => char.toUpperCase())]
+  }
+  return [name]
+}
+
+export function createImportEdits(code: string, source: string, dependencies: string[], importWay: ImportWay = 'specifier', vue = false): ImportEdit[] {
+  const names = [...new Set(dependencies.filter(name => isIdentifier(name)))]
+  if (!source || !names.length)
+    return []
+
+  const script = getScriptRegion(code, vue)
+  if (!script) {
+    const statements = createStatements(source, names, importWay)
+    return statements ? [{ start: 0, end: 0, text: `<script setup>\n${statements}\n</script>\n` }] : []
+  }
+
+  const sourceFile = ts.createSourceFile('component.tsx', script.code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const imports = sourceFile.statements.filter(ts.isImportDeclaration)
+  const matching = imports.filter(node => ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === source)
+  const runtimeMatching = matching.filter(node => !node.importClause?.isTypeOnly)
+  const existing = collectRuntimeBindings(runtimeMatching, importWay)
+  const missing = names.filter(name => !existing.has(name))
+  if (!missing.length)
+    return []
+
+  if (importWay === 'specifier') {
+    const editable = runtimeMatching.find(node => node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings))
+    if (editable) {
+      const clause = editable.importClause!
+      const bindings = clause.namedBindings as ts.NamedImports
+      const named = [
+        ...bindings.elements.map(element => element.getText(sourceFile)),
+        ...missing,
+      ]
+      const prefix = clause.name ? `${clause.name.text}, ` : ''
+      const text = `import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
+      return [{ start: script.offset + editable.getStart(sourceFile), end: script.offset + editable.end, text }]
+    }
+
+    const defaultOnly = runtimeMatching.find(node => node.importClause?.name && !node.importClause.namedBindings)
+    if (defaultOnly) {
+      const insertion = defaultOnly.importClause!.end
+      return [{ start: script.offset + insertion, end: script.offset + insertion, text: `, { ${missing.join(', ')} }` }]
+    }
+  }
+
+  const statements = createStatements(source, missing, importWay)
+  if (!statements)
+    return []
+  const lastImport = imports.at(-1)
+  const insertion = lastImport ? lastImport.end : 0
+  const leading = insertion > 0 || script.code.startsWith('\n') ? '\n' : ''
+  const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
+  return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }]
+}
+
+function collectRuntimeBindings(imports: ts.ImportDeclaration[], importWay: ImportWay) {
+  const result = new Set<string>()
+  for (const node of imports) {
+    const clause = node.importClause
+    if (!clause)
+      continue
+    if (importWay === 'default' && clause.name)
+      result.add(clause.name.text)
+    if (importWay === 'as default' && clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+      result.add(clause.namedBindings.name.text)
+    if (importWay === 'specifier' && clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      for (const element of clause.namedBindings.elements) {
+        if (!element.isTypeOnly)
+          result.add(element.name.text)
+      }
+    }
+  }
+  return result
+}
+
+function createStatements(source: string, names: string[], importWay: ImportWay) {
+  const quoted = JSON.stringify(source)
+  if (importWay === 'default')
+    return names.map(name => `import ${name} from ${quoted}`).join('\n')
+  if (importWay === 'as default')
+    return names.map(name => `import * as ${name} from ${quoted}`).join('\n')
+  return `import { ${names.join(', ')} } from ${quoted}`
+}
+
+function getScriptRegion(code: string, vue: boolean) {
+  if (!vue)
+    return { code, offset: 0 }
+
+  const matches = [...code.matchAll(/<script\b([^>]*)>/gi)]
+  if (!matches.length)
+    return null
+  const selected = matches.find(match => /\bsetup\b/.test(match[1])) || matches[0]
+  const start = selected.index! + selected[0].length
+  const close = code.indexOf('</script>', start)
+  const end = close === -1 ? code.length : close
+  return { code: code.slice(start, end), offset: start }
+}
+
+function isIdentifier(name: string) {
+  return /^[$a-z_][$\w]*$/i.test(name)
+}

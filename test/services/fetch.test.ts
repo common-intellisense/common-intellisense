@@ -16,6 +16,8 @@ vi.mock('@vscode-use/utils', () => ({
       return ['https://fake/remote.js']
     if (k === 'common-intellisense.localUris')
       return []
+    if (k === 'common-intellisense.allowLegacyAdapters')
+      return true
     if (k === 'common-intellisense.remoteNpmUris')
       return []
     return undefined

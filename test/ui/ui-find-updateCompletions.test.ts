@@ -18,6 +18,7 @@ vi.mock('../../src/services/fetch', () => ({
   fetchFromRemoteUrls: vi.fn(async () => ({})),
   getLocalCache: Promise.resolve('done'),
   localCacheUri: '/tmp/common-intellisense-mapping-test.json',
+  writeLocalCache: vi.fn(async () => {}),
 }))
 
 describe('ui-find updateCompletions', () => {

@@ -6,7 +6,17 @@ export const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, compon
 export const urlCache = new Map<string, { uis: Uis, pkg: string }>()
 export const rootPkgCache: Map<string, { rootPkgPath: string, rootPkg: any, isMonorepo: boolean, stopRoot?: () => void }> = new Map()
 
+function disposeRootWatchers() {
+  for (const value of rootPkgCache.values()) {
+    try {
+      value.stopRoot?.()
+    }
+    catch {}
+  }
+}
+
 export function clearUICache() {
+  disposeRootWatchers()
   cacheMap.clear()
   pkgUIConfigMap.clear()
   urlCache.clear()

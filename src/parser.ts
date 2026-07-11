@@ -6,7 +6,7 @@ import path from 'node:path'
 import { parse as babelParse } from '@babel/parser'
 import traverse from '@babel/traverse'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
-import { createRange, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
+import { createRange, getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getOffsetFromPosition, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 // @ts-expect-error no problem
 import { parse } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import {
@@ -15,7 +15,7 @@ import {
 } from '@vue-vine/compiler'
 
 import * as vscode from 'vscode'
-import { convertPrefixedComponentName, findPrefixedComponent, hyphenate, isVine, isVue, toCamel } from './ui/utils'
+import { convertPrefixedComponentName, findPrefixedComponent, hyphenate, toCamel } from './ui/utils'
 import { logger } from './ui/ui-find'
 
 const { parse: svelteParser } = require('svelte/compiler')
@@ -57,39 +57,41 @@ function getSvelteHtml(code: string) {
   return html
 }
 
-export function parser(code: string, position: vscode.Position) {
-  if (isVine()) {
+export interface ParserDocumentContext {
+  languageId?: string
+  uri?: string
+}
+
+export function parser(code: string, position: vscode.Position, documentContext: ParserDocumentContext = {}) {
+  const entry = documentContext.uri || getCurrentFileUrl()
+  const isVineDocument = entry?.endsWith('.vine.ts')
+  if (isVineDocument)
     return parserVine(code, position)
-  }
-  else {
-    const entry = getCurrentFileUrl()
-    if (!entry)
-      return
 
-    const suffix = entry.slice(entry.lastIndexOf('.') + 1)
-    if (!suffix)
+  const languageId = documentContext.languageId
+  const suffix = entry?.slice(entry.lastIndexOf('.') + 1)
+  if (!suffix && !languageId)
+    return
+  isInTemplate = false
+  if (languageId === 'vue' || suffix === 'vue') {
+    const result = transformVue(code, position, 0, code)
+    if (!result)
       return
-    isInTemplate = false
-    if (suffix === 'vue') {
-      const result = transformVue(code, position)
-      if (!result)
-        return
-      if (!result.refs?.length || !result.template)
-        return result
-      const refsMap = findRefs(result.template, result.refs)
-      return Object.assign(result, { refsMap })
-    }
-    if (/ts|js|jsx|tsx/.test(suffix))
-      return parserJSX(code, position)
-
-    if (suffix === 'svelte')
-      return parserSvelte(code, position)
+    if (!result.refs?.length || !result.template)
+      return result
+    const refsMap = findRefs(result.template, result.refs)
+    return Object.assign(result, { refsMap })
   }
+  if (['javascript', 'javascriptreact', 'typescript', 'typescriptreact'].includes(languageId || '') || /^(?:ts|js|jsx|tsx)$/.test(suffix || ''))
+    return parserJSX(code, position)
+
+  if (languageId === 'svelte' || suffix === 'svelte')
+    return parserSvelte(code, position)
 
   return true
 }
 
-export function transformVue(code: string, position: vscode.Position, offset = 0) {
+export function transformVue(code: string, position: vscode.Position, offset = 0, _sourceCode = code) {
   const {
     descriptor: { template, script, scriptSetup },
     errors,
@@ -304,7 +306,7 @@ export function parserJSX(code: string, position: vscode.Position) {
   try {
     const ast = getJsxAst(code)
     const children = ast.body
-    const result = jsxDfs(children, null, position)
+    const result = jsxDfs(children, null, position, code)
     const map = findJsxRefs(children)
     if (result)
       return Object.assign(result, map)
@@ -319,13 +321,13 @@ export function parserJSX(code: string, position: vscode.Position) {
   }
 }
 
-function jsxDfs(children: any, parent: any, position: vscode.Position) {
+function jsxDfs(children: any, parent: any, position: vscode.Position, code: string) {
   for (const child of children) {
     let { loc, type, openingElement, body: children, argument, declarations, init } = child
     if (openingElement?.name.name)
       child.name = openingElement.name.name
     if (!loc)
-      loc = convertPositionToLoc(child)
+      loc = convertPositionToLoc(child, code)
 
     if (!isInPosition(loc, position))
       continue
@@ -344,9 +346,9 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
     if (openingElement && openingElement.attributes.length) {
       for (const prop of openingElement.attributes) {
         if (!prop.loc)
-          prop.loc = convertPositionToLoc(prop)
+          prop.loc = convertPositionToLoc(prop, code)
         if (isInPosition(prop.loc, position)) {
-          if (prop.value.type === 'JSXExpressionContainer') {
+          if (prop.value?.type === 'JSXExpressionContainer') {
             children = prop.value.expression
           }
           else {
@@ -375,7 +377,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
       }
     }
 
-    if (type === 'JSXElement' || type === 'Element' || (type === 'ReturnStatement' && (argument.type === 'JSXElement' || argument.type === 'JSXFragment')))
+    if (type === 'JSXElement' || type === 'Element' || (type === 'ReturnStatement' && argument && (argument.type === 'JSXElement' || argument.type === 'JSXFragment')))
       isInTemplate = true
 
     if (children) {
@@ -432,13 +434,13 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
 
     if (children && children.length) {
       const p = child.type === 'JSXElement' ? { ...child, name: openingElement.name.name, props: openingElement.attributes } : null
-      const result = jsxDfs(children, p, position) as any
+      const result = jsxDfs(children, p, position, code) as any
       if (result)
         return result
     }
 
     if ((type === 'JSXElement' || type === 'Element' || type === 'InlineComponent') && isInPosition(openingElement.loc, position)) {
-      const target = openingElement.attributes.find((item: any) => isInPosition(item.loc, position) || item.value === null)
+      const target = openingElement.attributes.find((item: any) => isInPosition(item.loc, position) || item.value == null)
       if (!openingElement) {
         openingElement = {
           name: {
@@ -505,6 +507,8 @@ function jsxDfs(children: any, parent: any, position: vscode.Position) {
 }
 
 function findJsxRefs(childrens: any, map: any = {}, refs: any = []) {
+  if (!childrens)
+    return { refsMap: map, refs }
   for (const child of childrens) {
     let { type, openingElement, body: children, argument, declarations, init, id, expression } = child
     if (child.children) {
@@ -542,8 +546,9 @@ function findJsxRefs(childrens: any, map: any = {}, refs: any = []) {
     if (openingElement && openingElement.attributes.length) {
       for (const prop of openingElement.attributes) {
         if (prop.name && prop.name.name === 'ref') {
-          const value = prop.value?.expression?.name || prop.value.value
-          map[value] = transformTagName(openingElement.name.name)
+          const value = prop.value?.expression?.name ?? prop.value?.value
+          if (value)
+            map[value] = transformTagName(openingElement.name.name)
         }
       }
     }
@@ -589,7 +594,7 @@ function findRef(children: any, map: any, refsMap: (string | [string, string])[]
 
 export function parserSvelte(code: string, position: vscode.Position) {
   const html = getSvelteHtml(code)
-  const result = jsxDfs([html], null, position)
+  const result = jsxDfs([html], null, position, code)
   const map = {
     refsMap: {},
     refs: [],
@@ -670,8 +675,11 @@ export function isInAttribute(child: any, position: any, offset: number) {
       }
       else {
         const startOffset = start.offset
-        const match = child.loc.source.slice(child.tag.length + 1).match('>')!
-        const endOffset = startOffset + match.index
+        const tail = child.loc.source.slice(child.tag.length + 1)
+        const match = tail.match('>')
+        const endOffset = match?.index !== undefined
+          ? startOffset + match.index
+          : child.loc.end?.offset ?? (startOffset + tail.length)
         const _offset = getOffsetFromPosition(position)!
         return (startOffset + offset < _offset) && (_offset <= endOffset + offset)
       }
@@ -679,7 +687,9 @@ export function isInAttribute(child: any, position: any, offset: number) {
   }
   else {
     const offsetX = child.props[len - 1].loc.end.offset - child.loc.start.offset
-    const x = child.loc.source.slice(offsetX).match('>').index!
+    const tail = child.loc.source.slice(offsetX)
+    const xMatch = tail.match('>')
+    const x = xMatch?.index ?? tail.length
     end = {
       column: child.props[len - 1].loc.end.column + 1 + x,
       line: child.props[len - 1].loc.end.line,
@@ -693,56 +703,83 @@ export function isInAttribute(child: any, position: any, offset: number) {
   return (startOffset + offset < _offset) && (_offset <= endOffset + offset)
 }
 
-export function convertPositionToLoc(data: any) {
+export function convertPositionToLoc(data: any, code: string) {
   const { start, end } = data
-  const activeTextEditor = getActiveTextEditor()!
-
-  const document = activeTextEditor.document
   return {
-    start: convertOffsetToLineColumn(document, start),
-    end: convertOffsetToLineColumn(document, end),
+    start: convertCodeOffsetToLineColumn(code, start),
+    end: convertCodeOffsetToLineColumn(code, end),
   }
 }
 
-function convertOffsetToPosition(document: vscode.TextDocument, offset: number) {
-  return document.positionAt(offset)
+function convertCodeOffsetToLineColumn(code: string, offset: number) {
+  const before = code.slice(0, offset)
+  const lines = before.split('\n')
+  const lineText = code.split('\n')[lines.length - 1] || ''
+  return {
+    line: lines.length,
+    column: (lines.at(-1)?.length || 0) + 1,
+    lineText,
+    lineOffset: offset,
+  }
 }
 
-function convertOffsetToLineColumn(document: vscode.TextDocument, offset: number) {
-  const position = convertOffsetToPosition(document, offset)
-  const lineText = document.lineAt(position.line).text
-  const line = position.line + 1
-  const column = position.character + 1
-  const lineOffset = document.offsetAt(position)
-
-  return { line, column, lineText, lineOffset }
+export interface SlotAnalysis {
+  version: number
+  children: any[]
 }
 
-const modules: any = {
-  children: [],
-  offset: 0,
-}
-export async function detectSlots(UiCompletions: any, uiDeps: any, prefix: string[]) {
-  const children = (await getTemplateAst(UiCompletions, uiDeps, prefix)).filter(item => item.children.length)
+const documentSlotAnalyses = new Map<string, SlotAnalysis>()
 
-  if (!children.length) {
-    modules.children = []
-    modules.offset = 0
+export function clearDocumentAnalysis(uri?: string | vscode.Uri) {
+  if (uri) {
+    documentSlotAnalyses.delete(typeof uri === 'string' ? uri : uri.toString())
     return
   }
+  documentSlotAnalyses.clear()
+}
 
-  modules.children = children
+export function getDocumentSlotAnalysis(uri: string | vscode.Uri) {
+  return documentSlotAnalyses.get(typeof uri === 'string' ? uri : uri.toString())
+}
+
+export function commitDocumentSlotAnalysis(uri: string | vscode.Uri, analysis: SlotAnalysis) {
+  const key = typeof uri === 'string' ? uri : uri.toString()
+  const current = documentSlotAnalyses.get(key)
+  if (current && current.version > analysis.version)
+    return false
+  documentSlotAnalyses.set(key, analysis)
+  return true
+}
+
+export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[]): Promise<void>
+export async function detectSlots(UiCompletions: any, uiDeps: any, prefix: string[]): Promise<void>
+export async function detectSlots(documentOrCompletions: vscode.TextDocument | any, completionsOrDeps: any, depsOrPrefix: any, maybePrefix?: string[]) {
+  const hasDocument = documentOrCompletions?.uri && typeof documentOrCompletions.getText === 'function'
+  const document = hasDocument ? documentOrCompletions as vscode.TextDocument : getActiveTextEditor()?.document
+  if (!document)
+    return
+  const UiCompletions = hasDocument ? completionsOrDeps : documentOrCompletions
+  const uiDeps = hasDocument ? depsOrPrefix : completionsOrDeps
+  const prefix = (hasDocument ? maybePrefix : depsOrPrefix) || []
+  const requestedVersion = document.version
+  const children = (await getTemplateAst(document, UiCompletions, uiDeps, prefix)).filter(item => item.children.length)
+
+  // A slower analysis for an older document version must never replace newer data.
+  if (document.version !== requestedVersion)
+    return
+  commitDocumentSlotAnalysis(document.uri, { version: requestedVersion, children })
 }
 
 export function registerCodeLensProviderFn() {
   const isZh = getLocale().includes('zh')
   return registerCodeLensProvider(['vue', 'javascriptreact', 'typescriptreact', 'typescript'], {
-    provideCodeLenses() {
-      const languageId = getActiveTextEditorLanguageId()
-      if (languageId === 'typescript' && !isVine())
+    provideCodeLenses(document: vscode.TextDocument) {
+      const languageId = document.languageId
+      const isVineDocument = document.uri.toString().endsWith('.vine.ts')
+      if (languageId === 'typescript' && !isVineDocument)
         return []
       const result: vscode.CodeLens[] = []
-      const children = modules.children
+      const children = documentSlotAnalyses.get(document.uri.toString())?.children || []
       children.forEach((child: any) => {
         const offset = child.offset
         child.children.forEach((m: any) => {
@@ -751,11 +788,12 @@ export function registerCodeLensProviderFn() {
           const filters: string[] = []
           for (const c of Array.from(child.children) as any) {
             if (c.type === 'JSXElement') {
-              for (const p of c.openingElement.attributes) {
-                const namespace = p.name.namespace.name
+              for (const p of c.openingElement?.attributes || []) {
+                const namespace = p.name?.namespace?.name
                 if (namespace === 'v-slot') {
-                  const slotName = p.name.name.name
-                  filters.push(slotName)
+                  const slotName = p.name?.name?.name
+                  if (slotName)
+                    filters.push(slotName)
                   break
                 }
               }
@@ -785,9 +823,9 @@ export function registerCodeLensProviderFn() {
             const { name, description, description_zh, version } = s
             // 计算偏移量
             let codeLensRange = null
-            if (isVine()) {
-              const fixedStart = getPosition(range.start.offset + offset).position
-              const fixedEnd = getPosition(range.end.offset + offset).position
+            if (isVineDocument) {
+              const fixedStart = getPosition(range.start.offset + offset, document.getText()).position
+              const fixedEnd = getPosition(range.end.offset + offset, document.getText()).position
               codeLensRange = createRange(fixedStart, fixedEnd)
             }
             else {
@@ -808,10 +846,13 @@ export function registerCodeLensProviderFn() {
   })
 }
 
-async function getTemplateAst(UiCompletions: any, uiDeps: any, prefix: string[]): Promise<[{ children: any, offset: number }] | []> {
-  const code = getActiveText()!
+async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[]): Promise<Array<{ children: any, offset: number }>> {
+  const code = document.getText()
+  const uri = document.uri.toString()
+  const isVueDocument = document.languageId === 'vue' || uri.endsWith('.vue')
+  const isVineDocument = uri.endsWith('.vine.ts')
 
-  if (isVue()) {
+  if (isVueDocument) {
     const {
       descriptor: { template, script, scriptSetup },
     } = getVueSfcParseResult(code)
@@ -831,7 +872,7 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any, prefix: string[])
       offset: 0,
     }]
   }
-  else if (isVine()) {
+  else if (isVineDocument) {
     const { vineFileCtx } = createVineFileCtx('', code)
     if (!vineFileCtx.vineCompFns)
       return []
@@ -844,7 +885,7 @@ async function getTemplateAst(UiCompletions: any, uiDeps: any, prefix: string[])
       return r
     })) as any
   }
-  else if (['javascriptreact', 'typescriptreact'].includes(getActiveTextEditorLanguageId()!)) {
+  else if (['javascriptreact', 'typescriptreact'].includes(document.languageId)) {
     const children = findAllJsxElements(code)
     return [{
       children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix),
@@ -1204,11 +1245,12 @@ export function getImportDeps(text: string) {
   return deps
 }
 
-export function getAbsoluteUrl(url: string) {
-  return path.resolve(getCurrentFileUrl()!, '..', url)
+export function getAbsoluteUrl(url: string, currentFileUrl?: string) {
+  const base = currentFileUrl || getCurrentFileUrl()
+  return base ? path.resolve(base, '..', url) : undefined
 }
 
-export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string) {
+export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string, currentFileUrl?: string) {
   // const prefix = optionsComponents.prefix
   let target = findDynamic(name, UiCompletions, prefix, from)
   if (target)
@@ -1217,7 +1259,10 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
   let dep
   if (dep = deps[name]) {
     // 只往下找一层
-    const tag = await getTemplateParentElementName(getAbsoluteUrl(dep))
+    const absoluteUrl = getAbsoluteUrl(dep, currentFileUrl)
+    if (!absoluteUrl)
+      return
+    const tag = await getTemplateParentElementName(absoluteUrl)
     if (!tag)
       return
     target = findDynamic(tag, UiCompletions, prefix, from)

@@ -132,6 +132,74 @@ export declare const SelectOption: (props: OptionProps) => any
     expect(bazEvents).toContain('update')
   })
 
+  it('keeps uiName projections isolated for the same package', async () => {
+    const mod = await import('../../src/type-extract')
+    const first = await mod.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'firstUi' })
+    const second = await mod.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'secondUi' })
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    expect(first).not.toBe(second)
+    expect(Object.keys(first!)).toEqual(expect.arrayContaining(['firstUiComponents', 'firstUi', 'firstUiRaw']))
+    expect(Object.keys(second!)).toEqual(expect.arrayContaining(['secondUiComponents', 'secondUi', 'secondUiRaw']))
+  })
+
+  it('refreshes the cache when the source entry changes', async () => {
+    const mod = await import('../../src/type-extract')
+    const pkgRoot = path.join(tempRoot, 'node_modules', 'mock-ui')
+    const entry = path.join(pkgRoot, 'foo.d.ts')
+    const initial = await mod.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'refreshUi' })
+    const initialComponents = initial!.refreshUiComponents()
+    const before = initialComponents.find((entry: any) => entry[0].name === 'FooButton')?.[0]?.props?.size?.value
+    await fsp.writeFile(entry, `
+export type DefineSetupFnComponent<P, E> = {
+  __props?: P
+  __emits?: E
+}
+export interface SimpleComponent {
+  __propDef: {
+    props: {
+      size?: 'sm' | 'lg'
+      disabled?: boolean
+      count: number
+    }
+    emits: {
+      change: (value: number) => void
+      'update:modelValue': (value: string) => void
+    }
+  }
+}
+export declare const FooButton: SimpleComponent
+export declare const BarInput: SimpleComponent
+export interface BazProps {
+  title?: string
+  count: number
+}
+export interface BazEmits {
+  update: (value: string) => void
+}
+export declare const BazCard: DefineSetupFnComponent<BazProps, BazEmits>
+`)
+    await fsp.utimes(entry, new Date(), new Date())
+    await mod.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'refreshUi' })
+    const refreshed = await import('../../src/type-extract')
+    const refreshedComponents = refreshed.fetchFromTypes ? (await refreshed.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'refreshUi' }))!.refreshUiComponents() : []
+    const after = refreshedComponents.find((entry: any) => entry[0].name === 'FooButton')?.[0]?.props?.size?.value
+    expect(before).toEqual(['sm', 'md'])
+    expect(after).toEqual(['sm', 'lg'])
+  })
+
+  it('deduplicates concurrent requests for the same cache key', async () => {
+    await import('../../src/type-extract')
+    const fresh = await import('../../src/type-extract')
+    const [first, second] = await Promise.all([
+      fresh.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'concurrentUi' }),
+      fresh.fetchFromTypes({ pkgName: 'mock-ui', uiName: 'concurrentUi' }),
+    ])
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    expect(first).toBe(second)
+  })
+
   it('resolves fallback module extensions for option props', async () => {
     const mod = await import('../../src/type-extract')
     const result = await mod.fetchFromTypes({ pkgName: 'mock-ui-omit', uiName: 'mockUiOmit1' })

@@ -130,9 +130,30 @@ Install the supported ui component library in your project and install the plug-
 ```
 
 ## Explain Configuration
-- remoteUris: When you deploy the index.cjs configuration file to an online address
-- remoteNpmUris：When you deploy the index.cjs configuration file to npm, you only need to provide the package name instead of the full URL.
-- localUris：When you want to test your configuration, you can read the generated index.cjs locally
+- `remoteUris`: HTTPS URLs that provide component metadata.
+- `remoteNpmUris`: npm packages that provide component metadata.
+- `localUris`: metadata files inside the current workspace. These are disabled in Restricted Mode.
+
+Custom sources should use the data-only manifest format:
+
+```json
+{
+  "schemaVersion": 1,
+  "exports": {
+    "myUiComponents": {
+      "map": [],
+      "lib": "my-ui"
+    },
+    "myUi": {
+      "uiName": "myUi",
+      "lib": "my-ui",
+      "map": []
+    }
+  }
+}
+```
+
+Legacy CommonJS adapters are executable code. They are disabled for custom sources by default and always disabled in Restricted Mode. Only set `"common-intellisense.allowLegacyAdapters": true` for sources you fully trust; `node:vm` is used to bound execution time, not as a security sandbox.
 
 ## How to Contribute
 
