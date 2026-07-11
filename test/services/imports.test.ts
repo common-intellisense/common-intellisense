@@ -20,6 +20,22 @@ describe('import transforms', () => {
     expect(getSuggestedImportNames([{ description: 'missing name' }], '')).toEqual([])
   })
 
+  it('imports suggestions only for named-specifier mode', () => {
+    const suggestions = [{ name: 'Child' }]
+    expect(getSuggestedImportNames(suggestions, '', 'specifier')).toEqual(['Child'])
+    expect(getSuggestedImportNames(suggestions, '', 'default')).toEqual([])
+    expect(getSuggestedImportNames(suggestions, '', 'as default')).toEqual([])
+
+    const dynamicSource = resolveImportSource(undefined, '@ui/${name}', 'ui', 'Parent', name => name.toLowerCase())
+    const defaultOutput = applyEdits('', createImportEdits('', dynamicSource, [...getSuggestedImportNames(suggestions, '', 'default'), 'Parent'], 'default'))
+    const namespaceOutput = applyEdits('', createImportEdits('', dynamicSource, [...getSuggestedImportNames(suggestions, '', 'as default'), 'Parent'], 'as default'))
+    const specifierOutput = applyEdits('', createImportEdits('', dynamicSource, [...getSuggestedImportNames(suggestions, '', 'specifier'), 'Parent'], 'specifier'))
+
+    expect(defaultOutput).toBe('import Parent from "@ui/parent"\n')
+    expect(namespaceOutput).toBe('import * as Parent from "@ui/parent"\n')
+    expect(specifierOutput).toBe('import { Child, Parent } from "@ui/parent"\n')
+  })
+
   it('adds named imports without modifying type-only imports', () => {
     const code = `import type { ButtonProps } from "ui"\nimport DefaultThing, { Existing as Alias } from "ui"\nconst value = 1\n`
     const output = applyEdits(code, createImportEdits(code, 'ui', ['Button', 'Alias'], 'specifier'))

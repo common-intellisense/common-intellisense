@@ -1,14 +1,14 @@
 import type { CompletionRenderContext, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import { createFilter } from '@rollup/pluginutils'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveTextEditor, getConfiguration, getLocale, getPosition, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createSelect, getConfiguration, getLocale, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri } from './services/fetch'
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { prettierType } from './prettier-type'
-import { findPrefixedComponent, generateScriptNames, isVine, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
+import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps } from './ui/ui-utils'
 import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
@@ -22,6 +22,27 @@ interface DocumentAnalysisCacheEntry {
 }
 const documentAnalysisCache = new Map<string, DocumentAnalysisCacheEntry>()
 const maxDocumentAnalysisEntries = 10
+
+export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>): PropsConfig {
+  if (!from || cacheMap.size <= 2)
+    return current
+  let fixedFrom = nameMap[from] || from
+  if (fixedFrom in alias)
+    fixedFrom = alias[fixedFrom].replace(/\d+$/, '')
+  const adapterName = toCamel(fixedFrom)
+  const targetKey = Array.from(cacheMap.keys()).find(key => typeof key === 'string' && key.startsWith(adapterName) && /^\d+$/.test(key.slice(adapterName.length)))
+  const targetValue = targetKey ? cacheMap.get(targetKey) : undefined
+  return targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue) ? targetValue as PropsConfig : current
+}
+
+export function getRefMembers(completions: PropsConfig, refName: string | undefined): any[] | undefined {
+  if (!refName)
+    return
+  const component = completions[refName]
+  if (!component)
+    return
+  return [...(component.methods || []), ...(component.exposed || [])]
+}
 
 export function getDocumentAnalysis(document: vscode.TextDocument) {
   const uri = document.uri.toString()
@@ -86,6 +107,7 @@ function getCompletionRenderContext(document: vscode.TextDocument): CompletionRe
     languageId: document.languageId,
     framework: isVineDocument ? 'vine' : document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'react',
     uri: document.uri.toString(),
+    version: document.version,
   }
 }
 // todo: 补充类型
@@ -100,6 +122,18 @@ export async function activate(context: vscode.ExtensionContext) {
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
   const initialEditor = vscode.window.activeTextEditor
   const slotTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const packageManifestWatcher = vscode.workspace.createFileSystemWatcher?.('**/package.json')
+  if (packageManifestWatcher) {
+    const invalidateManifest = (uri: vscode.Uri) => {
+      invalidateDocumentPackageMappingsForManifest(uri.fsPath)
+      invalidatePackageContext(uri.fsPath)
+    }
+    context.subscriptions.push(
+      packageManifestWatcher,
+      packageManifestWatcher.onDidCreate(invalidateManifest),
+      packageManifestWatcher.onDidDelete(invalidateManifest),
+    )
+  }
   const ensureDocumentContext = (document: vscode.TextDocument, cleanCache = false) => ensureContextForPath(
     getDocumentPath(document),
     context,
@@ -248,49 +282,52 @@ export async function activate(context: vscode.ExtensionContext) {
     void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
   }))
 
-  context.subscriptions.push(registerCommand('common-intellisense.import', async (params, _loc, _lineOffset) => {
-    if (!params)
+  context.subscriptions.push(registerCommand('common-intellisense.import', async (params) => {
+    if (!params?.document?.uri || typeof params.document.version !== 'number')
+      return
+    const uri = vscode.Uri.parse(params.document.uri)
+    const document = await vscode.workspace.openTextDocument(uri)
+    // Completion commands run after VS Code applies the selected snippet, which
+    // advances the source document by one version. Reject any additional edit.
+    if (document.version < params.document.version || document.version > params.document.version + 1)
       return
     const { data, lib, prefix = '', dynamicLib, importWay = 'specifier' } = params
-    const editor = getActiveTextEditor()
-    if (!editor)
-      return
-    const code = editor.document.getText()
+    const code = document.getText()
     const name = data.name.split('.')[0]
     const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
-    const deps = [...getSuggestedImportNames(data.suggestions, prefix), name]
-    const edits = createImportEdits(code, from, deps, importWay, editor.document.languageId === 'vue')
+    const deps = [...getSuggestedImportNames(data.suggestions, prefix, importWay), name]
+    const edits = createImportEdits(code, from, deps, importWay, document.languageId === 'vue')
     if (!edits.length)
       return
-    await updateText((edit) => {
-      for (const item of [...edits].sort((a, b) => b.start - a.start)) {
-        const start = getPosition(item.start, code).position
-        const end = getPosition(item.end, code).position
-        if (item.start === item.end)
-          edit.insert(start, item.text)
-        else
-          edit.replace(createRange(start, end), item.text)
-      }
-    })
+    const workspaceEdit = new vscode.WorkspaceEdit()
+    for (const item of edits) {
+      const start = document.positionAt(item.start)
+      const end = document.positionAt(item.end)
+      if (item.start === item.end)
+        workspaceEdit.insert(uri, start, item.text)
+      else
+        workspaceEdit.replace(uri, new vscode.Range(start, end), item.text)
+    }
+    await vscode.workspace.applyEdit(workspaceEdit)
   }))
 
   // 监听pkg变化
-  context.subscriptions.push(registerCommand('common-intellisense.slots', async (child, name, offset, detail) => {
-    if (!getIsShowSlots())
+  context.subscriptions.push(registerCommand('common-intellisense.slots', async (child, name, offset, detail, editIdentity) => {
+    if (!getIsShowSlots() || !editIdentity?.uri || typeof editIdentity.version !== 'number')
       return
-    const editor = vscode.window.activeTextEditor
-    if (!editor)
+    const uri = vscode.Uri.parse(editIdentity.uri)
+    const document = await vscode.workspace.openTextDocument(uri)
+    if (document.version !== editIdentity.version)
       return
-    const packageContext = getContextForDocumentPath(getDocumentPath(editor.document))
-      || await ensureDocumentContext(editor.document)
-    if (!packageContext?.uiCompletions)
-      return
-    if (!child) {
-      const code = editor.document.getText()
-      await detectSlots(editor.document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision })
+    const packageContext = getContextForDocumentPath(getDocumentPath(document))
+      || await ensureDocumentContext(document)
+    if (!packageContext?.uiCompletions
+      || packageContext.pkgPath !== editIdentity.packagePath
+      || packageContext.generation !== editIdentity.contextGeneration
+      || packageContext.revision !== editIdentity.contextRevision) {
       return
     }
-    if (!child.children)
+    if (!child?.children)
       return
 
     let lastChild = [...child.children].reverse().find((c: any) => c.type !== 2)
@@ -299,37 +336,36 @@ export async function activate(context: vscode.ExtensionContext) {
       slotName = `v-slot:${name}`
     if (detail.params)
       slotName += '="slotProps"'
+    const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+    const workspaceEdit = new vscode.WorkspaceEdit()
+    const insertAt = (at: number, text: string) => workspaceEdit.insert(uri, document.positionAt(at), text)
+    const replaceAt = (start: number, end: number, text: string) => workspaceEdit.replace(uri, new vscode.Range(document.positionAt(start), document.positionAt(end)), text)
 
     if (lastChild) {
-      if (isVine() && lastChild.codegenNode) {
+      if (isVineDocument && lastChild.codegenNode)
         lastChild = lastChild.codegenNode
-      }
-      const pos = lastChild.loc.end
-      const endColumn = Math.max(pos.column - 1, 0)
-      if (isVine())
-        await insertText(`\n<template ${slotName}></template>`, getPosition(pos.offset + offset).position)
-      else
-        await insertText(`\n<template ${slotName}>$1</template>`, createPosition(pos.line - 1, endColumn))
+      const at = lastChild.loc.end.offset + (isVineDocument ? offset : 0)
+      insertAt(at, `
+<template ${slotName}></template>`)
     }
     else {
       const empty = ' '.repeat(Math.max(child.loc.start.column - 1, 0))
-
       if (child.isSelfClosing) {
-        if (isVine())
-          await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(getPosition(child.loc.end.offset + offset - 3).position, getPosition(child.loc.end.offset + offset).position))
-        else
-          await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(createPosition(child.loc.end.line - 1, child.loc.end.column - 3), createPosition(child.loc.end.line - 1, child.loc.end.column)))
+        const end = child.loc.end.offset + (isVineDocument ? offset : 0)
+        replaceAt(Math.max(0, end - 2), end, `>
+  <template ${slotName}></template>
+</${child.tag}>`)
       }
       else {
-        const isNeedLineBlock = child.loc.start.line === child.loc.end.line
-        const index = child.loc.start.offset + child.loc.source.indexOf(`</${child.tag}`) - (isNeedLineBlock ? 0 : (child.loc.end.column - `</${child.tag}>`.length - 1))
-        const pos = getPosition(index)
-        if (isVine())
-          await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, getPosition(index + offset).position)
-        else
-          await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, createPosition(pos.line, pos.column))
+        const sameLine = child.loc.start.line === child.loc.end.line
+        const at = child.loc.start.offset + child.loc.source.indexOf(`</${child.tag}`)
+          - (sameLine ? 0 : (child.loc.end.column - `</${child.tag}>`.length - 1))
+          + (isVineDocument ? offset : 0)
+        insertAt(at, `${sameLine ? '\n' : empty}  <template ${slotName}></template>
+`)
       }
     }
+    await vscode.workspace.applyEdit(workspaceEdit)
   }))
 
   context.subscriptions.push({ dispose() {
@@ -467,11 +503,7 @@ export async function activate(context: vscode.ExtensionContext) {
           fixedFrom = v.replace(/\d+$/, '')
         }
 
-        const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
-        const keys = Array.from(cacheMap.keys())
-        const targetKey = keys.find(k => nameReg.test(k))!
-        const targetValue = cacheMap.get(targetKey)! as PropsConfig
-        UiCompletions = targetValue
+        UiCompletions = selectScopedCompletions(UiCompletions, cacheMap, fixedFrom, {})
       }
       let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, from, getDocumentPath(document))
       const importUiSource = uiDeps?.[name]
@@ -776,11 +808,7 @@ export async function activate(context: vscode.ExtensionContext) {
               fixedFrom = v.replace(/\d+$/, '')
             }
 
-            const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
-            const keys = Array.from(cacheMap.keys())
-            const targetKey = keys.find(k => nameReg.test(k))!
-            const targetValue = cacheMap.get(targetKey)! as PropsConfig
-            UiCompletions = targetValue
+            UiCompletions = selectScopedCompletions(UiCompletions, cacheMap, fixedFrom, {})
           }
           const target = await findDynamicComponent(name, {}, UiCompletions, componentsPrefix, from)
           if (!target)
@@ -834,13 +862,14 @@ export async function activate(context: vscode.ExtensionContext) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = refsMap[key]
-            if (!refName)
+            const refMembers = getRefMembers(UiCompletions, refName)
+            if (!refMembers)
               return
 
             if (lineText.slice(range.start.character, range.end.character) === 'value') {
               // hover .value.区域 提示所有方法
               const groupMd = createMarkdownString()
-                ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
+              refMembers.forEach((m, i) => {
                 let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
                 if (i !== 0) {
                   content = stripLeadingMarkdownTitle(content)
@@ -853,7 +882,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             const targetKey = word.slice(index + '.value.'.length)
             // FIXME: label可能是对象,string | vscode.CompletionItemLabel
-            const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find(item => item.label === targetKey)
+            const target = refMembers.find(item => item.label === targetKey)
 
             if (!target)
               return
@@ -871,12 +900,13 @@ export async function activate(context: vscode.ExtensionContext) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = r.refsMap[key]
-            if (!refName)
+            const refMembers = getRefMembers(UiCompletions, refName)
+            if (!refMembers)
               return
             if (lineText.slice(range.start.character, range.end.character) === 'value') {
               // hover .value.区域 提示所有方法
               const groupMd = createMarkdownString()
-                ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m: any, i: number) => {
+              refMembers.forEach((m: any, i: number) => {
                 let content = m.documentation.value
                 if (content && i !== 0) {
                   content = stripLeadingMarkdownTitle(content)
@@ -887,7 +917,7 @@ export async function activate(context: vscode.ExtensionContext) {
               return createHover(groupMd)
             }
             const targetKey = word.slice(index + '.value.'.length)
-            const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find((item: any) => item.label === targetKey)
+            const target = refMembers.find((item: any) => item.label === targetKey)
 
             if (!target)
               return
@@ -906,13 +936,14 @@ export async function activate(context: vscode.ExtensionContext) {
           const index = word.indexOf('.current.')
           const key = word.slice(0, index)
           const refName = r.refsMap?.[key]
-          if (!refName)
+          const refMembers = getRefMembers(UiCompletions, refName)
+          if (!refMembers)
             return
 
           if (lineText.slice(range.start.character, range.end.character) === 'current') {
             // hover .value.区域 提示所有方法
             const groupMd = createMarkdownString()
-              ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
+            refMembers.forEach((m, i) => {
               let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
               if (i !== 0) {
                 content = stripLeadingMarkdownTitle(content)
@@ -923,7 +954,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return createHover(groupMd)
           }
           const targetKey = word.slice(index + '.current.'.length)
-          const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find(item => item.label === targetKey)
+          const target = refMembers.find(item => item.label === targetKey)
 
           if (!target)
             return

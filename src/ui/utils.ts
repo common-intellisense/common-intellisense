@@ -1,4 +1,5 @@
 import type { CompletionItemOptions } from '@vscode-use/utils'
+import type { DocumentEditIdentity } from './types'
 import type { CompletionItem } from 'vscode'
 import type { Component, Slots, SuggestionItem } from './ui-type'
 import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from 'lazy-js-utils'
@@ -26,6 +27,7 @@ export interface CompletionRenderContext {
   languageId: string
   framework: CompletionFramework
   uri: string
+  version?: number
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
 
@@ -41,6 +43,7 @@ function normalizeRenderContext(input?: CompletionRenderInput): CompletionRender
     languageId: input ? 'vue' : 'typescriptreact',
     framework: input ? 'vue' : 'react',
     uri: '',
+    version: -1,
   }
 }
 
@@ -101,6 +104,7 @@ export interface FixParams {
   prefix: string
   dynamicLib: string
   importWay: string
+  document?: DocumentEditIdentity
 }
 
 export type PropsConfig = Record<string, PropsConfigItem> & { icons?: Icons }
@@ -724,6 +728,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             prefix,
             dynamicLib: itemDynamicLib || '',
             importWay: itemImportWay || 'specifier',
+            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version } : undefined,
           }
           return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
@@ -773,6 +778,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             prefix,
             dynamicLib: itemDynamicLib,
             importWay: itemImportWay,
+            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version } : undefined,
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]
           return createCompletionItem({ content: _content, detail: description, snippet, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -827,6 +833,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix,
         dynamicLib: itemDynamicLib,
         importWay: itemImportWay,
+        document: context ? { uri: context.uri, version: context.version } : undefined,
       }
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
       return completionItem

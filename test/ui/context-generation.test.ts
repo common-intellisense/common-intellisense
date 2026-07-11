@@ -184,10 +184,26 @@ describe('package context generations', () => {
 
     const parent = await mod.ensureContextForPath(documentPath, context, () => {})
     findUpMock.mockImplementation(async () => '/workspace/packages/new/package.json')
+    mod.invalidateDocumentPackageMappingsForManifest('/workspace/packages/new/package.json')
     const nested = await mod.ensureContextForPath(documentPath, context, () => {})
 
     expect(parent?.pkgPath).toBe('/workspace/package.json')
     expect(nested?.pkgPath).toBe('/workspace/packages/new/package.json')
+  })
+
+  it('reuses positive package discovery across repeated provider requests', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    for (let index = 0; index < 100; index++)
+      await mod.ensureContextForPath(documentPath, context, () => {})
+
+    // One lookup resolves the document; findPkgUI performs one lookup while the
+    // context is initially built. Subsequent provider calls perform neither.
+    expect(findUpMock).toHaveBeenCalledTimes(2)
   })
 
   it('discovers a nested package instead of reusing a loaded parent context', async () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const fetchOfficial = vi.hoisted(() => vi.fn(async () => ({})))
 
@@ -42,6 +42,8 @@ vi.mock('../../src/services/package-version', () => ({
 vi.mock('../../src/type-extract/cache', () => ({ clearTypeCache: vi.fn() }))
 
 describe('multi-root package contexts', () => {
+  beforeEach(() => vi.resetModules())
+
   it('uses each document workspace root for root dependencies', async () => {
     const mod = await import('../../src/ui/ui-find')
     const extensionContext = {} as any
@@ -54,5 +56,19 @@ describe('multi-root package contexts', () => {
     expect(b?.workspaceRoot).toBe('/workspace-b')
     expect(a?.uiNames).toEqual(['antd5'])
     expect(b?.uiNames).toEqual(['elementPlus2'])
+  })
+  it('does not inherit workspace-root dependencies without monorepo metadata', async () => {
+    const fs = await import('node:fs/promises')
+    vi.mocked(fs.default.readFile).mockImplementation(async (file: any) => {
+      if (file === '/workspace-a/package.json')
+        return JSON.stringify({ dependencies: { antd: '^5.0.0' } })
+      return JSON.stringify({ dependencies: {} })
+    })
+    vi.mocked(fs.default.access).mockRejectedValue(new Error('no workspace file'))
+    const mod = await import('../../src/ui/ui-find')
+
+    const context = await mod.ensureContextForPath('/workspace-a/packages/app/src/App.tsx', {} as any, () => {}, false, '/workspace-a')
+
+    expect(context?.uiNames).toEqual([])
   })
 })

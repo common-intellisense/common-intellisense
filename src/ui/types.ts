@@ -1,6 +1,11 @@
 import type * as vscode from 'vscode'
 import type { CompletionRenderContext } from './utils'
 
+export interface DocumentEditIdentity {
+  uri: string
+  version: number
+}
+
 export interface PropsConfig { [key: string]: any }
 
 export interface ComponentItem {

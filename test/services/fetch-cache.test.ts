@@ -85,6 +85,35 @@ describe('persistent fetch cache', () => {
     expect(renameMock).not.toHaveBeenCalled()
   })
 
+  it('bounds cache entries and keeps recently read values', async () => {
+    vi.resetModules()
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+    for (let index = 0; index < 100; index++)
+      expect(mod.setFetchCacheEntry(`key-${index}`, `value-${index}`)).toBe(true)
+    expect(mod.getFetchCacheEntry('key-0')).toBe('value-0')
+    mod.setFetchCacheEntry('key-100', 'value-100')
+
+    expect(mod.cacheFetch.size).toBe(100)
+    expect(mod.cacheFetch.has('key-0')).toBe(true)
+    expect(mod.cacheFetch.has('key-1')).toBe(false)
+  })
+
+  it('evicts by byte size and rejects oversized entries', async () => {
+    vi.resetModules()
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+    const sevenMb = 'x'.repeat(7 * 1024 * 1024)
+    expect(mod.setFetchCacheEntry('first', sevenMb)).toBe(true)
+    expect(mod.setFetchCacheEntry('second', sevenMb)).toBe(true)
+    expect(mod.setFetchCacheEntry('third', 'y'.repeat(3 * 1024 * 1024))).toBe(true)
+
+    expect(mod.cacheFetch.has('first')).toBe(false)
+    expect(mod.getFetchCacheStats().bytes).toBeLessThanOrEqual(16 * 1024 * 1024)
+    expect(mod.setFetchCacheEntry('oversized', 'z'.repeat(8 * 1024 * 1024 + 1))).toBe(false)
+    expect(mod.cacheFetch.has('oversized')).toBe(false)
+  })
+
   it('settles when cached JSON is corrupted', async () => {
     vi.resetModules()
     statMock.mockResolvedValue({ size: 10 })

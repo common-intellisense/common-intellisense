@@ -94,6 +94,19 @@ export function parser(code: string, position: vscode.Position, documentContext:
   return true
 }
 
+function collectVueTemplateRefs(scripts: Array<{ content?: string } | null | undefined>) {
+  const refs: (string | [string, string])[] = []
+  for (const block of scripts) {
+    for (const match of (block?.content || '').matchAll(/(const|let|var)\s+([\w$]+)\s*=\s*(ref|useTemplateRef)[^()]*\(([^)]*)\)/g)) {
+      if (match[3] === 'useTemplateRef')
+        refs.push([match[2], match[4].slice(1, -1)])
+      else
+        refs.push(match[2])
+    }
+  }
+  return refs
+}
+
 export function transformVue(code: string, position: vscode.Position, offset = 0, cursorOffset = getSourceOffset(code, position)) {
   const {
     descriptor: { template, script, scriptSetup },
@@ -102,32 +115,24 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
 
   if (errors.length && !template?.ast)
     return
-  const _script = script || scriptSetup
-  if (!template) {
-    if (_script?.lang === 'tsx') {
-      const r = parserJSX(_script.content, position)
-      r.loc = _script.loc
-      return r
-    }
-    return
+  const scripts = [script, scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
+  const activeScript = scripts.find(block => isInPosition(block.loc, position, offset))
+  if (activeScript?.lang === 'tsx') {
+    const result = parserJSX(activeScript.content, position)
+    if (result)
+      result.loc = activeScript.loc
+    return result
   }
-  if (_script && isInPosition(_script.loc, position, offset)) {
-    const content = _script.content!
-    const refs: (string | [string, string])[] = []
-    for (const match of content.matchAll(/(const|let|var)\s+([\w$]+)\s*=\s*(ref|useTemplateRef)[^()]*\(([^)]*)\)/g)) {
-      if (match[3] === 'useTemplateRef') {
-        refs.push([match[2], match[4].slice(1, -1)])
-      }
-      else if (match) {
-        refs.push(match[2])
-      }
-    }
+  if (activeScript) {
     return {
       type: 'script',
-      refs,
+      refs: collectVueTemplateRefs(scripts),
       template,
+      loc: activeScript.loc,
     }
   }
+  if (!template)
+    return
   if (!errors.length && !isInPosition(template.loc, position, offset))
     return
   // 在template中
@@ -135,7 +140,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
 
   const r = dfs(ast.children, template, position, offset, cursorOffset)
   if (r) {
-    r.loc = _script?.loc
+    r.loc = (scriptSetup || script)?.loc
     return r
   }
   return r
@@ -1007,7 +1012,13 @@ export function registerCodeLensProviderFn() {
               title: `${i === 0 ? 'Slots: ' : ''}${name}`,
               tooltip: (version ? `❗${version} VERSION: ` : '') + (isZh ? description_zh : description),
               command: 'common-intellisense.slots',
-              arguments: [child, name, offset, s],
+              arguments: [child, name, offset, s, {
+                uri: document.uri.toString(),
+                version: document.version,
+                packagePath: analysis.packagePath,
+                contextGeneration: analysis.contextGeneration,
+                contextRevision: analysis.contextRevision,
+              }],
             }))
           })
         })

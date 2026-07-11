@@ -24,7 +24,11 @@ const mocks = vi.hoisted(() => {
     clearDocumentAnalysesForPackages: vi.fn(),
     getSlotAnalysis: vi.fn(),
     getPackageContext: vi.fn(),
+    getDocumentContext: vi.fn(),
     resolvePackagePath: vi.fn(),
+    openTextDocument: vi.fn(),
+    applyEdit: vi.fn(async () => true),
+    workspaceEdits: [] as any[],
     contextUpdatedListener: undefined as undefined | ((context: any) => void),
     textChangeListener: undefined as undefined | ((event: any) => void),
     closeListener: undefined as undefined | ((document: any) => void),
@@ -40,7 +44,7 @@ vi.mock('../src/services/fetch', () => ({
 vi.mock('../src/ui/ui-find', () => ({
   deactivateUICache: vi.fn(),
   ensureContextForPath: mocks.ensureContext,
-  getContextForDocumentPath: vi.fn(),
+  getContextForDocumentPath: mocks.getDocumentContext,
   getContextForPackagePath: mocks.getPackageContext,
   getCurrentPkgUiNames: vi.fn(),
   invalidateContexts: vi.fn(),
@@ -89,29 +93,43 @@ vi.mock('@vscode-use/utils', () => ({
   setCopyText: vi.fn(),
   updateText: vi.fn(),
 }))
-vi.mock('vscode', () => ({
-  window: {
-    activeTextEditor: {
-      document: {
-        languageId: 'vue',
-        uri: { fsPath: '/workspace/App.vue', toString: () => 'file:///workspace/App.vue' },
-        getText: () => '<template />',
+vi.mock('vscode', () => {
+  class WorkspaceEdit {
+    entries: any[] = []
+    constructor() { mocks.workspaceEdits.push(this) }
+    insert(uri: any, position: any, text: string) { this.entries.push(['insert', uri, position, text]) }
+    replace(uri: any, range: any, text: string) { this.entries.push(['replace', uri, range, text]) }
+  }
+  class Range { constructor(public start: any, public end: any) {} }
+  return {
+    window: {
+      activeTextEditor: {
+        document: {
+          languageId: 'vue',
+          uri: { fsPath: '/workspace/App.vue', toString: () => 'file:///workspace/App.vue' },
+          getText: () => '<template />',
+        },
       },
+      visibleTextEditors: [],
     },
-    visibleTextEditors: [],
-  },
-  workspace: {
-    getWorkspaceFolder: vi.fn(() => ({ uri: { fsPath: '/workspace' } })),
-    onDidCloseTextDocument: vi.fn((listener: (document: any) => void) => {
-      mocks.closeListener = listener
-      return { dispose: vi.fn() }
-    }),
-  },
-  languages: {
-    registerHoverProvider: mocks.registerHover,
-  },
-  CompletionItemKind: {},
-}))
+    workspace: {
+      openTextDocument: mocks.openTextDocument,
+      applyEdit: mocks.applyEdit,
+      getWorkspaceFolder: vi.fn(() => ({ uri: { fsPath: '/workspace' } })),
+      onDidCloseTextDocument: vi.fn((listener: (document: any) => void) => {
+        mocks.closeListener = listener
+        return { dispose: vi.fn() }
+      }),
+    },
+    languages: {
+      registerHoverProvider: mocks.registerHover,
+    },
+    Uri: { parse: (value: string) => ({ value, fsPath: value.replace('file://', ''), toString: () => value }) },
+    WorkspaceEdit,
+    Range,
+    CompletionItemKind: {},
+  }
+})
 
 describe('activation registration', () => {
   beforeEach(() => {
@@ -120,7 +138,11 @@ describe('activation registration', () => {
     mocks.clearDocumentAnalysis.mockClear()
     mocks.getSlotAnalysis.mockReset()
     mocks.getPackageContext.mockReset()
+    mocks.getDocumentContext.mockReset()
     mocks.resolvePackagePath.mockReset()
+    mocks.openTextDocument.mockReset()
+    mocks.applyEdit.mockClear()
+    mocks.workspaceEdits.length = 0
     mocks.contextUpdatedListener = undefined
     mocks.textChangeListener = undefined
     mocks.closeListener = undefined
@@ -247,6 +269,73 @@ describe('activation registration', () => {
       { label: 'antd5', picked: true },
       { label: 'elementPlus2' },
     ], expect.any(Object))
+  })
+
+  it('applies import edits to the source document after completion insertion advances its version', async () => {
+    const source = {
+      languageId: 'typescriptreact',
+      version: 4,
+      uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
+      getText: () => 'export default () => <Button />',
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    }
+    mocks.openTextDocument.mockResolvedValue(source)
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    await mocks.commandHandlers.get('common-intellisense.import')?.({
+      data: { name: 'Button' },
+      lib: 'ui',
+      importWay: 'specifier',
+      document: { uri: 'file:///workspace/A.tsx', version: 3 },
+    })
+
+    expect(mocks.openTextDocument).toHaveBeenCalledWith(expect.objectContaining({ value: 'file:///workspace/A.tsx' }))
+    expect(mocks.applyEdit).toHaveBeenCalledTimes(1)
+    expect(mocks.workspaceEdits[0].entries[0][1]).toEqual(expect.objectContaining({ value: 'file:///workspace/A.tsx' }))
+  })
+
+  it('rejects import edits when the source document version changed', async () => {
+    mocks.openTextDocument.mockResolvedValue({
+      languageId: 'typescriptreact',
+      version: 5,
+      uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
+      getText: () => '',
+      positionAt: () => ({ line: 0, character: 0 }),
+    })
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+    await mocks.commandHandlers.get('common-intellisense.import')?.({
+      data: { name: 'Button' },
+      lib: 'ui',
+      importWay: 'specifier',
+      document: { uri: 'file:///workspace/A.tsx', version: 3 },
+    })
+    expect(mocks.applyEdit).not.toHaveBeenCalled()
+  })
+
+  it('applies slot edits only to the CodeLens source document', async () => {
+    const source = {
+      languageId: 'vue',
+      version: 2,
+      uri: { fsPath: '/workspace/A.vue', toString: () => 'file:///workspace/A.vue' },
+      getText: () => '<Button></Button>',
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    }
+    const packageContext = { pkgPath: '/workspace/package.json', generation: 1, revision: 2, uiCompletions: {}, optionsComponents: { prefix: [] } }
+    mocks.openTextDocument.mockResolvedValue(source)
+    mocks.getDocumentContext.mockReturnValue(packageContext)
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+    await mocks.commandHandlers.get('common-intellisense.slots')?.(
+      { tag: 'Button', children: [], isSelfClosing: false, loc: { start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 18, offset: 17 }, source: '<Button></Button>' } },
+      'default',
+      0,
+      {},
+      { uri: 'file:///workspace/A.vue', version: 2, packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 2 },
+    )
+    expect(mocks.applyEdit).toHaveBeenCalledTimes(1)
+    expect(mocks.workspaceEdits[0].entries[0][1]).toEqual(expect.objectContaining({ value: 'file:///workspace/A.vue' }))
   })
 
   it('registers providers and commands before the initial preload resolves', async () => {

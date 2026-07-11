@@ -101,8 +101,25 @@ export async function resolvePackagePathForDocument(cwd: string, refresh = false
   if (packagePath)
     documentPackageCache.set(cwd, packagePath)
   else
+    // Do not cache misses: a package may be scaffolded after the document opens.
     documentPackageCache.delete(cwd)
   return packagePath
+}
+
+/**
+ * Invalidate document-to-package mappings affected by a package.json create or
+ * delete event. Existing positive mappings remain hot until a manifest event
+ * makes a nearer package root possible (or removes their current root).
+ */
+export function invalidateDocumentPackageMappingsForManifest(manifestPath: string) {
+  const normalizedManifest = path.resolve(manifestPath)
+  const manifestDirectory = path.dirname(normalizedManifest)
+  for (const [documentPath, packagePath] of documentPackageCache) {
+    if (packagePath === normalizedManifest || isSameOrWithin(documentPath, manifestDirectory)) {
+      documentPackageCache.delete(documentPath)
+      urlCache.delete(documentPath)
+    }
+  }
 }
 
 export async function ensureContextForPath(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache = false, workspaceRoot?: string) {
@@ -111,9 +128,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   if (cleanCache)
     invalidateContexts()
 
-  // Always refresh nearest-package discovery so a newly-created nested
-  // package.json can supersede a previously cached parent package.
-  const pkgPath = await resolvePackagePathForDocument(cwd, true)
+  const pkgPath = await resolvePackagePathForDocument(cwd)
   if (!pkgPath)
     return
   const cachedDiscovery = urlCache.get(cwd)
@@ -529,7 +544,8 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
   }
 
   const manifest = JSON.parse(await fsp.readFile(pkg, 'utf8'))
-  const { localDependencies, dependencies: deps } = collectDependencyScopes(manifest, rootPkg)
+  const dependencyRootPkg = isMonorepo ? rootPkg : null
+  const { localDependencies, dependencies: deps } = collectDependencyScopes(manifest, dependencyRootPkg)
   const aliasUiNames = Object.keys(alias)
   const result: Uis = []
   for (const key of Object.keys(deps)) {

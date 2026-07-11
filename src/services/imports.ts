@@ -18,8 +18,11 @@ export function resolveImportSource(dataFrom: unknown, dynamicLib: unknown, lib:
   return lib
 }
 
-export function getSuggestedImportNames(suggestions: unknown, prefix: string) {
-  if (!Array.isArray(suggestions) || suggestions.length !== 1)
+export function getSuggestedImportNames(suggestions: unknown, prefix: string, importWay: ImportWay = 'specifier') {
+  // A default or namespace import represents one module value. Suggestions may
+  // resolve through a per-component dynamic source, so importing them from the
+  // selected component's source would bind every name to the same export.
+  if (importWay !== 'specifier' || !Array.isArray(suggestions) || suggestions.length !== 1)
     return []
 
   const suggestion = suggestions[0]

@@ -24,6 +24,54 @@ const prefix = '@common-intellisense/'
 export const cacheFetch = new Map<string, string>()
 const cacheSchemaVersion = 1
 const maxCacheSize = 16 * 1024 * 1024
+const maxCacheEntrySize = 8 * 1024 * 1024
+const maxCacheEntries = 100
+
+function cacheEntrySize(key: string, value: string) {
+  return Buffer.byteLength(key) + Buffer.byteLength(value)
+}
+
+function getCacheByteSize() {
+  let total = 0
+  for (const [key, value] of cacheFetch)
+    total += cacheEntrySize(key, value)
+  return total
+}
+
+function pruneFetchCache() {
+  let bytes = getCacheByteSize()
+  while (cacheFetch.size > maxCacheEntries || bytes > maxCacheSize) {
+    const oldest = cacheFetch.entries().next().value as [string, string] | undefined
+    if (!oldest)
+      break
+    cacheFetch.delete(oldest[0])
+    bytes -= cacheEntrySize(oldest[0], oldest[1])
+  }
+}
+
+export function setFetchCacheEntry(key: string, value: string) {
+  if (cacheEntrySize(key, value) > maxCacheEntrySize) {
+    cacheFetch.delete(key)
+    return false
+  }
+  cacheFetch.delete(key)
+  cacheFetch.set(key, value)
+  pruneFetchCache()
+  return cacheFetch.get(key) === value
+}
+
+export function getFetchCacheEntry(key: string) {
+  if (!cacheFetch.has(key))
+    return
+  const value = cacheFetch.get(key)!
+  cacheFetch.delete(key)
+  cacheFetch.set(key, value)
+  return value
+}
+
+export function getFetchCacheStats() {
+  return { entries: cacheFetch.size, bytes: getCacheByteSize() }
+}
 export let localCacheUri = path.join(os.tmpdir(), 'common-intellisense', 'mapping.json')
 let cacheReadTask: Promise<string> | null = null
 let cacheReadEpoch = 0
@@ -326,7 +374,7 @@ async function readLocalCache() {
     }
     if (epoch === cacheReadEpoch && cachePath === localCacheUri) {
       for (const [key, value] of pendingEntries)
-        cacheFetch.set(key, value)
+        setFetchCacheEntry(key, value)
     }
   }
   catch (error: any) {
@@ -352,9 +400,12 @@ export function writeLocalCache() {
   cacheWriteTask = cacheWriteTask.then(async () => {
     if (epoch !== cacheWriteEpoch)
       return
-    const payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: Array.from(cacheFetch.entries()) })
-    if (Buffer.byteLength(payload) > maxCacheSize)
-      throw new Error(`Cache payload exceeds ${maxCacheSize} bytes`)
+    pruneFetchCache()
+    let payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: Array.from(cacheFetch.entries()) })
+    while (Buffer.byteLength(payload) > maxCacheSize && cacheFetch.size) {
+      cacheFetch.delete(cacheFetch.keys().next().value!)
+      payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: Array.from(cacheFetch.entries()) })
+    }
     await fsp.mkdir(path.dirname(localCacheUri), { recursive: true })
     const temporary = `${localCacheUri}.${process.pid}.${Date.now()}.tmp`
     try {
@@ -451,9 +502,10 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
 
     try {
       let scriptContent = ''
-      if (cacheFetch.has(scriptKey)) {
+      const cachedScript = getFetchCacheEntry(scriptKey)
+      if (cachedScript !== undefined) {
         logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
-        scriptContent = cacheFetch.get(scriptKey) || ''
+        scriptContent = cachedScript
       }
       else {
         logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
@@ -468,7 +520,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
         ])
       }
       if (scriptContent && sourceEpoch === epoch)
-        cacheFetch.set(scriptKey, scriptContent)
+        setFetchCacheEntry(scriptKey, scriptContent)
       // Official @common-intellisense packages remain a trusted compatibility source.
       // Custom executable adapters are opt-in and should migrate to data-only manifests.
       const exportsData = evaluateAdapter(scriptContent, scriptKey, !!isZh, true)
@@ -725,7 +777,7 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
         : `Skipped untrusted remoteUri: ${uri} (only https, or localhost/127.0.0.1 http; use trustedHosts to allow)`)
       return null
     }
-    const cached = cacheFetch.has(uri) ? cacheFetch.get(uri) : ''
+    const cached = getFetchCacheEntry(uri) || ''
     const lastFetchedAt = remoteUriFetchedAt.get(uri) || 0
     const retryState = remoteUriRetry.get(uri)
     const retryDeferred = !!cached && !!retryState && now < retryState.nextRetryAt
@@ -758,7 +810,7 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
           throw new Error(`Remote adapter is invalid or too large: ${uri}`)
         if (sourceEpoch !== epoch)
           throw new Error(`Remote adapter configuration changed while loading: ${uri}`)
-        cacheFetch.set(uri, fetched)
+        setFetchCacheEntry(uri, fetched)
         remoteUriFetchedAt.set(uri, Date.now())
         remoteUriRetry.delete(uri)
         return [uri, fetched] as const
@@ -861,8 +913,9 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
   try {
     const settled = await Promise.allSettled(fixedUris.map(async ([name, version, resource]) => {
       const key = `${name}@${version}::${resource}`
-      if (cacheFetch.has(key))
-        return [key, cacheFetch.get(key)] as const
+      const cached = getFetchCacheEntry(key)
+      if (cached !== undefined)
+        return [key, cached] as const
 
       const scriptContent = await Promise.any([
         fetchAndExtractPackage({ name, dist: resource, logger }),
@@ -872,7 +925,7 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
       ])
 
       if (scriptContent && sourceEpoch === epoch)
-        cacheFetch.set(key, scriptContent)
+        setFetchCacheEntry(key, scriptContent)
       return [key, scriptContent] as const
     }))
     for (const entry of settled) {
@@ -952,7 +1005,7 @@ async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspa
       const scriptContent = await fsp.readFile(realUri, 'utf8')
       if (scriptContent.length > maxRemoteScriptSize)
         throw new Error(`Local adapter is too large: ${uri}`)
-      if (cacheFetch.get(uri) === scriptContent && localUrisMap.has(uri)) {
+      if (getFetchCacheEntry(uri) === scriptContent && localUrisMap.has(uri)) {
         Object.assign(result, localUrisMap.get(uri))
         continue
       }
@@ -961,7 +1014,7 @@ async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspa
       appendReducedExports(reduced, exportsData, uri)
       if (sourceEpoch !== epoch)
         continue
-      cacheFetch.set(uri, scriptContent)
+      setFetchCacheEntry(uri, scriptContent)
       localUrisMap.set(uri, reduced)
       Object.assign(result, reduced)
     }

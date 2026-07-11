@@ -1,0 +1,54 @@
+import { describe, expect, it } from 'vitest'
+import { parser } from '../src/parser'
+
+function positionIn(code: string, needle: string) {
+  const offset = code.indexOf(needle)
+  const before = code.slice(0, offset)
+  const lines = before.split('\n')
+  return {
+    position: { line: lines.length - 1, character: lines.at(-1)!.length } as any,
+    offset,
+  }
+}
+
+function parseAt(code: string, needle: string) {
+  const { position, offset } = positionIn(code, needle)
+  return parser(code, position, { languageId: 'vue', uri: 'file:///App.vue', offset })
+}
+
+describe('vue script block selection', () => {
+  it('handles a normal script without script setup', () => {
+    const code = '<script>\nconst normalRef = ref()\nnormalRef.value\n</script>'
+    expect(parseAt(code, 'normalRef.value')).toMatchObject({
+      type: 'script',
+      refs: ['normalRef'],
+    })
+  })
+
+  it('handles script setup without a normal script', () => {
+    const code = '<script setup>\nconst setupRef = ref()\nsetupRef.value\n</script>'
+    expect(parseAt(code, 'setupRef.value')).toMatchObject({
+      type: 'script',
+      refs: ['setupRef'],
+    })
+  })
+
+  it('uses either active block and aggregates refs from both blocks', () => {
+    const code = `<script>
+const normalRef = ref()
+normalRef.value
+</script>
+<script setup lang="ts">
+const buttonRef = ref()
+buttonRef.value
+</script>
+<template><UiButton ref="buttonRef" /></template>`
+
+    const normal = parseAt(code, 'normalRef.value')
+    const setup = parseAt(code, 'buttonRef.value')
+    expect(normal).toMatchObject({ type: 'script', refs: ['normalRef', 'buttonRef'] })
+    expect(setup).toMatchObject({ type: 'script', refs: ['normalRef', 'buttonRef'] })
+    expect((normal as any).loc.source).toContain('normalRef')
+    expect((setup as any).loc.source).toContain('buttonRef')
+  })
+})

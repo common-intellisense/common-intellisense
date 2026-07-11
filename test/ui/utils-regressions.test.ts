@@ -192,9 +192,15 @@ describe('utils reducer regressions', () => {
       map: [[parent, 'Parent detail'], [child, 'Child detail']] as any,
     })
 
-    const completions = await Promise.all(config.data())
+    const completions = await Promise.all(config.data(undefined, {
+      languageId: 'vue',
+      framework: 'vue',
+      uri: 'file:///workspace/A.vue',
+      version: 3,
+    }))
     const parentCompletion = completions[0] as any
 
+    expect(parentCompletion.params.document).toEqual({ uri: 'file:///workspace/A.vue', version: 3 })
     expect(parentCompletion.snippet).toContain('<child')
     expect(parentCompletion.snippet).not.toContain('[object Object]')
     expect(parentCompletion.documentation.value).toContain('- Child')
