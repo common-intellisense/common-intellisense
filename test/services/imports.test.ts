@@ -107,6 +107,27 @@ describe('import transforms', () => {
     expect(applyEdits(code, mixed)).not.toContain('import { Button, Input } from "ui"')
   })
 
+  it('does not inject inline code into an external Vue script', () => {
+    const vue = '<template><Button /></template>\n<script src="./component.ts"></script>\n'
+    const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
+    expect(output).toContain('<script src="./component.ts"></script>')
+    expect(output).toContain('<script setup>\nimport { Button } from "ui"\n</script>')
+  })
+
+  it('ignores script-like text inside Vue comments', () => {
+    const vue = '<!-- <script setup>fake</script> -->\n<template><Button /></template>\n'
+    const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
+    expect(output).toContain('<!-- <script setup>fake</script> -->')
+    expect(output).toContain('<script setup>\nimport { Button } from "ui"\n</script>')
+  })
+
+  it('uses an inline normal script when script setup is external', () => {
+    const vue = '<script setup src="./setup.ts"></script>\n<script>\nconst x = 1\n</script>\n'
+    const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
+    expect(output).toContain('<script setup src="./setup.ts"></script>')
+    expect(output).toContain('<script>\nimport { Button } from "ui"\nconst x = 1')
+  })
+
   it('inserts into Vue script setup and creates one when absent', () => {
     const vue = `<template><Button /></template>\n<script setup lang="ts">\nconst x = 1\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))

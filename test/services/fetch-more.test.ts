@@ -6,6 +6,21 @@ let trustedHosts: string[] = ['fake']
 let allowLegacyAdapters = true
 const fetchFromTypesMock = vi.fn()
 
+async function useMockRemoteRequester(mod: typeof import('../../src/services/fetch')) {
+  const { ofetch } = await import('ofetch')
+  mod.setRemoteTransportForTest(async (uri) => {
+    let status = 200
+    let location: string | undefined
+    const body = await vi.mocked(ofetch)(uri, {
+      onResponse({ response }: any) {
+        status = response.status
+        location = response.headers.get('location') || undefined
+      },
+    } as any)
+    return { status, location, body: String(body ?? '') }
+  }, async () => [{ address: '8.8.8.8', family: 4 }])
+}
+
 // This test file isolates different mocked behaviors from the other fetch.test.ts
 vi.mock('node:fs', () => ({ existsSync: () => false }))
 vi.mock('node:fs/promises', () => ({ readFile: vi.fn(async () => '{}') }))
@@ -47,6 +62,11 @@ describe('fetch service additional tests (mocked)', () => {
     trustedHosts = ['fake']
     allowLegacyAdapters = true
     fetchFromTypesMock.mockReset()
+  })
+
+  beforeEach(async () => {
+    const mod = await import('../../src/services/fetch')
+    await useMockRemoteRequester(mod)
   })
 
   it('fetchFromCommonIntellisense returns parsed exports and caches the result', async () => {

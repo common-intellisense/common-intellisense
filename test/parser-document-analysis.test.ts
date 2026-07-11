@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beginDocumentSlotAnalysis, clearDocumentAnalysesForPackages, clearDocumentAnalysis, commitDocumentSlotAnalysis, getDocumentSlotAnalysis, registerCodeLensProviderFn } from '../src/parser'
+import { beginDocumentSlotAnalysis, clearDocumentAnalysesForPackages, clearDocumentAnalysis, commitDocumentSlotAnalysis, findUiTag, getDocumentSlotAnalysis, registerCodeLensProviderFn } from '../src/parser'
 
 const identity = { packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 1 }
 
@@ -116,6 +116,24 @@ describe('per-document slot analysis', () => {
 
     expect(getDocumentSlotAnalysis('file:///workspace/a.vue')).toBeUndefined()
     expect(getDocumentSlotAnalysis('file:///workspace/b.vue')).toBeDefined()
+  })
+
+  it('finds slots for JSX compound components', async () => {
+    const child = {
+      type: 'JSXElement',
+      loc: { start: { line: 1, column: 0 }, end: { line: 1, column: 20 } },
+      children: [],
+      openingElement: {
+        name: {
+          type: 'JSXMemberExpression',
+          object: { type: 'JSXIdentifier', name: 'Form' },
+          property: { type: 'JSXIdentifier', name: 'Item' },
+        },
+      },
+    }
+    const rawSlots = [{ name: 'label' }]
+
+    await expect(findUiTag([child], { 'Form.Item': { rawSlots } })).resolves.toEqual([{ child, slots: rawSlots }])
   })
 
   it('can clear one document without affecting another', () => {

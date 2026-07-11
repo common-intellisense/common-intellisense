@@ -28,7 +28,12 @@ export interface PackageContext {
 }
 
 const contexts = new Map<string, PackageContext>()
-const contextLoads = new Map<string, Promise<PackageContext | undefined>>()
+interface ContextLoad {
+  epoch: number
+  generation: number
+  task: Promise<PackageContext | undefined>
+}
+const contextLoads = new Map<string, ContextLoad>()
 const generations = new Map<string, number>()
 const documentPackageCache = new Map<string, string | null>()
 const mainWatchers = new Map<string, () => void>()
@@ -92,9 +97,12 @@ export async function resolvePackagePathForDocument(cwd: string, refresh = false
     return
   if (!refresh && documentPackageCache.has(cwd))
     return documentPackageCache.get(cwd) || undefined
-  const packagePath = await findUp('package.json', { cwd }) || null
-  documentPackageCache.set(cwd, packagePath)
-  return packagePath || undefined
+  const packagePath = await findUp('package.json', { cwd })
+  if (packagePath)
+    documentPackageCache.set(cwd, packagePath)
+  else
+    documentPackageCache.delete(cwd)
+  return packagePath
 }
 
 export async function ensureContextForPath(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache = false, workspaceRoot?: string) {
@@ -103,9 +111,14 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   if (cleanCache)
     invalidateContexts()
 
-  const pkgPath = await resolvePackagePathForDocument(cwd)
+  // Always refresh nearest-package discovery so a newly-created nested
+  // package.json can supersede a previously cached parent package.
+  const pkgPath = await resolvePackagePathForDocument(cwd, true)
   if (!pkgPath)
     return
+  const cachedDiscovery = urlCache.get(cwd)
+  if (cachedDiscovery?.pkg !== pkgPath)
+    urlCache.delete(cwd)
 
   const existing = contexts.get(pkgPath)
   if (existing) {
@@ -114,27 +127,32 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   }
   const loading = contextLoads.get(pkgPath)
   if (loading)
-    return loading
+    return loading.task
 
   const epoch = registryEpoch
   const generation = nextGeneration(pkgPath)
-  const task = buildContext(cwd, extensionContext, detectSlots, generation, workspaceRoot || path.dirname(pkgPath))
-  contextLoads.set(pkgPath, task)
-  try {
-    const context = await task
-    if (!context || registryEpoch !== epoch || generations.get(pkgPath) !== generation)
-      return
-    contexts.set(context.pkgPath, context)
-    documentPackageCache.set(cwd, context.pkgPath)
-    applyContext(context)
-    notifyContextUpdated(context)
-    void enhanceContextWithOtherSources(context, epoch).catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
-    return context
-  }
-  finally {
-    if (contextLoads.get(pkgPath) === task)
-      contextLoads.delete(pkgPath)
-  }
+  const load = {} as ContextLoad
+  load.epoch = epoch
+  load.generation = generation
+  load.task = (async () => {
+    try {
+      const context = await buildContext(cwd, extensionContext, detectSlots, generation, workspaceRoot || path.dirname(pkgPath))
+      if (!context || registryEpoch !== epoch || generations.get(pkgPath) !== generation)
+        return
+      contexts.set(context.pkgPath, context)
+      documentPackageCache.set(cwd, context.pkgPath)
+      applyContext(context)
+      notifyContextUpdated(context)
+      void enhanceContextWithOtherSources(context, epoch).catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
+      return context
+    }
+    finally {
+      if (contextLoads.get(pkgPath) === load)
+        contextLoads.delete(pkgPath)
+    }
+  })()
+  contextLoads.set(pkgPath, load)
+  return load.task
 }
 
 export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache?: boolean) {

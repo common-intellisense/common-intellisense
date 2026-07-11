@@ -53,6 +53,30 @@ describe('package context generations', () => {
     expect(mod.getContextForDocumentPath('/workspace/src/App.tsx')).toBeUndefined()
   })
 
+  it('rejects every waiter joined to a globally invalidated context load', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveOld!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const first = mod.ensureContextForPath(documentPath, context, () => {})
+    const joined = mod.ensureContextForPath(documentPath, context, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidateContexts()
+    resolveOld({})
+
+    await expect(first).resolves.toBeUndefined()
+    await expect(joined).resolves.toBeUndefined()
+    expect(mod.getContextForDocumentPath(documentPath)).toBeUndefined()
+
+    await expect(mod.ensureContextForPath(documentPath, context, () => {})).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects a package context invalidated while its first load is in flight', async () => {
     findUpMock.mockResolvedValue('/workspace/package.json')
     let resolveFirst!: (value: any) => void
@@ -65,6 +89,7 @@ describe('package context generations', () => {
     const documentPath = '/workspace/src/App.tsx'
 
     const first = mod.ensureContextForPath(documentPath, context, () => {})
+    const joined = mod.ensureContextForPath(documentPath, context, () => {})
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     mod.invalidatePackageContext(documentPath)
     const second = mod.ensureContextForPath(documentPath, context, () => {})
@@ -72,6 +97,7 @@ describe('package context generations', () => {
 
     resolveFirst({})
     await expect(first).resolves.toBeUndefined()
+    await expect(joined).resolves.toBeUndefined()
     expect(mod.getContextForDocumentPath(documentPath)).toBeUndefined()
 
     resolveSecond({})
@@ -135,6 +161,33 @@ describe('package context generations', () => {
 
     await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache a missing package root', async () => {
+    findUpMock.mockResolvedValueOnce(undefined).mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/new-package/src/App.tsx'
+
+    await expect(mod.ensureContextForPath(documentPath, context, () => {})).resolves.toBeUndefined()
+    await expect(mod.ensureContextForPath(documentPath, context, () => {})).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
+    expect(findUpMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('refreshes a cached parent when a nearer package is created', async () => {
+    findUpMock.mockImplementation(async () => '/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/packages/new/src/App.tsx'
+
+    const parent = await mod.ensureContextForPath(documentPath, context, () => {})
+    findUpMock.mockImplementation(async () => '/workspace/packages/new/package.json')
+    const nested = await mod.ensureContextForPath(documentPath, context, () => {})
+
+    expect(parent?.pkgPath).toBe('/workspace/package.json')
+    expect(nested?.pkgPath).toBe('/workspace/packages/new/package.json')
   })
 
   it('discovers a nested package instead of reusing a loaded parent context', async () => {

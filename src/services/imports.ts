@@ -1,3 +1,5 @@
+// @ts-expect-error browser build avoids optional Node template-engine dependencies
+import { parse as parseVueSfc } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import ts from 'typescript'
 
 export type ImportWay = 'as default' | 'default' | 'specifier'
@@ -265,14 +267,13 @@ function getScriptRegion(code: string, vue: boolean) {
   if (!vue)
     return { code, offset: 0 }
 
-  const matches = [...code.matchAll(/<script\b([^>]*)>/gi)]
-  if (!matches.length)
+  const { descriptor } = parseVueSfc(code)
+  const selected = descriptor.scriptSetup?.src
+    ? descriptor.script && !descriptor.script.src ? descriptor.script : undefined
+    : descriptor.scriptSetup || (descriptor.script && !descriptor.script.src ? descriptor.script : undefined)
+  if (!selected)
     return null
-  const selected = matches.find(match => /\bsetup\b/.test(match[1])) || matches[0]
-  const start = selected.index! + selected[0].length
-  const close = code.indexOf('</script>', start)
-  const end = close === -1 ? code.length : close
-  return { code: code.slice(start, end), offset: start }
+  return { code: selected.content, offset: selected.loc.start.offset }
 }
 
 function isIdentifier(name: string) {

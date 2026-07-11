@@ -1067,11 +1067,11 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
 }
 const originTag = ['div', 'span', 'ul', 'li', 'ol', 'p', 'main', 'header', 'footer', 'template', 'img', 'aside', 'body', 'a', 'video', 'table', 'th', 'tr', 'td', 'form', 'input', 'label', 'button', 'article', 'section']
 
-async function findUiTag(children: any, UiCompletions: any, result: any[] = [], cacheMap = new Set(), uiDeps: any, prefix: string[]) {
+export async function findUiTag(children: any, UiCompletions: any, result: any[] = [], cacheMap = new Set(), uiDeps: any = {}, prefix: string[] = []) {
   for (const child of children) {
-    let tag: string = child.tag
+    let tag: string | undefined = child.tag
     if (child.type === 'JSXElement')
-      tag = child.openingElement.name.name
+      tag = getJsxElementName(child.openingElement?.name)
 
     if (!tag)
       continue

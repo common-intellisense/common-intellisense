@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer'
 import dns from 'node:dns/promises'
 import fsp from 'node:fs/promises'
+import http from 'node:http'
+import https from 'node:https'
 import os from 'node:os'
 import process from 'node:process'
 import path from 'node:path'
@@ -10,12 +12,12 @@ import * as vscode from 'vscode'
 import { fetchAndExtractPackage } from '@simon_he/fetch-npm'
 import { latestVersion } from '@simon_he/latest-version'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
-import { ofetch } from 'ofetch'
 import { componentsReducer, propsReducer } from '../ui/utils'
 import { logger } from '../ui/ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
 import { getPrefix } from '../ui/ui-utils'
 import { fetchFromTypes } from '../type-extract'
+import { createAdapterVmContext } from './adapter-vm'
 
 const prefix = '@common-intellisense/'
 
@@ -149,21 +151,6 @@ export function isTrustedRedirectUri(uri: string) {
 
 type ResolveHost = (hostname: string) => Promise<Array<{ address: string, family: number }>>
 
-async function validateRedirectTarget(uri: string, resolveHost: ResolveHost) {
-  if (!isTrustedRedirectUri(uri))
-    return false
-  const hostname = new URL(uri).hostname.replace(/^\[|\]$/g, '')
-  if (isIP(hostname))
-    return true
-  try {
-    const addresses = await resolveHost(hostname)
-    return addresses.length > 0 && addresses.every(({ address }) => !isPrivateNetworkHost(address))
-  }
-  catch {
-    return false
-  }
-}
-
 function isExplicitlyTrustedHost(hostname: string) {
   const trustedHosts = getConfiguration('common-intellisense.trustedHosts') as string[] | undefined
   return Array.isArray(trustedHosts) && trustedHosts.includes(hostname)
@@ -270,7 +257,7 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
     __result: undefined,
   }
   sandbox.exports = sandbox.module.exports
-  const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } })
+  const context = createAdapterVmContext(sandbox)
   new vm.Script(scriptContent, { filename: source }).runInContext(context, { timeout: remoteExecTimeout })
   const keys = new vm.Script('Object.keys(module.exports)').runInContext(context, { timeout: remoteExecTimeout }) as string[]
   validateLegacyAdapterLimits(keys, [], source)
@@ -572,51 +559,132 @@ type RemoteTrustClass
     | { kind: 'localhostHttp', hostname: string }
     | { kind: 'explicitTrustedHost', hostname: string }
 
-async function getRemoteTrustClass(uri: string, resolveHost: ResolveHost): Promise<RemoteTrustClass | undefined> {
+async function getRemoteTrustClass(uri: string): Promise<RemoteTrustClass | undefined> {
   const target = new URL(uri)
   const hostname = target.hostname.toLowerCase()
   if (target.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname))
     return { kind: 'localhostHttp', hostname }
   if ((target.protocol === 'http:' || target.protocol === 'https:') && isExplicitlyTrustedHost(hostname))
     return { kind: 'explicitTrustedHost', hostname }
-  if (await validateRedirectTarget(uri, resolveHost))
+  if (isTrustedRedirectUri(uri))
     return { kind: 'publicHttps' }
 }
 
-async function isRedirectAllowed(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
+function isRedirectAllowed(uri: string, trust: RemoteTrustClass) {
   const target = new URL(uri)
   const hostname = target.hostname.toLowerCase()
   if (trust.kind === 'publicHttps')
-    return validateRedirectTarget(uri, resolveHost)
+    return isTrustedRedirectUri(uri)
   return hostname === trust.hostname && (target.protocol === 'http:' || target.protocol === 'https:')
 }
 
-export async function fetchRemoteText(uri: string, resolveHost: ResolveHost = hostname => dns.lookup(hostname, { all: true, verbatim: true })) {
-  const trust = await getRemoteTrustClass(uri, resolveHost)
+function normalizeAddress(address: string) {
+  const normalized = address.toLowerCase().replace(/^\[|\]$/g, '')
+  return normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized
+}
+
+async function resolvePinnedAddress(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
+  const target = new URL(uri)
+  const hostname = target.hostname.replace(/^\[|\]$/g, '')
+  const addresses = isIP(hostname)
+    ? [{ address: hostname, family: isIP(hostname) }]
+    : await resolveHost(hostname)
+  if (!addresses.length)
+    throw new Error(`Remote adapter hostname did not resolve: ${hostname}`)
+  if (trust.kind === 'publicHttps' && addresses.some(({ address }) => isPrivateNetworkHost(address)))
+    throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
+  return addresses[0]
+}
+
+interface PinnedResponse {
+  status: number
+  location?: string
+  body: string
+}
+
+export type PinnedRequester = (uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass) => Promise<PinnedResponse>
+let requesterOverride: PinnedRequester | undefined
+let resolverOverride: ResolveHost | undefined
+
+export function setRemoteTransportForTest(requester?: PinnedRequester, resolver?: ResolveHost) {
+  requesterOverride = requester
+  resolverOverride = resolver
+}
+
+function requestPinnedText(uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass): Promise<PinnedResponse> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(uri)
+    const transport = target.protocol === 'https:' ? https : http
+    const request = transport.request(target, {
+      method: 'GET',
+      servername: target.protocol === 'https:' ? target.hostname : undefined,
+      lookup(_hostname, options, callback: any) {
+        if (typeof options === 'object' && options.all)
+          callback(null, [pinned])
+        else
+          callback(null, pinned.address, pinned.family)
+      },
+      headers: { accept: 'text/plain, application/json' },
+    }, (response) => {
+      const status = response.statusCode || 0
+      const location = response.headers.location
+      if (status >= 300 && status < 400) {
+        response.destroy()
+        resolve({ status, location, body: '' })
+        return
+      }
+      const contentLength = Number(response.headers['content-length'])
+      if (Number.isFinite(contentLength) && contentLength > maxRemoteScriptSize) {
+        response.destroy()
+        reject(new Error(`Remote adapter is too large: ${uri}`))
+        return
+      }
+      const chunks: Buffer[] = []
+      let size = 0
+      response.on('data', (chunk: Buffer | string) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        size += buffer.length
+        if (size > maxRemoteScriptSize) {
+          response.destroy(new Error(`Remote adapter is too large: ${uri}`))
+          return
+        }
+        chunks.push(buffer)
+      })
+      response.on('end', () => resolve({ status, location, body: Buffer.concat(chunks).toString('utf8') }))
+      response.on('error', reject)
+    })
+    request.setTimeout(timeout, () => request.destroy(new Error(`Remote adapter request timed out: ${uri}`)))
+    request.on('socket', (socket) => {
+      socket.once('connect', () => {
+        const remoteAddress = normalizeAddress(socket.remoteAddress || '')
+        if (remoteAddress !== normalizeAddress(pinned.address) || (trust.kind === 'publicHttps' && isPrivateNetworkHost(remoteAddress)))
+          request.destroy(new Error(`Remote adapter connected to an untrusted address: ${socket.remoteAddress || 'unknown'}`))
+      })
+    })
+    request.on('error', reject)
+    request.end()
+  })
+}
+
+export async function fetchRemoteText(
+  uri: string,
+  resolveHost: ResolveHost = resolverOverride || (hostname => dns.lookup(hostname, { all: true, verbatim: true })),
+  requestText: PinnedRequester = requesterOverride || requestPinnedText,
+) {
+  const trust = await getRemoteTrustClass(uri)
   if (!trust)
     throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
   let current = uri
   for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
-    let status = 0
-    let location: string | null = null
-    const body = await ofetch(current, {
-      responseType: 'text',
-      retry,
-      timeout,
-      redirect: 'manual',
-      ignoreResponseError: true,
-      onResponse({ response }) {
-        status = response.status
-        location = response.headers.get('location')
-      },
-    })
+    const pinned = await resolvePinnedAddress(current, trust, resolveHost)
+    const { status, location, body } = await requestText(current, pinned, trust)
     if (status >= 300 && status < 400) {
       if (!location)
         throw new Error(`Remote adapter redirect is missing Location: ${current}`)
       if (redirects === maxRemoteRedirects)
         throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
       const next = new URL(location, current).toString()
-      if (!await isRedirectAllowed(next, trust, resolveHost))
+      if (!isRedirectAllowed(next, trust))
         throw new Error(`Remote adapter redirected to an untrusted URL: ${next}`)
       current = next
       continue

@@ -1,3 +1,6 @@
+import { Buffer } from 'node:buffer'
+import { once } from 'node:events'
+import { createServer } from 'node:http'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('ofetch', () => ({ ofetch: vi.fn() }))
@@ -11,8 +14,58 @@ vi.mock('@vscode-use/utils', () => ({
 vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsReducer: (v: any) => v }))
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: vi.fn(), error: vi.fn() } }))
 
+async function mockedRequester(uri: string) {
+  const { ofetch } = await import('ofetch')
+  let status = 200
+  let location: string | undefined
+  const body = await vi.mocked(ofetch)(uri, {
+    onResponse({ response }: any) {
+      status = response.status
+      location = response.headers.get('location') || undefined
+    },
+  } as any)
+  return { status, location, body: String(body ?? '') }
+}
+
 describe('remote redirect validation', () => {
   beforeEach(() => vi.resetAllMocks())
+
+  it('pins the validated address into the actual request lookup', async () => {
+    const server = createServer((_request, response) => response.end('manifest'))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address() as any
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+    const resolver = vi.fn(async () => [{ address: '127.0.0.1', family: 4 }])
+    try {
+      await expect(fetchRemoteText(`http://localhost:${address.port}/adapter`, resolver)).resolves.toBe('manifest')
+      expect(resolver).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      server.close()
+      await once(server, 'close')
+    }
+  })
+
+  it('aborts streamed responses that exceed the byte limit', async () => {
+    const server = createServer((_request, response) => {
+      const chunk = Buffer.alloc(1024 * 1024)
+      for (let index = 0; index < 9; index++)
+        response.write(chunk)
+      response.end()
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address() as any
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+    try {
+      await expect(fetchRemoteText(`http://localhost:${address.port}/adapter`, async () => [{ address: '127.0.0.1', family: 4 }])).rejects.toThrow('too large')
+    }
+    finally {
+      server.close()
+      await once(server, 'close')
+    }
+  })
 
   it('rejects a private initial HTTPS target before issuing a request', async () => {
     const ofetchMod = await import('ofetch')
@@ -38,7 +91,7 @@ describe('remote redirect validation', () => {
     })
     const { fetchRemoteText } = await import('../../src/services/fetch')
 
-    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }])).rejects.toThrow('untrusted URL')
+    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }], mockedRequester)).rejects.toThrow(/untrusted URL|not a trusted public target/)
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
   })
 
@@ -53,7 +106,7 @@ describe('remote redirect validation', () => {
     const resolveHost = vi.fn()
       .mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }])
       .mockResolvedValueOnce([{ address: '169.254.169.254', family: 4 }])
-    await expect(fetchRemoteText('https://public.example/adapter', resolveHost)).rejects.toThrow('untrusted URL')
+    await expect(fetchRemoteText('https://public.example/adapter', resolveHost, mockedRequester)).rejects.toThrow(/untrusted URL|not a trusted public target/)
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
   })
 
@@ -70,8 +123,8 @@ describe('remote redirect validation', () => {
       })
     const { fetchRemoteText } = await import('../../src/services/fetch')
 
-    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }])).resolves.toBe('manifest')
-    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, 'https://cdn.example/adapter', expect.objectContaining({ redirect: 'manual' }))
+    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }], mockedRequester)).resolves.toBe('manifest')
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, 'https://cdn.example/adapter', expect.any(Object))
   })
 
   it.each([
@@ -90,8 +143,8 @@ describe('remote redirect validation', () => {
       })
     const { fetchRemoteText } = await import('../../src/services/fetch')
 
-    await expect(fetchRemoteText(initial)).resolves.toBe('manifest')
-    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, redirected, expect.objectContaining({ redirect: 'manual' }))
+    await expect(fetchRemoteText(initial, async hostname => [{ address: hostname === 'localhost' ? '127.0.0.1' : '8.8.8.8', family: 4 }], mockedRequester)).resolves.toBe('manifest')
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, redirected, expect.any(Object))
   })
 
   it('stops redirect loops at the configured limit', async () => {
@@ -102,7 +155,7 @@ describe('remote redirect validation', () => {
     })
     const { fetchRemoteText } = await import('../../src/services/fetch')
 
-    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }])).rejects.toThrow('exceeded 5 redirects')
+    await expect(fetchRemoteText('https://public.example/adapter', async () => [{ address: '8.8.8.8', family: 4 }], mockedRequester)).rejects.toThrow('exceeded 5 redirects')
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(6)
   })
 })
