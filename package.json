@@ -292,7 +292,7 @@
     "translate:report:diff": "node scripts/translate-directives.js --report --diff",
     "translate:apply": "node scripts/translate-directives.js --apply --report",
     "test:translate": "vitest run test/scripts/translate-directives.test.ts",
-    "build": "tsup src/index.ts --external vscode --minify --format cjs",
+    "build": "tsup src/index.ts --external vscode --minify --format cjs && pnpm run check:bundle",
     "check:bundle": "node scripts/check-extension-bundle.cjs",
     "pack": "vsce package --no-dependencies",
     "lint": "eslint . --cache",
