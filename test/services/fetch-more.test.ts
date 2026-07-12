@@ -271,6 +271,26 @@ describe('fetch service additional tests (mocked)', () => {
     nowSpy.mockRestore()
   })
 
+  it('keeps last-known-good remote cache when a refreshed manifest is malformed', async () => {
+    const ofetchMod = await import('ofetch')
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const good = 'module.exports = { ButtonProps: () => ({ value: 1 }) }'
+    vi.mocked(ofetchMod.ofetch).mockResolvedValueOnce(good)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    nowSpy.mockReturnValue(1000 + 6 * 60 * 1000)
+    vi.mocked(ofetchMod.ofetch).mockResolvedValueOnce(JSON.stringify({
+      schemaVersion: 1,
+      exports: { BadProps: { uiName: 'bad', lib: 'bad', map: [{ name: 'Bad', props: { broken: null } }] } },
+    }))
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    expect(mod.cacheFetch.get('https://fake/remote.js')).toBe(good)
+    nowSpy.mockRestore()
+  })
+
   it('blocks custom executable adapters unless legacy mode is explicitly enabled', async () => {
     allowLegacyAdapters = false
     const ofetchMod = await import('ofetch')
@@ -278,8 +298,7 @@ describe('fetch service additional tests (mocked)', () => {
     const mod = await import('../../src/services/fetch')
     mod.clearFetchCaches()
 
-    const result = await mod.fetchFromRemoteUrls()
-    expect(result).toEqual({})
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
   })
 
   it('loads data-only manifests while legacy mode is disabled', async () => {
@@ -288,16 +307,16 @@ describe('fetch service additional tests (mocked)', () => {
     vi.mocked(ofetchMod.ofetch).mockResolvedValue(JSON.stringify({
       schemaVersion: 1,
       exports: {
-        ButtonComponents: [{ name: 'ManifestButton' }],
-        ButtonProps: { safe: true },
+        ButtonComponents: { lib: 'button', map: [['ManifestButton', 'Manifest button']] },
+        ButtonProps: { uiName: 'button', lib: 'button', map: [{ name: 'Button', description: 'safe' }] },
       },
     }))
     const mod = await import('../../src/services/fetch')
     mod.clearFetchCaches()
 
     const result = await mod.fetchFromRemoteUrls()
-    expect(result.ButtonComponents()[0].name).toBe('ManifestButton')
-    expect(result.ButtonProps().safe).toBe(true)
+    expect(result.ButtonComponents().map).toHaveLength(1)
+    expect(result.ButtonProps()[0].name).toBe('Button')
   })
 
   it('rejects unknown manifest schema versions', async () => {
@@ -307,7 +326,7 @@ describe('fetch service additional tests (mocked)', () => {
     const mod = await import('../../src/services/fetch')
     mod.clearFetchCaches()
 
-    await expect(mod.fetchFromRemoteUrls()).resolves.toEqual({})
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Unsupported adapter manifest schema')
   })
 
   it('shares a remote source task between concurrent callers', async () => {
@@ -395,7 +414,7 @@ describe('fetch service additional tests (mocked)', () => {
     mod.clearFetchCaches()
     parseSpy.mockClear()
 
-    await expect(mod.fetchFromRemoteUrls()).resolves.toEqual({})
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('too large')
     // Manifest detection and the outer VM envelope may parse; the oversized inner JSON must not.
     expect(parseSpy.mock.calls.some(([value]) => (
       typeof value === 'string' && value.startsWith('{"value"') && value.length > 8 * 1024 * 1024

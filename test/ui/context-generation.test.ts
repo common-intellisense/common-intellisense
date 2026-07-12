@@ -411,6 +411,26 @@ describe('package context generations', () => {
     expect(mod.getContextRegistryStats()).toMatchObject({ contexts: 20, documents: 0 })
   })
 
+  it('retains last-known-good official metadata when a stale refresh fails', async () => {
+    let now = 5_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce({ antd5: () => ({ Button: { lib: 'antd' } }) })
+      .mockRejectedValueOnce(new Error('registry offline'))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toBeDefined()
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toBeDefined()
+    nowSpy.mockRestore()
+  })
+
   it('discovers a nested package instead of reusing a loaded parent context', async () => {
     findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/nested/')
       ? '/workspace/nested/package.json'

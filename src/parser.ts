@@ -948,6 +948,7 @@ export interface SlotSourceContext {
   sourceScopes: Map<string, ComponentSourceScope>
   localDeps?: Record<string, string>
   currentDocumentPath?: string
+  workspaceRoot?: string
 }
 
 export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[], identity?: SlotAnalysisIdentity, sourceContext?: SlotSourceContext): Promise<void>
@@ -1145,7 +1146,7 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
     let target: any
     for (const candidate of importedTag.candidates) {
       target = localSource
-        ? await findDynamicComponent(candidate, sourceContext?.localDeps || uiDeps, UiCompletions, prefix, undefined, sourceContext?.currentDocumentPath, true)
+        ? await findDynamicComponent(candidate, sourceContext?.localDeps || uiDeps, UiCompletions, prefix, undefined, sourceContext?.currentDocumentPath, true, sourceContext?.workspaceRoot)
         : source
           ? await findDynamicComponent(candidate, {}, scopedCompletions, prefix, normalizedSource)
           : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
@@ -1455,7 +1456,7 @@ export function getImportDeps(text: string) {
   return deps
 }
 
-export function getAbsoluteUrl(url: string, currentFileUrl?: string) {
+export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRoot?: string) {
   const base = currentFileUrl || getCurrentFileUrl()
   if (!base)
     return
@@ -1465,7 +1466,7 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string) {
     catch { return }
   }
   if (clean.startsWith('@/')) {
-    const root = getRootPath()
+    const root = workspaceRoot || (!currentFileUrl ? getRootPath() : undefined)
     return root ? path.resolve(root, clean.slice(2)) : undefined
   }
   return path.isAbsolute(clean) ? clean : path.resolve(base, '..', clean)
@@ -1473,8 +1474,8 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string) {
 
 const localComponentExtensions = ['.vue', '.ts', '.tsx', '.jsx', '.svelte']
 
-export async function resolveLocalComponentModule(url: string, currentFileUrl?: string) {
-  const base = getAbsoluteUrl(url, currentFileUrl)
+export async function resolveLocalComponentModule(url: string, currentFileUrl?: string, workspaceRoot?: string) {
+  const base = getAbsoluteUrl(url, currentFileUrl, workspaceRoot)
   if (!base)
     return
   const candidates = [base]
@@ -1492,10 +1493,10 @@ export async function resolveLocalComponentModule(url: string, currentFileUrl?: 
   }
 }
 
-export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string, currentFileUrl?: string, preferDependency = false) {
+export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string, currentFileUrl?: string, preferDependency = false, workspaceRoot?: string) {
   const dep = deps[name]
   if (preferDependency && dep) {
-    const absoluteUrl = await resolveLocalComponentModule(dep, currentFileUrl)
+    const absoluteUrl = await resolveLocalComponentModule(dep, currentFileUrl, workspaceRoot)
     if (!absoluteUrl)
       return
     try {
@@ -1515,7 +1516,7 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
 
   if (dep) {
     // 只往下找一层
-    const absoluteUrl = await resolveLocalComponentModule(dep, currentFileUrl)
+    const absoluteUrl = await resolveLocalComponentModule(dep, currentFileUrl, workspaceRoot)
     if (!absoluteUrl)
       return
     const tag = await getTemplateParentElementName(absoluteUrl)

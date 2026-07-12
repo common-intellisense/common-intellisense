@@ -69,8 +69,12 @@ function registerCompletionScopes(scopes: Map<string, ComponentSourceScope>, com
       setSourceScope(scopes, root, broad)
   }
   // Exact dynamic module paths never overwrite their package-root scope.
-  for (const lib of canonicalLibs)
+  for (const lib of canonicalLibs) {
+    const root = getPackageSource(lib)
+    if (lib === root && scopes.has(root))
+      continue
     setSourceScope(scopes, lib, { key, exactLib: lib, acceptedLibs: new Set(acceptedLibs) })
+  }
 }
 
 export function getSourceScope(context: Pick<PackageContext, 'sourceScopes'>, source: string | undefined) {
@@ -318,6 +322,10 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
       const registered = contexts.get(contextKey)
       if (!refreshed || registryEpoch !== expectedEpoch || !registered || registered.generation !== context.generation || registered.officialCheckedAt !== context.officialCheckedAt || generations.get(contextKey) !== context.generation)
         return
+      const hadOfficialData = !!context.officialModel.uiCompletions || context.officialModel.optionsComponents.data.length > 0
+      const hasRefreshedOfficialData = !!refreshed.officialModel.uiCompletions || refreshed.officialModel.optionsComponents.data.length > 0
+      if (hadOfficialData && !hasRefreshedOfficialData)
+        throw new Error('No official adapters were refreshed')
       refreshed.customSourcesCheckedAt = registered.customSourcesCheckedAt
       refreshed.customSourceSnapshots = [...registered.customSourceSnapshots]
       const composed = await composeContextFromSnapshots(refreshed, refreshed.customSourceSnapshots)
@@ -427,7 +435,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     adapterSources.set(formatName, [...(adapterSources.get(formatName) || []), declaredName, uiName])
   }
 
-  const hasExplicitSelection = !!selectedUIs?.length && !selectedUIs.includes('auto')
+  const hasExplicitSelection = Array.isArray(selectedUIs) && !selectedUIs.includes('auto')
   const selected = hasExplicitSelection
     ? selectedUIs.map(item => selectionToAdapter.get(item)).filter((item): item is string => !!item)
     : []
@@ -442,13 +450,16 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
         name.replace(/([A-Z])/g, '-$1').toLowerCase(),
         pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath, installedVersion: pkgInfo.installedVersion, adapterMajor: pkgInfo.adapterMajor } : { uiName: name, resolveFrom: pkgPath },
       )
-      return { name, pkgInfo, exports }
+      return { name, pkgInfo, exports, failed: false }
     }
     catch (error) {
       logger.error(`fetch fetchFromCommonIntellisense [${name}] error: ${String(error)}`)
-      return { name, pkgInfo, exports: undefined }
+      return { name, pkgInfo, exports: undefined, failed: true }
     }
   }))
+
+  if (uiNames.length && loadedLibraries.every(item => item.failed))
+    throw new Error('No official adapters were refreshed')
 
   for (const { name, pkgInfo, exports } of loadedLibraries) {
     if (!exports)

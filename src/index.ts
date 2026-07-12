@@ -75,14 +75,14 @@ export function getRefMembers(completions: PropsConfig, refName: string | undefi
   return [...(component.methods || []), ...(component.exposed || [])]
 }
 
-export async function resolveImportedComponent(rawTag: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>, localDeps: Record<string, string> = uiDeps, currentDocumentPath?: string) {
+export async function resolveImportedComponent(rawTag: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>, localDeps: Record<string, string> = uiDeps, currentDocumentPath?: string, workspaceRoot?: string) {
   if (!rawTag)
     return {}
   const importedTag = resolveImportedTag(rawTag, uiDeps)
   const resolvedSource = importedTag.source || localDeps[importedTag.localRoot]
   if (isLocalModuleSource(resolvedSource)) {
     for (const candidate of importedTag.candidates) {
-      const component = await findDynamicComponent(candidate, localDeps, completions, prefixes, undefined, currentDocumentPath, true)
+      const component = await findDynamicComponent(candidate, localDeps, completions, prefixes, undefined, currentDocumentPath, true, workspaceRoot)
       if (component)
         return { component, source: resolvedSource, scoped: completions }
     }
@@ -101,8 +101,8 @@ export async function resolveImportedComponent(rawTag: string | undefined, uiDep
   return { source: resolvedSource, scoped }
 }
 
-export async function resolveRefMembers(localName: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>, localDeps: Record<string, string> = uiDeps, currentDocumentPath?: string) {
-  const { component } = await resolveImportedComponent(localName, uiDeps, completions, cacheMap, alias, prefixes, sourceScopes, localDeps, currentDocumentPath)
+export async function resolveRefMembers(localName: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>, localDeps: Record<string, string> = uiDeps, currentDocumentPath?: string, workspaceRoot?: string) {
+  const { component } = await resolveImportedComponent(localName, uiDeps, completions, cacheMap, alias, prefixes, sourceScopes, localDeps, currentDocumentPath, workspaceRoot)
   return component ? [...(component.methods || []), ...(component.exposed || [])] : undefined
 }
 
@@ -220,7 +220,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const code = document.getText()
     if (document.isClosed)
       return
-    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: getImportDeps(code), currentDocumentPath: getDocumentPath(document) })
+    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: getImportDeps(code), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
   }
   const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
     await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
@@ -491,7 +491,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const code = document.getText()
         if (document.isClosed)
           return
-        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: getImportDeps(code), currentDocumentPath: getDocumentPath(document) })
+        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: getImportDeps(code), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
       }
       void analyze().catch(error => logger.error(`Slot analysis failed: ${String(error)}`))
     }, 200))
@@ -536,9 +536,9 @@ export async function activate(context: vscode.ExtensionContext) {
         for (const key in result.refsMap) {
           const value = result.refsMap[key]
           if (isVue && (lineText.endsWith(`.$refs.${key}.`) || lineText.endsWith(`${key}.value.`)))
-            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
           else if (!isVue && lineText.endsWith(`${key}.current.`))
-            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
         }
       }
       if (isVue && lineText.slice(character, character + 6) !== '.value' && /\.value\.?$/.test(lineText.slice(0, character)))
@@ -556,7 +556,7 @@ export async function activate(context: vscode.ExtensionContext) {
     ) {
       const parentTag = result.parent?.tag || result.parent?.name || result.parentTag
       if (parentTag) {
-        const { component, source } = await resolveImportedComponent(parentTag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+        const { component, source } = await resolveImportedComponent(parentTag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
         const slots = component?.slots
         if (slots)
           return slots
@@ -565,7 +565,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }
 
-    const importedResolution = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+    const importedResolution = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
     let matchedComponent = importedResolution.component
     const matchedSource = importedResolution.source
     if (!matchedComponent && result.tag && !matchedSource)
@@ -591,7 +591,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return UiCompletions.icons
       const name = fixedTagName(result.tag)
       const propName = result.propName
-      const resolved = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+      const resolved = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
       const target = resolved.component || (!resolved.source ? await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, undefined, getDocumentPath(document)) : undefined)
 
       if (!target) {
@@ -852,7 +852,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (result.type === 'tag') {
           if (!word)
             return createHover('')
-          const resolved = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+          const resolved = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
           if (resolved.component?.tableDocument)
             return createHover(resolved.component.tableDocument)
           if (resolved.source)
@@ -875,7 +875,7 @@ export async function activate(context: vscode.ExtensionContext) {
           if (!slotName)
             return
 
-          const target = (await resolveImportedComponent(parentTag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))).component
+          const target = (await resolveImportedComponent(parentTag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)).component
           if (!target)
             return
           const targetSlot = target.rawSlots?.find(s => s.name === slotName)
@@ -903,7 +903,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
-        const r = (await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))).component
+        const r = (await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)).component
         if (!r)
           return
         const completions = result.isEvent ? r.events[0]?.(renderContext) : r.completions[0]?.(renderContext)
@@ -926,7 +926,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = refsMap[key]
-            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
             if (!refMembers)
               return
 
@@ -964,7 +964,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = r.refsMap[key]
-            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
             if (!refMembers)
               return
             if (lineText.slice(range.start.character, range.end.character) === 'value') {
@@ -1000,7 +1000,7 @@ export async function activate(context: vscode.ExtensionContext) {
           const index = word.indexOf('.current.')
           const key = word.slice(0, index)
           const refName = r.refsMap?.[key]
-          const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document))
+          const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
           if (!refMembers)
             return
 

@@ -75,13 +75,18 @@ export interface ImportedTagResolution {
 
 /** Preserve a compound tag's imported root before deriving flattened lookup names. */
 export function resolveImportedTag(rawTag: string, deps: Record<string, string> | undefined): ImportedTagResolution {
-  const [localRoot, ...members] = rawTag.split('.').filter(Boolean)
+  const [root, ...members] = rawTag.split('.').filter(Boolean)
+  const localRoot = root || rawTag
   const mappedRoot = getUiImportedName(deps, localRoot)
   const importedRoot = mappedRoot === '*' ? localRoot : mappedRoot
   const rawDotted = [localRoot, ...members].join('.')
   const importedDotted = [importedRoot, ...members].join('.')
-  const candidates = [rawDotted, importedDotted, fixedTagName(rawDotted), fixedTagName(importedDotted)]
+  const source = deps?.[localRoot]
+  const sourceTail = source && !members.length && importedRoot === localRoot && !isLocalModuleSource(source)
+    ? source.split(/[?#]/)[0].split('/').filter(Boolean).at(-1)
+    : undefined
+  const candidates = [rawDotted, importedDotted, fixedTagName(rawDotted), fixedTagName(importedDotted), sourceTail, sourceTail ? fixedTagName(sourceTail) : undefined]
   if (members.length)
     candidates.push(members.join('.'), fixedTagName(members.join('.')))
-  return { rawTag, localRoot, importedRoot, members, source: deps?.[localRoot], candidates: [...new Set(candidates.filter(Boolean))] }
+  return { rawTag, localRoot, importedRoot, members, source, candidates: [...new Set(candidates.filter((candidate): candidate is string => !!candidate))] }
 }

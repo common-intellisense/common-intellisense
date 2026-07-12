@@ -17,6 +17,7 @@ import { logger } from '../ui/ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
 import { getPrefix } from '../ui/ui-utils'
 import { fetchFromTypes } from '../type-extract'
+import { normalizeAdapterManifestExports } from './adapter-manifest'
 import { createAdapterVmContext, runAdapterExports } from './adapter-vm'
 
 const prefix = '@common-intellisense/'
@@ -88,8 +89,8 @@ export function configureCacheStorage(storageUri: vscode.Uri | string) {
 
 const commonIntellisenseInFlight = new Map<string, Promise<any>>()
 const officialAdapterScriptInFlight = new Map<string, Promise<string>>()
-const remoteHttpTasks = new Map<string, Promise<Record<string, any> | undefined>>()
-const remoteNpmTasks = new Map<string, Promise<Record<string, any> | undefined>>()
+const remoteHttpTasks = new Map<string, Promise<Record<string, any>>>()
+const remoteNpmTasks = new Map<string, Promise<Record<string, any>>>()
 const localTasks = new Map<string, Promise<Record<string, any>>>()
 let sourceEpoch = 0
 const retry = 3
@@ -291,7 +292,7 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
     if (Object.keys(exportsData).length > maxAdapterExports)
       throw new Error(`Adapter has too many exports: ${source}`)
     validateAdapterData(exportsData, source)
-    return exportsData
+    return normalizeAdapterManifestExports(exportsData, source)
   }
   catch (error) {
     if (!(error instanceof SyntaxError))
@@ -671,7 +672,7 @@ export function isLoopbackAddress(address: string) {
   return firstOctet === 127
 }
 
-async function resolvePinnedAddress(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
+async function resolvePinnedAddresses(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
   const target = new URL(uri)
   const hostname = normalizeHostname(target.hostname)
   const addresses = isIP(hostname)
@@ -683,7 +684,7 @@ async function resolvePinnedAddress(uri: string, trust: RemoteTrustClass, resolv
     throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
   if (trust.kind === 'localhostHttp' && addresses.some(({ address }) => !isLoopbackAddress(address)))
     throw new Error(`Localhost adapter resolved to a non-loopback address: ${uri}`)
-  return addresses[0]
+  return addresses
 }
 
 interface PinnedResponse {
@@ -769,8 +770,21 @@ export async function fetchRemoteText(
     throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
   let current = uri
   for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
-    const pinned = await resolvePinnedAddress(current, trust, resolveHost)
-    const { status, location, body } = await requestText(current, pinned, trust)
+    const pinnedAddresses = await resolvePinnedAddresses(current, trust, resolveHost)
+    let response: PinnedResponse | undefined
+    let lastConnectionError: unknown
+    for (const pinned of pinnedAddresses) {
+      try {
+        response = await requestText(current, pinned, trust)
+        break
+      }
+      catch (error) {
+        lastConnectionError = error
+      }
+    }
+    if (!response)
+      throw lastConnectionError || new Error(`Remote adapter request failed: ${current}`)
+    const { status, location, body } = response
     if (status >= 300 && status < 400) {
       if (!location)
         throw new Error(`Remote adapter redirect is missing Location: ${current}`)
@@ -806,16 +820,12 @@ export function fetchFromRemoteUrls() {
 
 async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
   if (!uris.length)
-    return
-
-  const result: any = {}
+    return {}
 
   const now = Date.now()
   const plans = uris.map((uri) => {
     if (!isTrustedRemoteUri(uri)) {
-      logger.error(isZh
-        ? `已跳过不受信任的 remoteUri: ${uri}（仅允许 https，或 localhost/127.0.0.1 的 http；可通过 trustedHosts 放行）`
-        : `Skipped untrusted remoteUri: ${uri} (only https, or localhost/127.0.0.1 http; use trustedHosts to allow)`)
+      logger.error(`Skipped untrusted remoteUri: ${uri}`)
       return null
     }
     const cached = getFetchCacheEntry(uri) || ''
@@ -825,9 +835,8 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
     const needsRefresh = !cached || (!retryDeferred && now - lastFetchedAt >= remoteUriCacheTTL)
     return { uri, cached, needsRefresh }
   }).filter(Boolean) as Array<{ uri: string, cached: string, needsRefresh: boolean }>
-
   if (!plans.length)
-    return result
+    return {}
 
   let resolver: () => void = () => { }
   let rejecter: (msg?: string) => void = () => { }
@@ -841,9 +850,15 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
   })
   logger.info(isZh ? '从 remoteUris 中拉取数据...' : 'Fetching data from remoteUris...')
   try {
-    const settled = await Promise.allSettled(plans.map(async ({ uri, cached, needsRefresh }) => {
+    const loaded = await Promise.all(plans.map(async ({ uri, cached, needsRefresh }) => {
+      const evaluate = (scriptContent: string) => {
+        const reduced: Record<string, any> = {}
+        appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), uri)
+        return reduced
+      }
       if (!needsRefresh && cached)
-        return [uri, cached] as const
+        return evaluate(cached)
+
       logger.info(isZh ? `正在加载 ${uri}` : `Loading ${uri}`)
       try {
         const fetched = await fetchRemoteText(uri)
@@ -851,42 +866,37 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
           throw new Error(`Remote adapter is invalid or too large: ${uri}`)
         if (sourceEpoch !== epoch)
           throw new Error(`Remote adapter configuration changed while loading: ${uri}`)
+        // Validate and reduce before replacing the last-known-good cache entry.
+        const reduced = evaluate(fetched)
         setFetchCacheEntry(uri, fetched)
         remoteUriFetchedAt.set(uri, Date.now())
         remoteUriRetry.delete(uri)
-        return [uri, fetched] as const
+        return reduced
       }
       catch (error) {
-        if (cached) {
-          const failureCount = (remoteUriRetry.get(uri)?.failureCount || 0) + 1
-          const delay = remoteRetryDelays[Math.min(failureCount - 1, remoteRetryDelays.length - 1)]
-          remoteUriRetry.set(uri, { failureCount, nextRetryAt: Date.now() + delay })
-          logger.error(isZh ? `刷新失败，使用缓存: ${uri}` : `Refresh failed, using cached module: ${uri}`)
-          return [uri, cached] as const
-        }
-        throw error
+        if (!cached)
+          throw error
+        const failureCount = (remoteUriRetry.get(uri)?.failureCount || 0) + 1
+        const delay = remoteRetryDelays[Math.min(failureCount - 1, remoteRetryDelays.length - 1)]
+        remoteUriRetry.set(uri, { failureCount, nextRetryAt: Date.now() + delay })
+        logger.error(isZh ? `刷新失败，使用缓存: ${uri}` : `Refresh failed, using cached module: ${uri}`)
+        // A malformed cached payload is a real failure, not a successful empty source.
+        return evaluate(cached)
       }
     }))
-    for (const entry of settled) {
-      if (entry.status === 'rejected') {
-        logger.error(String(entry.reason))
-        continue
-      }
-      const [uri, scriptContent] = entry.value
-      try {
-        appendReducedExports(result, evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), uri)
-      }
-      catch (error) {
-        logger.error(`Failed to evaluate remote adapter ${uri}: ${String(error)}`)
-      }
-    }
+    const result: Record<string, any> = {}
+    for (const exportsData of loaded)
+      Object.assign(result, exportsData)
     resolver()
+    return sourceEpoch === epoch ? result : Promise.reject(new Error('Remote adapter configuration changed'))
   }
   catch (error) {
     rejecter(String(error))
     logger.error(String(error))
+    if (sourceEpoch !== epoch)
+      return {}
+    throw error
   }
-  return sourceEpoch === epoch ? result : {}
 }
 
 export function fetchFromRemoteNpmUrls() {
@@ -906,7 +916,7 @@ export function fetchFromRemoteNpmUrls() {
 
 async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: string } | string)[], epoch: number) {
   if (!uris.length)
-    return
+    return {}
 
   const result: any = {}
 
@@ -920,24 +930,12 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
       name = item.name
       resource = item.resource || resource
     }
-    let version = ''
     logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
-    try {
-      version = await getLatestVersion(name)
-    }
-    catch (error: any) {
-      if (error.message.includes('404 Not Found')) {
-        logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
-      }
-      else {
-        logger.error(String(error))
-      }
-    }
-    return version ? [name, version, resource] : ''
-  }))).filter(Boolean) as [string, string, string][]
-
-  if (!fixedUris.length)
-    return
+    const version = await getLatestVersion(name)
+    if (!version)
+      throw new Error(`No supported remote npm adapter version: ${name}`)
+    return [name, version, resource]
+  }))) as [string, string, string][]
 
   let resolver: () => void = () => { }
   let rejecter: (msg?: string) => void = () => { }
@@ -952,45 +950,36 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
   logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
 
   try {
-    const settled = await Promise.allSettled(fixedUris.map(async ([name, version, resource]) => {
+    const loaded = await Promise.all(fixedUris.map(async ([name, version, resource]) => {
       const key = `${name}@${version}::${resource}`
       const cached = getFetchCacheEntry(key)
-      if (cached !== undefined)
-        return [key, cached] as const
-
-      const scriptContent = await Promise.any([
-        fetchAndExtractPackage({ name, dist: resource, logger }),
-        resource === 'index.cjs'
-          ? fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>
-          : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
-      ])
-
-      if (scriptContent && sourceEpoch === epoch)
+      const scriptContent = cached !== undefined
+        ? cached
+        : await Promise.any([
+            fetchAndExtractPackage({ name, dist: resource, logger }),
+            resource === 'index.cjs'
+              ? fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>
+              : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
+          ])
+      const reduced: Record<string, any> = {}
+      appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), key)
+      if (cached === undefined && scriptContent && sourceEpoch === epoch)
         setFetchCacheEntry(key, scriptContent)
-      return [key, scriptContent] as const
+      return reduced
     }))
-    for (const entry of settled) {
-      if (entry.status === 'rejected') {
-        logger.error(String(entry.reason))
-        continue
-      }
-      const [key, scriptContent] = entry.value
-      try {
-        const exportsData = evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
-        appendReducedExports(result, exportsData, key)
-      }
-      catch (error) {
-        logger.error(`Failed to evaluate npm adapter ${key}: ${String(error)}`)
-      }
-    }
+    for (const exportsData of loaded)
+      Object.assign(result, exportsData)
     resolver()
   }
   catch (error) {
     rejecter(String(error))
     logger.error(String(error))
+    throw error
   }
 
-  return sourceEpoch === epoch ? result : {}
+  if (sourceEpoch !== epoch)
+    throw new Error('Remote npm adapter configuration changed')
+  return result
 }
 
 const localUrisMap = new Map<string, any>()
@@ -1061,9 +1050,12 @@ async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspa
     }
     catch (error) {
       logger.error(`Failed to load local adapter ${configuredUri}: ${String(error)}`)
+      throw error
     }
   }
-  return sourceEpoch === epoch ? result : {}
+  if (sourceEpoch !== epoch)
+    throw new Error('Local adapter configuration changed')
+  return result
 }
 
 export function clearFetchCaches() {

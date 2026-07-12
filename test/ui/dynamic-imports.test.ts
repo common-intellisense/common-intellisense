@@ -107,6 +107,19 @@ export default {}
     expect(missing.source).toBe('./fixtures-dyn/Missing.vue')
     expect(missing.component).toBeUndefined()
 
+    await expect(resolveImportedComponent(
+      'Button',
+      { Button: '@/fixtures-dyn/AppButton.vue' },
+      { Button: wrongButton, ElButton: button } as any,
+      new Map(),
+      {},
+      ['el'],
+      new Map(),
+      { Button: '@/fixtures-dyn/AppButton.vue' },
+      '/wrong-workspace/src/App.vue',
+      path.join(process.cwd(), 'test'),
+    )).resolves.toMatchObject({ component: button, source: '@/fixtures-dyn/AppButton.vue' })
+
     for (const source of ['./fixtures-dyn/AppButton', './fixtures-dyn/AppButton.vue?component', './fixtures-dyn/DirectoryButton', './fixtures-dyn/TsxButton', './fixtures-dyn/SvelteButton']) {
       await expect(resolveImportedComponent(
         'Button',

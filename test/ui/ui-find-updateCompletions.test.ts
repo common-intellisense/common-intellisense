@@ -87,7 +87,7 @@ describe('ui-find updateCompletions', () => {
   it('uses the alias major rather than the unrelated wrapper package version', async () => {
     const mod = await import('../../src/ui/ui-find')
     await mod.updateCompletions([['@acme/ui', '1.4.0']] as any, {
-      selectedUIs: [],
+      selectedUIs: ['auto'],
       alias: { '@acme/ui': 'elementUi2' },
       detectSlots: () => {},
       prefix: {},
@@ -105,7 +105,7 @@ describe('ui-find updateCompletions', () => {
   it('treats a declared-major fallback as adapterMajor, not an exact installed version', async () => {
     const mod = await import('../../src/ui/ui-find')
     await mod.updateCompletions([['element-plus', '2']] as any, {
-      selectedUIs: [],
+      selectedUIs: ['auto'],
       alias: {},
       detectSlots: () => {},
       prefix: {},
@@ -130,7 +130,7 @@ describe('ui-find updateCompletions', () => {
       ['@dcloudio/uni-ui', 'dcloudioUniUi2'],
     ] as const
     const context = await mod.updateCompletions(cases.map(([source]) => [source, '2.0.0']) as any, {
-      selectedUIs: [],
+      selectedUIs: ['auto'],
       alias: {},
       detectSlots: () => {},
       prefix: {},
@@ -151,7 +151,7 @@ describe('ui-find updateCompletions', () => {
     })
     const mod = await import('../../src/ui/ui-find')
     const context = await mod.updateCompletions([['@private/ui', '1.0.0']] as any, {
-      selectedUIs: [],
+      selectedUIs: ['auto'],
       alias: { '@private/ui': 'primevue4' },
       detectSlots: () => {},
       prefix: {},
@@ -178,6 +178,19 @@ describe('ui-find updateCompletions', () => {
     })
 
     await vi.waitFor(() => expect(fetchFromLocalUris).toHaveBeenCalledWith('/repo'))
+  })
+
+  it('keeps an explicitly empty selection disabled', async () => {
+    const mod = await import('../../src/ui/ui-find')
+    const context = await mod.updateCompletions([['antd', '5.0.0']] as any, {
+      selectedUIs: [],
+      alias: {},
+      detectSlots: () => {},
+      prefix: {},
+      pkgPath: '/tmp/pkg.json',
+    })
+    expect(fetchFromCommonIntellisense).not.toHaveBeenCalled()
+    expect(context.uiNames).toEqual([])
   })
 
   it('keeps an unmatched explicit selection empty instead of loading every detected UI', async () => {
