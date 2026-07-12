@@ -13,6 +13,7 @@ import { nameMap } from '../constants'
 import { toCamel } from '../ui/utils'
 // import { componentsReducer, propsReducer } from './ui/utils'
 import type { ComponentOptions, PropsOptions } from '../ui/utils'
+import { getSvelteInstanceScript } from '../services/svelte-script'
 
 export interface UIconfig {
   getPropsConfig: (context: vscode.ExtensionContext, lang: string) => Promise<PropsOptions>
@@ -97,8 +98,8 @@ export function getUiDeps(text: string, context: UiDepsDocumentContext = {}) {
     sourceText = [descriptor.script?.content, descriptor.scriptSetup?.content].filter((value): value is string => typeof value === 'string').join('\n')
   }
   else if (languageId === 'svelte' || uri.endsWith('.svelte')) {
-    // Only perform SFC extraction when the caller explicitly identifies Svelte.
-    sourceText = [...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(match => match[1]).join('\n')
+    // Module-script bindings are not visible to the component template.
+    sourceText = getSvelteInstanceScript(text)?.content || ''
   }
   const sourceFile = ts.createSourceFile('component.tsx', sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   for (const statement of sourceFile.statements) {

@@ -42,6 +42,7 @@ export interface PackageContext {
   customNextRetryAt: number
   uiNames: string[]
   currentPkgUiNames: string[]
+  userPrefix: Record<string, string>
   optionsComponents: OptionsComponents
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
@@ -57,13 +58,13 @@ function setSourceScope(scopes: Map<string, ComponentSourceScope>, source: strin
   scopes.set(formatUIName(source), scope)
 }
 
-function registerCompletionScopes(scopes: Map<string, ComponentSourceScope>, completion: PropsConfig, key: string, sources: string[]) {
+function registerCompletionScopes(scopes: Map<string, ComponentSourceScope>, completion: PropsConfig, key: string, sources: string[], fallbackSource = key) {
   const canonicalLibs = new Set(
     (Object.values(completion) as any[])
       .map(item => typeof item?.lib === 'string' ? item.lib : undefined)
       .filter((lib): lib is string => !!lib),
   )
-  const fallbackLib = key.replace(/\d+$/, '')
+  const fallbackLib = fallbackSource.replace(/\d+$/, '')
   const acceptedLibs = canonicalLibs.size ? canonicalLibs : new Set([fallbackLib])
   // Declared package roots and wrappers select the adapter while accepting all
   // of its per-component dynamic module ids.
@@ -547,6 +548,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     customNextRetryAt: 0,
     uiNames,
     currentPkgUiNames: availableNames,
+    userPrefix,
     ...cloneModel(officialModel),
     officialModel,
     customSourceSnapshots: new Map(),
@@ -654,25 +656,27 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
     if (!exports)
       continue
     for (const key of Object.keys(exports)) {
+      const scopedKey = `custom:${sourceId}:${key}`
       try {
         if (key.endsWith('Components')) {
           const components = exports[key]?.()
           if (components) {
-            composed.cacheMap.set(key, components)
-            mergeComponents(composed.optionsComponents, components, {}, [], key.slice(0, -10), `custom:${sourceId}:${key}`)
+            composed.cacheMap.set(scopedKey, components)
+            mergeComponents(composed.optionsComponents, components, composed.userPrefix, [], key.slice(0, -10), scopedKey)
           }
         }
         else {
           const completion = await exports[key]?.({ resolveFrom: composed.pkgPath })
           if (completion) {
-            composed.cacheMap.set(key, completion)
+            composed.cacheMap.set(scopedKey, completion)
             composed.uiCompletions ||= {} as PropsConfig
             Object.assign(composed.uiCompletions, completion)
             registerCompletionScopes(
               composed.sourceScopes,
               completion,
-              key,
+              scopedKey,
               [key, key.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')],
+              key,
             )
           }
         }

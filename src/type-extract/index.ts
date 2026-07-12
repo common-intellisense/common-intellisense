@@ -298,7 +298,8 @@ function collectVueGlobalComponents(program: ts.Program, checker: ts.TypeChecker
   for (const sourceFile of program.getSourceFiles()) {
     if (!sourceFile.isDeclarationFile)
       continue
-    if (!sourceFile.fileName.startsWith(normalizedRoot))
+    const relative = path.relative(normalizedRoot, path.resolve(sourceFile.fileName))
+    if (relative.startsWith('..') || path.isAbsolute(relative) || relative.split(path.sep).includes('node_modules'))
       continue
 
     ts.forEachChild(sourceFile, (node) => {

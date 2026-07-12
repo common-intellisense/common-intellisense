@@ -35,7 +35,22 @@ describe('remote redirect validation', () => {
     const requester = vi.fn(async () => ({ status: 200, body: 'manifest' }))
 
     await expect(fetchRemoteText('http://[::1]/adapter', undefined, requester)).resolves.toBe('manifest')
-    expect(requester).toHaveBeenCalledWith('http://[::1]/adapter', expect.objectContaining({ address: '::1', family: 6 }), expect.objectContaining({ kind: 'localhostHttp', hostname: '::1' }))
+    expect(requester).toHaveBeenCalledWith('http://[::1]/adapter', expect.objectContaining({ address: '::1', family: 6 }), expect.objectContaining({ kind: 'localhostHttp', hostname: '::1' }), expect.any(AbortSignal))
+  })
+
+  it('enforces an overall deadline even when an injected requester never settles', async () => {
+    vi.useFakeTimers()
+    try {
+      const { fetchRemoteText } = await import('../../src/services/fetch')
+      const requester = vi.fn(() => new Promise<any>(() => {}))
+      const pending = fetchRemoteText('http://127.0.0.1/adapter', undefined, requester, 30_000)
+      const assertion = expect(pending).rejects.toThrow('deadline exceeded')
+      await vi.advanceTimersByTimeAsync(30_000)
+      await assertion
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects localhost DNS results outside the loopback range', async () => {

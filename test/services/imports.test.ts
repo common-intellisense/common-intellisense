@@ -256,4 +256,39 @@ const Button = {}
       '<script>\nimport { Button } from "ui"\nexport default { components: { Button } }\n</script>',
     )
   })
+
+  it('inserts Svelte imports into the instance script', () => {
+    const cases = [
+      ['<Button />', '<script>\nimport * as Button from "ui"\n</script>\n<Button />'],
+      ['<script>let count = 0</script>\n<Button />', '<script>\nimport * as Button from "ui"\nlet count = 0</script>'],
+      ['<script module>export const x = 1</script>\n<script>let count = 0</script>', '<script module>export const x = 1</script>\n<script>\nimport * as Button from "ui"\nlet count = 0</script>'],
+      ['<script lang="ts">let count: number = 0</script>', '<script lang="ts">\nimport * as Button from "ui"\nlet count: number = 0</script>'],
+    ] as const
+    for (const [code, expected] of cases) {
+      const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'as default', 'svelte', { languageId: 'svelte', uri: 'file:///App.svelte' }))
+      expect(output).toContain(expected)
+    }
+  })
+
+  it('reuses an existing Svelte instance script while the template is incomplete', () => {
+    for (const [body, tail] of [['let count: number = 0', '<Button disabled'], ['', '<Button value="'], ['', '{#if']]) {
+      const code = `<script module>export const x = 1</script>\n<script lang="ts">${body}</script>\n${tail}`
+      const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'as default', 'svelte', { languageId: 'svelte' }))
+      const instanceScripts = output.match(/<script\b[^>]*>/g)?.filter(tag => !tag.includes('module')) || []
+      expect(instanceScripts).toHaveLength(1)
+      expect(output).toContain('<script lang="ts">\nimport * as Button from "ui"')
+      expect(output.indexOf('import * as Button')).toBeGreaterThan(output.indexOf('<script lang="ts">'))
+      expect(output).toContain('<script module>export const x = 1</script>')
+    }
+  })
+
+  it('creates an instance script beside a Svelte module script and deduplicates imports', () => {
+    const moduleOnly = '<script context="module">export const x = 1</script>\n<Button />'
+    const created = applyEdits(moduleOnly, createImportEdits(moduleOnly, 'ui', ['Button'], 'as default', 'svelte', { languageId: 'svelte' }))
+    expect(created).toContain('<script>\nimport * as Button from "ui"\n</script>')
+    expect(created).toContain('<script context="module">export const x = 1</script>')
+
+    const existing = '<script>import * as Button from "ui"\nlet x = 1</script>\n<Button />'
+    expect(createImportEdits(existing, 'ui', ['Button'], 'as default', 'svelte', { languageId: 'svelte' })).toEqual([])
+  })
 })

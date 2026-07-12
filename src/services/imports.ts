@@ -1,8 +1,10 @@
 // @ts-expect-error browser build avoids optional Node template-engine dependencies
 import { parse as parseVueSfc } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import ts from 'typescript'
+import { getSvelteInstanceScript } from './svelte-script'
 
 export type ImportWay = 'as default' | 'default' | 'specifier'
+export type ImportHost = 'script' | 'vue' | 'svelte'
 
 export interface ImportEdit {
   start: number
@@ -55,22 +57,25 @@ export function getSuggestedImportNames(suggestions: unknown, prefix: string, im
   return [name]
 }
 
-export function createImportEdits(code: string, source: string, dependencies: string[], importWay: ImportWay = 'specifier', vue = false, context: ImportDocumentContext = {}): ImportEdit[] {
+export function createImportEdits(code: string, source: string, dependencies: string[], importWay: ImportWay = 'specifier', hostOrVue: ImportHost | boolean = 'script', context: ImportDocumentContext = {}): ImportEdit[] {
+  const host: ImportHost = typeof hostOrVue === 'boolean' ? (hostOrVue ? 'vue' : 'script') : hostOrVue
   const names = [...new Set(dependencies.filter(name => isSafeBindingIdentifier(name)))]
   if (!source || !names.length)
     return []
 
-  const script = getScriptRegion(code, vue, context)
+  const script = getScriptRegion(code, host, context)
   if (!script) {
     const statements = createStatements(source, names, importWay)
     if (!statements)
       return []
-    if (vue) {
+    if (host === 'vue') {
       if (!canCreateVueScript(code))
         return []
       return [{ start: 0, end: 0, text: `<script>\n${statements}\nexport default { components: { ${names.join(', ')} } }\n</script>\n` }]
     }
-    return [{ start: 0, end: 0, text: `<script setup>\n${statements}\n</script>\n` }]
+    if (host === 'svelte')
+      return [{ start: 0, end: 0, text: `<script>\n${statements}\n</script>\n` }]
+    return [{ start: 0, end: 0, text: `${statements}\n` }]
   }
 
   const sourceFile = ts.createSourceFile(script.fileName, script.code, ts.ScriptTarget.Latest, true, script.scriptKind)
@@ -183,7 +188,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
   const insertion = lastImport ? lastImport.end : getPrologueInsertion(sourceFile, script.code)
   const beforeInsertion = script.code.slice(0, insertion)
   const leading = insertion === 0
-    ? script.offset > 0 && script.code.startsWith('\n') ? '\n' : ''
+    ? host === 'svelte' || (script.offset > 0 && script.code.startsWith('\n')) ? '\n' : ''
     : beforeInsertion.endsWith('\n') ? '' : '\n'
   const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
   return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }], [...existing, ...missing])
@@ -345,8 +350,8 @@ function createStatements(source: string, names: string[], importWay: ImportWay)
   return `import { ${names.join(', ')} } from ${quoted}`
 }
 
-function getScriptRegion(code: string, vue: boolean, context: ImportDocumentContext): ScriptRegion | null {
-  if (!vue) {
+function getScriptRegion(code: string, host: ImportHost, context: ImportDocumentContext): ScriptRegion | null {
+  if (host === 'script') {
     const language = context.languageId?.toLowerCase()
     const extension = context.uri?.match(/\.([^.?#/]+)(?:[?#]|$)/)?.[1]?.toLowerCase()
     const kind = language === 'typescriptreact' || extension === 'tsx'
@@ -357,6 +362,17 @@ function getScriptRegion(code: string, vue: boolean, context: ImportDocumentCont
           ? ts.ScriptKind.JS
           : ts.ScriptKind.TS
     return { code, offset: 0, scriptKind: kind, fileName: `component.${extension || (kind === ts.ScriptKind.TSX ? 'tsx' : kind === ts.ScriptKind.JSX ? 'jsx' : kind === ts.ScriptKind.JS ? 'js' : 'ts')}` }
+  }
+
+  if (host === 'svelte') {
+    const instance = getSvelteInstanceScript(code)
+    if (!instance)
+      return null
+    const openingTagStart = code.lastIndexOf('<script', instance.offset)
+    const openingTag = openingTagStart >= 0 ? code.slice(openingTagStart, instance.offset) : ''
+    const lang = openingTag.match(/\blang\s*=\s*["']([^"']+)["']/i)?.[1]?.toLowerCase()
+    const scriptKind = lang === 'ts' || lang === 'typescript' ? ts.ScriptKind.TS : ts.ScriptKind.JS
+    return { code: instance.content, offset: instance.offset, scriptKind, fileName: `component.${scriptKind === ts.ScriptKind.TS ? 'ts' : 'js'}` }
   }
 
   const { descriptor } = parseVueSfc(code)

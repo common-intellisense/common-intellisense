@@ -58,9 +58,15 @@ function getJsxAst(code: string) {
 function getSvelteHtml(code: string) {
   if (svelteHtmlCache?.code === code)
     return svelteHtmlCache.value
-  const { html } = svelteParser(code)
-  svelteHtmlCache = { code, value: html }
-  return html
+  try {
+    const { html } = svelteParser(code)
+    svelteHtmlCache = { code, value: html }
+    return html
+  }
+  catch {
+    // Incomplete Svelte is normal while editing; providers must fail closed.
+    svelteHtmlCache = { code, value: undefined }
+  }
 }
 
 export interface ParserDocumentContext {
@@ -658,6 +664,8 @@ function findRef(children: any, map: any, refsMap: (string | [string, string])[]
 
 export function parserSvelte(code: string, position: vscode.Position) {
   const html = getSvelteHtml(code)
+  if (!html)
+    return { type: 'script', refsMap: {}, refs: [] }
   const result = jsxDfs([html], null, position, code)
   const map = {
     refsMap: {},

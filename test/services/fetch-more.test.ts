@@ -1,4 +1,5 @@
 import vm from 'node:vm'
+import * as vscode from 'vscode'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let remoteUris: string[] = ['https://fake/remote.js']
@@ -305,6 +306,32 @@ describe('fetch service additional tests (mocked)', () => {
     expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
     expect(mod.cacheFetch.get('https://fake/remote.js')).toBe(good)
     nowSpy.mockRestore()
+  })
+
+  it('warns once per blocked legacy source and opens migration actions', async () => {
+    allowLegacyAdapters = false
+    const warning = vi.fn()
+      .mockResolvedValueOnce('Open Settings')
+      .mockResolvedValueOnce('Migration Guide')
+    const executeCommand = vi.fn()
+    const openExternal = vi.fn()
+    ;(vscode.window as any).showWarningMessage = warning
+    ;(vscode as any).commands = { executeCommand }
+    ;(vscode as any).env = { openExternal }
+    ;(vscode.Uri as any).parse = (value: string) => value
+    const mod = await import('../../src/services/fetch')
+
+    mod.notifyLegacyAdapterBlocked('https://user:secret@example.com/a.cjs?token=secret#x')
+    mod.notifyLegacyAdapterBlocked('https://user:secret@example.com/a.cjs?token=secret#x')
+    await Promise.resolve()
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning.mock.calls[0][0]).not.toContain('secret')
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', 'common-intellisense.allowLegacyAdapters')
+
+    mod.notifyLegacyAdapterBlocked('https://example.com/b.cjs?token=other')
+    await Promise.resolve()
+    expect(warning).toHaveBeenCalledTimes(2)
+    expect(openExternal).toHaveBeenCalled()
   })
 
   it('blocks custom executable adapters unless legacy mode is explicitly enabled', async () => {

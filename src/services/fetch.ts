@@ -23,6 +23,42 @@ import { createAdapterVmContext, runAdapterExports } from './adapter-vm'
 const prefix = '@common-intellisense/'
 
 export const cacheFetch = new Map<string, string>()
+const warnedLegacyAdapterSources = new Set<string>()
+const legacyMigrationUrl = 'https://github.com/common-intellisense/common-intellisense#explain-configuration'
+
+function displayAdapterSource(source: string) {
+  try {
+    const target = new URL(source)
+    target.username = ''
+    target.password = ''
+    target.search = ''
+    target.hash = ''
+    return target.toString()
+  }
+  catch {
+    return source.split(/[?#]/, 1)[0]
+  }
+}
+
+/** Warn once per source and session when a custom executable adapter is blocked. */
+export function notifyLegacyAdapterBlocked(source: string) {
+  if (warnedLegacyAdapterSources.has(source))
+    return
+  warnedLegacyAdapterSources.add(source)
+  const visibleSource = displayAdapterSource(source)
+  const restricted = vscode.workspace?.isTrusted === false
+  const reason = restricted ? 'Executable adapters are disabled in Restricted Mode.' : 'Executable adapters are disabled by default.'
+  const warning = `${reason} Blocked ${visibleSource}. Migrate to a data-only manifest, or temporarily enable legacy adapters only for a trusted source.`
+  const showWarningMessage = vscode.window?.showWarningMessage
+  if (typeof showWarningMessage !== 'function')
+    return
+  void Promise.resolve(showWarningMessage(warning, 'Open Settings', 'Migration Guide')).then((action) => {
+    if (action === 'Open Settings')
+      return vscode.commands?.executeCommand?.('workbench.action.openSettings', 'common-intellisense.allowLegacyAdapters')
+    if (action === 'Migration Guide' && vscode.env?.openExternal && vscode.Uri?.parse)
+      return vscode.env.openExternal(vscode.Uri.parse(legacyMigrationUrl))
+  }).catch(error => logger.error(`Failed to show legacy adapter migration warning: ${String(error)}`))
+}
 const cacheSchemaVersion = 1
 const maxCacheSize = 16 * 1024 * 1024
 const maxCacheEntrySize = 8 * 1024 * 1024
@@ -95,7 +131,8 @@ const localTasks = new Map<string, Promise<Record<string, any>>>()
 const perSourceTasks = new Map<string, Promise<CustomSourceResult>>()
 let sourceEpoch = 0
 const retry = 3
-const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
+const remoteRequestTimeout = 5_000
+const remoteTotalTimeout = 30_000
 const remoteUriCacheTTL = 5 * 60 * 1000
 const latestVersionCacheTTL = 10 * 60 * 1000
 const latestVersionCache = new Map<string, { value: string, at: number }>()
@@ -300,8 +337,10 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
       throw error
   }
 
-  if (!allowLegacyCode)
+  if (!allowLegacyCode) {
+    notifyLegacyAdapterBlocked(source)
     throw new Error(`Executable adapter blocked; enable common-intellisense.allowLegacyAdapters to trust this source: ${source}`)
+  }
 
   // Legacy executable adapter. node:vm limits responsiveness but is not a security sandbox.
   const sandbox: Record<string, any> = {
@@ -694,7 +733,7 @@ interface PinnedResponse {
   body: string
 }
 
-export type PinnedRequester = (uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass) => Promise<PinnedResponse>
+export type PinnedRequester = (uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass, signal?: AbortSignal) => Promise<PinnedResponse>
 let requesterOverride: PinnedRequester | undefined
 let resolverOverride: ResolveHost | undefined
 
@@ -703,7 +742,7 @@ export function setRemoteTransportForTest(requester?: PinnedRequester, resolver?
   resolverOverride = resolver
 }
 
-function requestPinnedText(uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass): Promise<PinnedResponse> {
+function requestPinnedText(uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass, signal?: AbortSignal): Promise<PinnedResponse> {
   return new Promise((resolve, reject) => {
     const target = new URL(uri)
     const transport = target.protocol === 'https:' ? https : http
@@ -745,7 +784,14 @@ function requestPinnedText(uri: string, pinned: { address: string, family: numbe
       response.on('end', () => resolve({ status, location, body: Buffer.concat(chunks).toString('utf8') }))
       response.on('error', reject)
     })
-    request.setTimeout(timeout, () => request.destroy(new Error(`Remote adapter request timed out: ${uri}`)))
+    const abort = () => request.destroy(new Error(`Remote adapter request deadline exceeded: ${uri}`))
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    request.once('close', () => signal?.removeEventListener('abort', abort))
+    request.setTimeout(remoteRequestTimeout, () => request.destroy(new Error(`Remote adapter request timed out: ${uri}`)))
     request.on('socket', (socket) => {
       socket.once('connect', () => {
         const remoteAddress = normalizeAddress(socket.remoteAddress || '')
@@ -765,43 +811,66 @@ export async function fetchRemoteText(
   uri: string,
   resolveHost: ResolveHost = resolverOverride || (hostname => dns.lookup(hostname, { all: true, verbatim: true })),
   requestText: PinnedRequester = requesterOverride || requestPinnedText,
+  totalTimeout = remoteTotalTimeout,
 ) {
-  const trust = await getRemoteTrustClass(uri)
-  if (!trust)
-    throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
-  let current = uri
-  for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
-    const pinnedAddresses = await resolvePinnedAddresses(current, trust, resolveHost)
-    let response: PinnedResponse | undefined
-    let lastConnectionError: unknown
-    for (const pinned of pinnedAddresses) {
-      try {
-        response = await requestText(current, pinned, trust)
-        break
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(`Remote adapter request deadline exceeded: ${uri}`))
+    }, totalTimeout)
+  })
+  const load = async () => {
+    const trust = await getRemoteTrustClass(uri)
+    if (!trust)
+      throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
+    let current = uri
+    for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
+      if (controller.signal.aborted)
+        throw new Error(`Remote adapter request deadline exceeded: ${uri}`)
+      const pinnedAddresses = await resolvePinnedAddresses(current, trust, resolveHost)
+      let response: PinnedResponse | undefined
+      let lastConnectionError: unknown
+      for (const pinned of pinnedAddresses) {
+        if (controller.signal.aborted)
+          throw new Error(`Remote adapter request deadline exceeded: ${uri}`)
+        try {
+          response = await requestText(current, pinned, trust, controller.signal)
+          break
+        }
+        catch (error) {
+          lastConnectionError = error
+        }
       }
-      catch (error) {
-        lastConnectionError = error
+      if (!response)
+        throw lastConnectionError || new Error(`Remote adapter request failed: ${current}`)
+      const { status, location, body } = response
+      if (status >= 300 && status < 400) {
+        if (!location)
+          throw new Error(`Remote adapter redirect is missing Location: ${current}`)
+        if (redirects === maxRemoteRedirects)
+          throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
+        const next = new URL(location, current).toString()
+        if (!isRedirectAllowed(next, trust))
+          throw new Error(`Remote adapter redirected to an untrusted URL: ${next}`)
+        current = next
+        continue
       }
+      if (status >= 400)
+        throw new Error(`Remote adapter request failed (${status}): ${current}`)
+      return body
     }
-    if (!response)
-      throw lastConnectionError || new Error(`Remote adapter request failed: ${current}`)
-    const { status, location, body } = response
-    if (status >= 300 && status < 400) {
-      if (!location)
-        throw new Error(`Remote adapter redirect is missing Location: ${current}`)
-      if (redirects === maxRemoteRedirects)
-        throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
-      const next = new URL(location, current).toString()
-      if (!isRedirectAllowed(next, trust))
-        throw new Error(`Remote adapter redirected to an untrusted URL: ${next}`)
-      current = next
-      continue
-    }
-    if (status >= 400)
-      throw new Error(`Remote adapter request failed (${status}): ${current}`)
-    return body
+    throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
   }
-  throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
+  try {
+    return await Promise.race([load(), deadline])
+  }
+  finally {
+    if (timer)
+      clearTimeout(timer)
+    controller.abort()
+  }
 }
 
 export interface CustomSourceResult {

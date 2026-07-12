@@ -165,7 +165,7 @@ describe('package context generations', () => {
     })
     expect(remoteFetchMock).toHaveBeenCalledTimes(1)
     const latestLocalContext = updated.mock.calls.map(call => call[0]).find(value => value.uiCompletions?.LocalButton)
-    expect(mod.getSourceScope(latestLocalContext, 'local-props')).toMatchObject({ key: 'LocalProps', lib: 'LocalProps' })
+    expect(mod.getSourceScope(latestLocalContext, 'local-props')).toMatchObject({ key: 'custom:local:test:LocalProps', lib: 'LocalProps' })
   })
 
   it('starts custom sources for a new package generation while the old generation is pending', async () => {
@@ -206,7 +206,30 @@ describe('package context generations', () => {
     await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.VendorButton).toBeDefined())
 
     const context = mod.getContextForDocumentPath(documentPath)!
-    expect(mod.getSourceScope(context, '@vendor/ui/button')).toMatchObject({ key: 'VendorProps', exactLib: '@vendor/ui' })
+    expect(mod.getSourceScope(context, '@vendor/ui/button')).toMatchObject({ key: 'custom:local:test:VendorProps', exactLib: '@vendor/ui' })
+  })
+
+  it('keeps source-scoped caches when custom sources reuse an export key', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    const sourceA = { lib: '@a/ui', marker: 'a', methods: [{ name: 'a' }] }
+    const sourceB = { lib: '@b/ui', marker: 'b', methods: [{ name: 'b' }] }
+    localFetchMock.mockResolvedValue({ privateUi: () => ({ Button: sourceA }) })
+    remoteFetchMock.mockResolvedValue({ privateUi: () => ({ Button: sourceB }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getSourceScope(mod.getContextForDocumentPath(documentPath)!, '@b/ui')).toBeDefined())
+
+    const context = mod.getContextForDocumentPath(documentPath)!
+    const scopeA = mod.getSourceScope(context, '@a/ui')!
+    const scopeB = mod.getSourceScope(context, '@b/ui')!
+    expect(scopeA.key).toBe('custom:local:test:privateUi')
+    expect(scopeB.key).toBe('custom:http:test:privateUi')
+    expect(context.cacheMap.get(scopeA.key).Button).toBe(sourceA)
+    expect(context.cacheMap.get(scopeB.key).Button).toBe(sourceB)
+    expect(context.uiCompletions?.Button).toBe(sourceB)
   })
 
   it('removes metadata deleted by a successful custom-source refresh', async () => {

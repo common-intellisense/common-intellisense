@@ -36,6 +36,18 @@ describe('package-scoped UI configuration', () => {
     expect(deps).toEqual({ DefaultThing: 'first', AppButton: 'antd' })
   })
 
+  it('uses only the Svelte instance script for template dependencies', () => {
+    const moduleOnly = getUiDeps(`<script module>import ModuleButton from '@a/ui'</script><ModuleButton />`, { languageId: 'svelte', uri: 'file:///App.svelte' })
+    expect(moduleOnly).toEqual({})
+
+    const both = getUiDeps(`
+      <script context="module">import Button from '@module/ui'</script>
+      <script>import Button from '@instance/ui'</script>
+      <Button />
+    `, { languageId: 'svelte', uri: 'file:///App.svelte' })
+    expect(both).toEqual({ Button: '@instance/ui' })
+  })
+
   it('uses typed defaults when the package mapping has no current entry', () => {
     expect(normalizeSelectedUIs({ '/workspace/a/package.json': ['antd5'] }, '/workspace/b/package.json')).toEqual(['auto'])
     expect(normalizePackageRecordConfiguration({

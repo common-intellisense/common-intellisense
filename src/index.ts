@@ -404,7 +404,8 @@ export async function activate(context: vscode.ExtensionContext) {
     const name = data.name.split('.')[0]
     const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
     const deps = [...getSuggestedImportNames(data.suggestions, prefix, importWay), name]
-    const edits = createImportEdits(code, from, deps, importWay, document.languageId === 'vue', { languageId: document.languageId, uri: document.uri.toString() })
+    const importHost = document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'script'
+    const edits = createImportEdits(code, from, deps, importWay, importHost, { languageId: document.languageId, uri: document.uri.toString() })
     if (!edits.length)
       return
     const workspaceEdit = new vscode.WorkspaceEdit()

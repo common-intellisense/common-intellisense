@@ -19,6 +19,11 @@ vi.mock('@vue-vine/compiler', () => ({
 }))
 
 describe('parser edge cases', () => {
+  it('does not throw for incomplete Svelte input', async () => {
+    const { parser } = await import('../src/parser')
+    for (const code of ['<Button disabled', '<Button value="', '{#if'])
+      expect(() => parser(code, { line: 0, character: code.length } as any, { languageId: 'svelte', uri: 'file:///App.svelte' })).not.toThrow()
+  })
   it('does not crash on return without argument', async () => {
     tsParseMock.mockReturnValue({
       body: [{

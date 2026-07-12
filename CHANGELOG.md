@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - feat/ci-and-tests
 
+### Breaking / Security
+
+- Custom executable CommonJS adapters from `remoteUris`, `remoteNpmUris`, and `localUris` are now disabled by default. Migrate trusted sources to the data-only `schemaVersion: 1` manifest format. As a temporary compatibility measure, trusted workspaces can explicitly enable `common-intellisense.allowLegacyAdapters`; executable adapters remain disabled in Restricted Mode.
+
 - Add global Vitest test setup to stub VSCode and runtime-only modules for unit tests.
 - Implement suffix-match fallback for UI component lookup so bare/pascal names (e.g. `Pagination`) can match prefixed completion keys (e.g. `ElPagination`).
 - Added unit tests covering suffix-match behavior and a pagination lookup test.

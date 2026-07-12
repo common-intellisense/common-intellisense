@@ -154,7 +154,7 @@ Custom sources should use the data-only manifest format:
 }
 ```
 
-Legacy CommonJS adapters are executable code. They are disabled for custom sources by default and always disabled in Restricted Mode. Only set `"common-intellisense.allowLegacyAdapters": true` for sources you fully trust; `node:vm` is used to bound execution time, not as a security sandbox.
+**Migration notice:** Legacy CommonJS adapters are executable code and are now disabled for custom sources by default; they are always disabled in Restricted Mode. Migrate existing private adapters to the data-only manifest above. Only set `"common-intellisense.allowLegacyAdapters": true` as a temporary compatibility measure for sources you fully trust; `node:vm` bounds execution time but is not a security sandbox. When a legacy source is blocked, the extension shows one migration warning per source per session.
 
 ## How to Contribute
 
