@@ -25,6 +25,10 @@ function enableCommandTrust(documentation: vscode.MarkdownString) {
 export type CompletionFramework = 'vue' | 'vine' | 'react' | 'svelte'
 export interface CompletionRenderContext {
   languageId: string
+  /** Host controls ref/import semantics; syntax controls emitted markup. */
+  hostFramework?: CompletionFramework
+  syntax?: 'template' | 'jsx'
+  /** @deprecated Prefer hostFramework/syntax. */
   framework: CompletionFramework
   uri: string
   version?: number
@@ -32,6 +36,12 @@ export interface CompletionRenderContext {
   parent?: any
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
+
+function getSyntaxFramework(context: CompletionRenderContext | undefined, fallback: CompletionFramework): CompletionFramework {
+  if (context?.syntax === 'jsx')
+    return 'react'
+  return context?.framework || fallback
+}
 
 function normalizeSuggestionName(suggestion: string | SuggestionItem | undefined): string | undefined {
   const name = typeof suggestion === 'string' ? suggestion : suggestion?.name
@@ -43,6 +53,8 @@ function normalizeRenderContext(input?: CompletionRenderInput): CompletionRender
     return input
   return {
     languageId: input ? 'vue' : 'typescriptreact',
+    hostFramework: input ? 'vue' : 'react',
+    syntax: input ? 'template' : 'jsx',
     framework: input ? 'vue' : 'react',
     uri: '',
     version: -1,
@@ -161,8 +173,9 @@ export function propsReducer(options: PropsOptions) {
 
     const completionsDeferCallback = (input?: CompletionRenderInput) => {
       const renderContext = normalizeRenderContext(input)
-      const isVue = renderContext.framework === 'vue' || renderContext.framework === 'vine'
-      const isHtmlLike = isVue || renderContext.framework === 'svelte'
+      const syntaxFramework = getSyntaxFramework(renderContext, 'vue')
+      const isVue = syntaxFramework === 'vue' || syntaxFramework === 'vine'
+      const isHtmlLike = isVue || syntaxFramework === 'svelte'
       const data: SubCompletionItem[] = [
         'id',
         isHtmlLike ? 'class' : 'className',
@@ -355,8 +368,9 @@ export function propsReducer(options: PropsOptions) {
 
     const deferEventsCall = (input?: CompletionRenderInput) => {
       const renderContext = normalizeRenderContext(input)
-      const isVue = renderContext.framework === 'vue' || renderContext.framework === 'vine'
-      const isSvelte = renderContext.framework === 'svelte'
+      const syntaxFramework = getSyntaxFramework(renderContext, 'react')
+      const isVue = syntaxFramework === 'vue' || syntaxFramework === 'vine'
+      const isSvelte = syntaxFramework === 'svelte'
       const originEvent = [
         {
           name: isVue
@@ -692,7 +706,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         directives,
         lib,
         data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const framework = context?.framework || 'vue'
+          const framework = getSyntaxFramework(context, 'vue')
           let snippet = ''
           let _content = ''
           let description = ''
@@ -746,7 +760,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         directives,
         lib,
         data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const framework = context?.framework || 'vue'
+          const framework = getSyntaxFramework(context, 'vue')
           let snippet = ''
           let _content = ''
           let description = ''
@@ -799,7 +813,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
     directives,
     lib,
     data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-      const framework = context?.framework || 'react'
+      const framework = getSyntaxFramework(context, 'react')
       let snippet = ''
       let _content = ''
       let description = ''

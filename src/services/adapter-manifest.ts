@@ -149,6 +149,42 @@ function normalizeComponent(value: unknown, path: string) {
   }
 }
 
+function isSafeDirectiveValue(value: unknown) {
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value)
+}
+
+function normalizeDirectives(value: unknown, path: string) {
+  if (value === undefined)
+    return undefined
+  if (!Array.isArray(value))
+    invalid(path)
+  return value.map((directive, index) => {
+    const directivePath = `${path}[${index}]`
+    if (!isPlainRecord(directive))
+      invalid(directivePath)
+    requireNonEmptyString(directive.name, `${directivePath}.name`)
+    for (const key of ['description', 'description_zh', 'documentation', 'documentationType', 'link', 'version'])
+      validateOptionalString(directive, key, directivePath)
+    if (directive.params !== undefined && !Array.isArray(directive.params))
+      invalid(`${directivePath}.params`)
+    const params = (directive.params || []).map((param, paramIndex) => {
+      const paramPath = `${directivePath}.params[${paramIndex}]`
+      if (!isPlainRecord(param))
+        invalid(paramPath)
+      requireNonEmptyString(param.name, `${paramPath}.name`)
+      requireNonEmptyString(param.type, `${paramPath}.type`)
+      for (const key of ['description', 'description_zh'])
+        validateOptionalString(param, key, paramPath)
+      for (const key of ['default', 'value']) {
+        if (param[key] !== undefined && !isSafeDirectiveValue(param[key]))
+          invalid(`${paramPath}.${key}`)
+      }
+      return { ...param }
+    })
+    return { ...directive, params }
+  })
+}
+
 function normalizeComponentsExport(value: PlainRecord, path: string) {
   requireNonEmptyString(value.lib, `${path}.lib`)
   for (const key of ['prefix', 'dynamicLib'])
@@ -170,7 +206,7 @@ function normalizeComponentsExport(value: PlainRecord, path: string) {
       invalid(`${path}.map[${index}][2]`)
     return [normalizedComponent, ...entry.slice(1)]
   })
-  return { ...value, map }
+  return { ...value, map, directives: normalizeDirectives(value.directives, `${path}.directives`) }
 }
 
 function normalizePropsExport(value: PlainRecord, path: string) {

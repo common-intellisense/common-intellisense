@@ -129,6 +129,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
       result.loc = activeScript.loc
       result.template = template
       result.hostFramework = 'vue'
+      result.syntax = 'jsx'
     }
     return result
   }
@@ -1071,21 +1072,13 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
 
   if (isVueDocument) {
     const {
-      descriptor: { template, script, scriptSetup },
+      descriptor: { template },
     } = getVueSfcParseResult(code)
     const analyses: Array<{ children: any, offset: number }> = []
     if (template) {
       analyses.push({
         children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
         offset: 0,
-      })
-    }
-    const tsxScript = [scriptSetup, script].find(block => block?.lang === 'tsx')
-    if (tsxScript) {
-      const children = findAllJsxElements(tsxScript.content)
-      analyses.push({
-        children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
-        offset: tsxScript.loc.start.offset,
       })
     }
     return analyses
@@ -1164,39 +1157,6 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
     result.push({ child, slots: target.rawSlots })
   }
   return result
-}
-
-function findAllJsxElements(code: string) {
-  const results: any = []
-  try {
-    const ast = getJsxAst(code) as any
-    traverse(ast, (node: any) => {
-      if (node.type === 'JSXElement') {
-        results.push(node)
-      }
-      else if (node.type === 'ObjectExpression') {
-        const _node: any = node.properties?.find((p: any) => p?.key?.name === 'render')
-          || node.properties?.find((p: any) => p?.key?.name === 'setup')
-        const t = _node?.value
-        if (t) {
-          traverse(t, (nextNode: any) => {
-            if (nextNode.type === 'JSXElement') {
-              const tag = (nextNode.openingElement.name as any)?.name
-              if (tag && !originTag.includes(tag))
-                results.push(nextNode)
-            }
-          })
-        }
-      }
-    })
-  }
-  catch (error) {
-    logger.error(JSON.stringify(error))
-  }
-  finally {
-  // eslint-disable-next-line no-unsafe-finally
-    return results
-  }
 }
 
 export function parserVine(code: string, position: vscode.Position, cursorOffset = getSourceOffset(code, position)) {

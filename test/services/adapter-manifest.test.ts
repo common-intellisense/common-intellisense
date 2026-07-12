@@ -23,12 +23,25 @@ describe('data-only adapter manifest validation', () => {
     expect(exportsData.demoComponents.map[0][0]).toBe('Demo')
   })
 
+  it('validates and clones component directives', () => {
+    const exportsData = normalizeAdapterManifestExports({
+      demoComponents: {
+        lib: 'demo',
+        directives: [{ name: 'loading', description: 'Loading', params: [{ name: 'delay', type: 'number', default: 0 }] }],
+        map: [['Demo', 'Demo']],
+      },
+    }, 'fixture') as any
+    expect(exportsData.demoComponents.directives[0].params[0]).toMatchObject({ name: 'delay', type: 'number' })
+  })
+
   it.each([
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { disabled: null } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { type: 42 } } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', exposed: [{ name: 'focus', version: 3 }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', suggestions: [{ name: 42 }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { related: [42] } } }] },
+    { lib: 'demo', directives: {}, map: [['Demo', 'Demo']] },
+    { lib: 'demo', directives: [{ name: 'loading', params: [{ name: 'delay' }] }], map: [['Demo', 'Demo']] },
   ])('rejects malformed props before reducers are created', (value) => {
     expect(() => normalizeAdapterManifestExports({ demo: value }, 'fixture')).toThrow(/Invalid adapter manifest field/)
   })

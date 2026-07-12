@@ -159,11 +159,15 @@ function getDocumentOffset(document: vscode.TextDocument, position: vscode.Posit
   return lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.character
 }
 
-function getCompletionRenderContext(document: vscode.TextDocument): CompletionRenderContext {
+function getCompletionRenderContext(document: vscode.TextDocument, result?: any): CompletionRenderContext {
   const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+  const hostFramework = isVineDocument ? 'vine' : result?.hostFramework || (document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'react')
+  const syntax = result?.syntax === 'jsx' || ['javascriptreact', 'typescriptreact'].includes(document.languageId) ? 'jsx' : 'template'
   return {
     languageId: document.languageId,
-    framework: isVineDocument ? 'vine' : document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'react',
+    hostFramework,
+    syntax,
+    framework: syntax === 'jsx' ? 'react' : hostFramework,
     uri: document.uri.toString(),
     version: document.version,
   }
@@ -518,7 +522,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
     const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
-    const renderContext = { ...getCompletionRenderContext(document), parent: result.parent }
+    const renderContext = { ...getCompletionRenderContext(document, result), parent: result.parent }
+    const isTemplateSyntax = renderContext.syntax !== 'jsx'
     const analysis = getDocumentAnalysis(document)
     const deps = isVue ? analysis.getImportDeps() : {}
     const uiDeps = analysis.getUiDeps()
@@ -605,8 +610,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const { events, completions, uiName } = target
       const directives = optionsComponents.directivesMap[uiName]
-      const directivesCompletions = directives
-        ? directives.map((item: Directives[0]) => {
+      const directivesCompletions = Array.isArray(directives)
+        ? directives.filter((item: any) => typeof item?.name === 'string' && (!item.params || Array.isArray(item.params))).map((item: Directives[0]) => {
             const detail = isZh ? item.description_zh : item.description
             const content = `${item.name}  ${detail}`
             const documentation = createMarkdownString()
@@ -617,7 +622,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             if (item.params?.length) {
               documentation.appendCodeblock('\n')
-              item.params.forEach((i) => {
+              item.params.filter((i: any) => typeof i?.name === 'string' && typeof i?.type === 'string').forEach((i: any) => {
                 documentation.appendMarkdown(`**🌟 ${i.name}** \n`)
                 documentation.appendMarkdown(`- ${isZh ? '类型' : 'type'}: ${i.type}\n`)
                 documentation.appendMarkdown(`- ${isZh ? '描述' : 'description'}: ${isZh ? i.description_zh : i.description}\n`)
@@ -626,7 +631,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             const snippet = item.params?.length
-              ? `:${item.name}="${JSON.stringify(item.params.reduce((acc, i) => {
+              ? `:${item.name}="${JSON.stringify(item.params.filter((i: any) => typeof i?.name === 'string' && typeof i?.type === 'string').reduce((acc: Record<string, any>, i: any) => {
                 const key = i.name
                 const type = i.type.toLocaleLowerCase()
                 const value = i.default ?? (type === 'boolean' ? false : type === 'number' ? 0 : '')
@@ -648,7 +653,7 @@ export async function activate(context: vscode.ExtensionContext) {
           })
         : []
       eventCallback = events[0](renderContext) || []
-      completionsCallback = [...completions[0](renderContext), ...(isVue ? [] : eventCallback), ...directivesCompletions]
+      completionsCallback = [...completions[0](renderContext), ...(isTemplateSyntax ? [] : eventCallback), ...(isTemplateSyntax ? directivesCompletions : [])]
 
       const hasProps = new Set(getExistingPropNames(result, lineText))
       const hasProp = (item: any) => {
@@ -695,7 +700,7 @@ export async function activate(context: vscode.ExtensionContext) {
             type: item.kind,
           }))))
         }
-        const events = isVue
+        const events = isTemplateSyntax
           ? []
           : isValue
             ? []
@@ -723,7 +728,7 @@ export async function activate(context: vscode.ExtensionContext) {
     else if (!result.isInTemplate || !optionsComponents) {
       return
     }
-    else if (isValue && (isVue || !result.isDynamicFlag)) {
+    else if (isValue && (isTemplateSyntax || !result.isDynamicFlag)) {
       return
     }
 

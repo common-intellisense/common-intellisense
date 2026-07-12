@@ -92,6 +92,7 @@ const officialAdapterScriptInFlight = new Map<string, Promise<string>>()
 const remoteHttpTasks = new Map<string, Promise<Record<string, any>>>()
 const remoteNpmTasks = new Map<string, Promise<Record<string, any>>>()
 const localTasks = new Map<string, Promise<Record<string, any>>>()
+const perSourceTasks = new Map<string, Promise<CustomSourceResult>>()
 let sourceEpoch = 0
 const retry = 3
 const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
@@ -810,22 +811,33 @@ export interface CustomSourceResult {
   error?: unknown
 }
 
-async function settleCustomSources(items: Array<{ id: string, load: () => Promise<Record<string, any> | undefined> }>): Promise<CustomSourceResult[]> {
-  return Promise.all(items.map(async ({ id, load }) => {
-    try {
-      return { id, status: 'success' as const, value: (await load()) || {} }
-    }
-    catch (error) {
-      return { id, status: 'failed' as const, error }
-    }
-  }))
+function getOrCreateSourceTask(key: string, id: string, load: () => Promise<Record<string, any> | undefined>): Promise<CustomSourceResult> {
+  const existing = perSourceTasks.get(key)
+  if (existing)
+    return existing
+  const task = Promise.resolve()
+    .then(load)
+    .then(value => ({ id, status: 'success' as const, value: value || {} }))
+    .catch(error => ({ id, status: 'failed' as const, error }))
+    .finally(() => {
+      if (perSourceTasks.get(key) === task)
+        perSourceTasks.delete(key)
+    })
+  perSourceTasks.set(key, task)
+  return task
+}
+
+async function settleCustomSources(items: Array<{ id: string, taskKey: string, load: () => Promise<Record<string, any> | undefined> }>): Promise<CustomSourceResult[]> {
+  return Promise.all(items.map(({ id, taskKey, load }) => getOrCreateSourceTask(taskKey, id, load)))
 }
 
 export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
   const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
   const epoch = sourceEpoch
+  const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: isLegacyAdapterEnabled() })
   return settleCustomSources(uris.map(uri => ({
     id: `http:${uri}`,
+    taskKey: `${epoch}\0http:${uri}\0${trustIdentity}`,
     load: () => fetchFromRemoteUrlsInternal([uri], epoch),
   })))
 }
@@ -932,8 +944,10 @@ export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
   return settleCustomSources(uris.map((item) => {
     const name = typeof item === 'string' ? item : item.name
     const resource = typeof item === 'string' ? 'index.cjs' : item.resource || 'index.cjs'
+    const id = `npm:${name}::${resource}`
     return {
-      id: `npm:${name}::${resource}`,
+      id,
+      taskKey: `${epoch}\0${id}\0legacy:${isLegacyAdapterEnabled()}`,
       load: () => fetchFromRemoteNpmUrlsInternal([item], epoch),
     }
   }))
@@ -1035,10 +1049,14 @@ export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomS
   const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
   const epoch = sourceEpoch
   const root = workspaceRoot || getRootPath() || ''
-  return settleCustomSources(uris.map(configuredUri => ({
-    id: `local:${resolveLocalAdapterPath(root, configuredUri) || configuredUri}`,
-    load: () => fetchFromLocalUrisInternal([configuredUri], epoch, workspaceRoot),
-  })))
+  return settleCustomSources(uris.map((configuredUri) => {
+    const id = `local:${resolveLocalAdapterPath(root, configuredUri) || configuredUri}`
+    return {
+      id,
+      taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${isLegacyAdapterEnabled()}`,
+      load: () => fetchFromLocalUrisInternal([configuredUri], epoch, workspaceRoot),
+    }
+  }))
 }
 
 export function fetchFromLocalUris(workspaceRoot?: string) {
@@ -1120,6 +1138,7 @@ export function clearFetchCaches() {
   remoteUriFetchedAt.clear()
   remoteUriRetry.clear()
   localUrisMap.clear()
+  perSourceTasks.clear()
   remoteHttpTasks.clear()
   remoteNpmTasks.clear()
   localTasks.clear()

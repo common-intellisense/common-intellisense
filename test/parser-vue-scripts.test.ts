@@ -63,6 +63,8 @@ const button = <ElButton size="small" />
     })
     const groups = getDocumentSlotAnalysis(document.uri)?.children || []
     expect(groups.some((group: any) => group.offset === 0 && group.children.some((entry: any) => entry.child.tag === 'UiTable'))).toBe(true)
+    expect(groups.every((group: any) => group.offset === 0)).toBe(true)
+    expect(groups.some((group: any) => group.children.some((entry: any) => entry.child.openingElement))).toBe(false)
   })
 
   it('uses either active block and aggregates refs from both blocks', () => {

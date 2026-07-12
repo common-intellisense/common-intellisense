@@ -418,6 +418,7 @@ describe('package context generations', () => {
     fetchMock
       .mockResolvedValueOnce({ antd5: () => ({ Button: { lib: 'antd' } }) })
       .mockRejectedValueOnce(new Error('registry offline'))
+      .mockRejectedValueOnce(new Error('still offline'))
     const mod = await import('../../src/ui/ui-find')
     const documentPath = '/workspace/src/App.tsx'
 
@@ -426,7 +427,14 @@ describe('package context generations', () => {
     now += 11 * 60 * 1000
     await mod.ensureContextForPath(documentPath, {} as any, () => {})
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.officialNextRetryAt).toBeGreaterThan(now))
+    for (let index = 0; index < 100; index++)
+      await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(fetchMock).toHaveBeenCalledTimes(2)
 
+    now += 31_000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
     expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toBeDefined()
     nowSpy.mockRestore()
   })

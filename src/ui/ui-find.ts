@@ -34,6 +34,12 @@ export interface PackageContext {
   revision: number
   officialCheckedAt: number
   customSourcesCheckedAt: number
+  officialLastAttemptAt: number
+  customLastAttemptAt: number
+  officialFailureCount: number
+  customFailureCount: number
+  officialNextRetryAt: number
+  customNextRetryAt: number
   uiNames: string[]
   currentPkgUiNames: string[]
   optionsComponents: OptionsComponents
@@ -93,6 +99,11 @@ const maxInactivePackageContexts = 20
 const sourceRefreshes = new Set<string>()
 const officialSourceTTL = 10 * 60 * 1000
 const customSourceTTL = 5 * 60 * 1000
+const sourceRetryDelays = [30_000, 2 * 60_000, 5 * 60_000]
+
+function getRetryDelay(failureCount: number) {
+  return sourceRetryDelays[Math.min(Math.max(failureCount - 1, 0), sourceRetryDelays.length - 1)]
+}
 
 function getSourceRefreshKey(kind: 'custom' | 'official', context: PackageContext) {
   return `${kind}:${context.pkgPath || context.cwd}:${context.generation}:${context.officialCheckedAt}`
@@ -300,21 +311,27 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
   const contextKey = context.pkgPath || context.cwd
   const now = Date.now()
   if (now - context.officialCheckedAt < officialSourceTTL) {
-    if (now - context.customSourcesCheckedAt >= customSourceTTL) {
+    if (now - context.customSourcesCheckedAt >= customSourceTTL && now >= context.customNextRetryAt) {
       const refreshKey = getSourceRefreshKey('custom', context)
       if (!sourceRefreshes.has(refreshKey)) {
+        context.customLastAttemptAt = now
+        context.customNextRetryAt = now + sourceRetryDelays[0]
         sourceRefreshes.add(refreshKey)
         startContextEnhancements(context, registryEpoch, () => sourceRefreshes.delete(refreshKey))
       }
     }
     return
   }
+  if (now < context.officialNextRetryAt)
+    return
   // An official refresh also restarts custom enhancements. Do not publish an
   // old-baseline custom revision concurrently or it could invalidate the
   // official refresh's context identity guard.
   const refreshKey = getSourceRefreshKey('official', context)
   if (sourceRefreshes.has(refreshKey))
     return
+  context.officialLastAttemptAt = now
+  context.officialNextRetryAt = now + sourceRetryDelays[0]
   sourceRefreshes.add(refreshKey)
   const expectedEpoch = registryEpoch
   void buildContext(context.cwd, extensionContext, detectSlots, context.generation, workspaceRoot)
@@ -327,6 +344,12 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
       if (hadOfficialData && !hasRefreshedOfficialData)
         throw new Error('No official adapters were refreshed')
       refreshed.customSourcesCheckedAt = registered.customSourcesCheckedAt
+      refreshed.customLastAttemptAt = registered.customLastAttemptAt
+      refreshed.customFailureCount = registered.customFailureCount
+      refreshed.customNextRetryAt = registered.customNextRetryAt
+      refreshed.officialLastAttemptAt = context.officialLastAttemptAt
+      refreshed.officialFailureCount = 0
+      refreshed.officialNextRetryAt = 0
       refreshed.customSourceSnapshots = new Map(registered.customSourceSnapshots)
       const composed = await composeContextFromSnapshots(refreshed, refreshed.customSourceSnapshots)
       const latest = contexts.get(contextKey)
@@ -338,7 +361,14 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
       notifyContextUpdated(composed)
       startTrackedContextEnhancements(composed, expectedEpoch)
     })
-    .catch(error => logger.error(`official source refresh failed: ${String(error)}`))
+    .catch((error) => {
+      const current = contexts.get(contextKey)
+      if (registryEpoch === expectedEpoch && current?.generation === context.generation && current.officialCheckedAt === context.officialCheckedAt) {
+        current.officialFailureCount++
+        current.officialNextRetryAt = Date.now() + getRetryDelay(current.officialFailureCount)
+      }
+      logger.error(`official source refresh failed: ${String(error)}`)
+    })
     .finally(() => sourceRefreshes.delete(refreshKey))
 }
 
@@ -497,6 +527,12 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     revision: 1,
     officialCheckedAt: checkedAt,
     customSourcesCheckedAt: 0,
+    officialLastAttemptAt: checkedAt,
+    customLastAttemptAt: 0,
+    officialFailureCount: 0,
+    customFailureCount: 0,
+    officialNextRetryAt: 0,
+    customNextRetryAt: 0,
     uiNames,
     currentPkgUiNames: availableNames,
     ...cloneModel(officialModel),
@@ -509,6 +545,8 @@ function startTrackedContextEnhancements(context: PackageContext, expectedEpoch:
   const refreshKey = getSourceRefreshKey('custom', context)
   if (sourceRefreshes.has(refreshKey))
     return
+  context.customLastAttemptAt = Date.now()
+  context.customNextRetryAt = context.customLastAttemptAt + sourceRetryDelays[0]
   sourceRefreshes.add(refreshKey)
   startContextEnhancements(context, expectedEpoch, () => sourceRefreshes.delete(refreshKey))
 }
@@ -543,6 +581,12 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
           logger.error(`custom source failed [${result.id}]: ${String(result.error)}`)
         }
       }
+      const previousEntries = [...previous].filter(([id]) => id.startsWith(prefix))
+      const nextEntries = [...sourceResults].filter(([id]) => id.startsWith(prefix))
+      const changed = previousEntries.length !== nextEntries.length
+        || previousEntries.some(([id, value]) => sourceResults.get(id) !== value)
+      if (!changed)
+        return
       publishQueue = publishQueue.then(async () => {
         try {
           const published = await publishContextEnhancement(context, expectedEpoch, sourceResults)
@@ -567,11 +611,18 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
       const current = contexts.get(context.pkgPath || context.cwd)
       if (!loaderFailed
         && !publicationFailed
-        && publishedAny
         && registryEpoch === expectedEpoch
         && current?.generation === context.generation
         && current.officialCheckedAt === context.officialCheckedAt) {
         current.customSourcesCheckedAt = Date.now()
+        current.customFailureCount = 0
+        current.customNextRetryAt = 0
+      }
+      else if (registryEpoch === expectedEpoch
+        && current?.generation === context.generation
+        && current.officialCheckedAt === context.officialCheckedAt) {
+        current.customFailureCount++
+        current.customNextRetryAt = Date.now() + getRetryDelay(current.customFailureCount)
       }
     })
     .finally(() => onSettled?.())
@@ -638,6 +689,12 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
     return
   enhanced.revision = registered.revision + 1
   enhanced.customSourcesCheckedAt = registered.customSourcesCheckedAt
+  enhanced.officialLastAttemptAt = registered.officialLastAttemptAt
+  enhanced.customLastAttemptAt = registered.customLastAttemptAt
+  enhanced.officialFailureCount = registered.officialFailureCount
+  enhanced.customFailureCount = registered.customFailureCount
+  enhanced.officialNextRetryAt = registered.officialNextRetryAt
+  enhanced.customNextRetryAt = registered.customNextRetryAt
   contexts.set(contextKey, enhanced)
   applyContext(enhanced)
   notifyContextUpdated(enhanced)
