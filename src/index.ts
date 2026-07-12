@@ -9,6 +9,7 @@ import type { ComponentSourceScope } from './services/component-resolver'
 import { findComponentSourceScope, isLocalModuleSource, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { getNodeOffsetRange } from './services/node-range'
+import { isNativeTag } from './services/native-tags'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
 import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resolvePackagePathForDocument } from './ui/ui-find'
@@ -136,11 +137,15 @@ export function getDocumentAnalysis(document: vscode.TextDocument, code?: string
     get code() {
       return entry!.code
     },
-    getUiDeps() {
+    getUiDeps(activeOffset?: number) {
+      if (typeof activeOffset === 'number')
+        return getUiDeps(entry!.code, { languageId: document.languageId, uri, activeOffset }) || {}
       entry!.uiDeps ||= getUiDeps(entry!.code, { languageId: document.languageId, uri }) || {}
       return entry!.uiDeps
     },
-    getImportDeps() {
+    getImportDeps(activeOffset?: number) {
+      if (typeof activeOffset === 'number')
+        return getImportDeps(entry!.code, { activeOffset }) || {}
       entry!.importDeps ||= getImportDeps(entry!.code) || {}
       return entry!.importDeps
     },
@@ -385,7 +390,7 @@ export async function activate(context: vscode.ExtensionContext) {
     void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
   }))
 
-  context.subscriptions.push(registerCommand('common-intellisense.import', async (params) => {
+  context.subscriptions.push(registerCommand('common-intellisense.import', async (params, activeLoc) => {
     if (!params?.document?.uri || typeof params.document.version !== 'number')
       return
     const uri = vscode.Uri.parse(params.document.uri)
@@ -405,7 +410,13 @@ export async function activate(context: vscode.ExtensionContext) {
     const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
     const deps = [...getSuggestedImportNames(data.suggestions, prefix, importWay), name]
     const importHost = document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'script'
-    const edits = createImportEdits(code, from, deps, importWay, importHost, { languageId: document.languageId, uri: document.uri.toString() })
+    const preferredOffset = typeof activeLoc?.start?.offset === 'number' ? activeLoc.start.offset : undefined
+    const edits = createImportEdits(code, from, deps, importWay, importHost, {
+      languageId: document.languageId,
+      uri: document.uri.toString(),
+      preferredOffset,
+      registerVueComponent: preferredOffset === undefined,
+    })
     if (!edits.length)
       return
     const workspaceEdit = new vscode.WorkspaceEdit()
@@ -551,8 +562,9 @@ export async function activate(context: vscode.ExtensionContext) {
     const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
     const renderContext = { ...getCompletionRenderContext(document, result), parent: result.parent }
     const isTemplateSyntax = renderContext.syntax !== 'jsx'
-    const deps = isVue ? completionAnalysis.getImportDeps() : {}
-    const uiDeps = completionAnalysis.getUiDeps()
+    const activeScriptOffset = document.languageId === 'vue' && result.loc ? result.loc.start.offset : undefined
+    const deps = isVue ? completionAnalysis.getImportDeps(activeScriptOffset) : {}
+    const uiDeps = completionAnalysis.getUiDeps(document.languageId === 'vue' && result.loc ? result.loc.start.offset : undefined)
     const { character } = position
     const isPreEmpty = lineText[character - 1] === ' '
     const isValue = result.isValue
@@ -595,6 +607,8 @@ export async function activate(context: vscode.ExtensionContext) {
     const importedResolution = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
     let matchedComponent = importedResolution.component
     const matchedSource = importedResolution.source
+    if (!matchedSource && isNativeTag(result.tag))
+      return
     if (!matchedComponent && result.tag && !matchedSource)
       matchedComponent = findPrefixedComponent(result.tag, componentsPrefix, UiCompletions)
     if (matchedComponent) {

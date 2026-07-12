@@ -9,6 +9,20 @@ function commit(uri: string, documentVersion: number, children: any[], slotIdent
   return commitDocumentSlotAnalysis(request, children)
 }
 
+describe('native tag isolation', () => {
+  it('does not suffix-match native HTML or SVG tags to UI components', async () => {
+    const completions: any = {
+      ElSelect: { marker: 'select', lib: '@ui/select' },
+      ElOption: { marker: 'option' },
+      ElDialog: { marker: 'dialog' },
+      UiPath: { marker: 'path' },
+    }
+    const tags = ['select', 'option', 'textarea', 'nav', 'dialog', 'details', 'summary', 'svg', 'path']
+    const children = tags.map((tag, index) => ({ tag, loc: index + 1, children: [] }))
+    expect(await findUiTag(children, completions)).toEqual([])
+  })
+})
+
 describe('per-document slot analysis', () => {
   beforeEach(() => clearDocumentAnalysis())
 

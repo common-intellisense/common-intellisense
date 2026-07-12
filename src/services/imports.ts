@@ -15,6 +15,8 @@ export interface ImportEdit {
 export interface ImportDocumentContext {
   languageId?: string
   uri?: string
+  preferredOffset?: number
+  registerVueComponent?: boolean
 }
 
 interface ScriptRegion {
@@ -88,7 +90,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
     const registeredNames = names.filter(name => runtimeNames.includes(name))
     if (!registeredNames.length)
       return []
-    if (script.vueMode !== 'normal')
+    if (script.vueMode !== 'normal' || context.registerVueComponent === false)
       return edits
     const registration = getVueRegistrationEdits(sourceFile, script, registeredNames)
     return registration ? [...edits, ...registration] : []
@@ -376,9 +378,13 @@ function getScriptRegion(code: string, host: ImportHost, context: ImportDocument
   }
 
   const { descriptor } = parseVueSfc(code)
-  const selected = descriptor.scriptSetup && !descriptor.scriptSetup.src
+  const blocks = [descriptor.script, descriptor.scriptSetup].filter(block => block && !block.src)
+  const preferred = typeof context.preferredOffset === 'number'
+    ? blocks.find(block => context.preferredOffset! >= block!.loc.start.offset && context.preferredOffset! <= block!.loc.end.offset)
+    : undefined
+  const selected = preferred || (descriptor.scriptSetup && !descriptor.scriptSetup.src
     ? descriptor.scriptSetup
-    : descriptor.script && !descriptor.script.src ? descriptor.script : undefined
+    : descriptor.script && !descriptor.script.src ? descriptor.script : undefined)
   if (!selected)
     return null
   const lang = selected.lang?.toLowerCase()

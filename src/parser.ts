@@ -22,6 +22,7 @@ import { getSourceScope, logger } from './ui/ui-find'
 import type { ComponentSourceScope } from './services/component-resolver'
 import { isLocalModuleSource, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
 import { getNodeOffsetRange } from './services/node-range'
+import { isNativeTag } from './services/native-tags'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -142,7 +143,7 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
   if (activeScript) {
     return {
       type: 'script',
-      refs: collectVueTemplateRefs(scripts),
+      refs: collectVueTemplateRefs([activeScript]),
       template,
       loc: activeScript.loc,
     }
@@ -1106,8 +1107,6 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
   }
   return []
 }
-const originTag = ['div', 'span', 'ul', 'li', 'ol', 'p', 'main', 'header', 'footer', 'template', 'img', 'aside', 'body', 'a', 'video', 'table', 'th', 'tr', 'td', 'form', 'input', 'label', 'button', 'article', 'section']
-
 export async function findUiTag(children: any, UiCompletions: any, result: any[] = [], cacheMap = new Set(), uiDeps: any = {}, prefix: string[] = [], sourceContext?: SlotSourceContext) {
   for (const child of children || []) {
     let tag: string | undefined = child.tag
@@ -1121,11 +1120,13 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
       await findUiTag(nextChildren, UiCompletions, result, cacheMap, uiDeps, prefix, sourceContext)
 
     const range = child.range ?? child.loc
-    if (cacheMap.has(range) || originTag.includes(tag))
+    if (cacheMap.has(range))
       continue
 
     const importedTag = resolveImportedTag(tag, uiDeps)
     const source = importedTag.source || sourceContext?.localDeps?.[importedTag.localRoot]
+    if (!source && isNativeTag(tag))
+      continue
     const localSource = isLocalModuleSource(source)
     let scopedCompletions = UiCompletions
     let normalizedSource = source
@@ -1231,15 +1232,24 @@ export function isSamePrefix(label: string, key: string) {
 
 const IMPORT_VUE_REG = /import\s+(\S+)\s+from\s+['"]([^"']+.vue)['"]/g
 
-export function getImportDeps(text: string) {
+export function getImportDeps(text: string, context: { activeOffset?: number } = {}) {
   const deps: Record<string, string> = {}
   try {
     const { descriptor: { script, scriptSetup } } = getVueSfcParseResult(text)
     let scriptContent = ''
-    if (script && script.content)
-      scriptContent += script.content
-    if (scriptSetup && scriptSetup.content)
-      scriptContent += `\n${scriptSetup.content}`
+    const blocks = [script, scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
+    const active = typeof context.activeOffset === 'number'
+      ? blocks.find(block => context.activeOffset! >= block.loc.start.offset && context.activeOffset! <= block.loc.end.offset)
+      : undefined
+    if (active) {
+      scriptContent = active.content
+    }
+    else {
+      if (script?.content)
+        scriptContent += script.content
+      if (scriptSetup?.content)
+        scriptContent += `\n${scriptSetup.content}`
+    }
 
     const findImportSource = (node: any): string | null => {
       if (!node)

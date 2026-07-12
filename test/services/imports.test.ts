@@ -246,6 +246,20 @@ const Button = {}
     expect(createImportEdits(dynamic, 'ui', ['Button'], 'specifier', true)).toEqual([])
   })
 
+  it('targets the active Vue script block when normal script and setup coexist', () => {
+    const vue = `<script lang="tsx">\nconst node = <Button />\n</script>\n<script setup lang="ts">\nconst count = ref(0)\n</script>`
+    const normalOffset = vue.indexOf('const node')
+    const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', 'vue', {
+      languageId: 'vue',
+      preferredOffset: normalOffset,
+      registerVueComponent: false,
+    }))
+    const normalEnd = output.indexOf('</script>')
+    expect(output.slice(0, normalEnd)).toContain('import { Button } from "ui"')
+    expect(output.slice(normalEnd)).not.toContain('import { Button } from "ui"')
+    expect(output).not.toContain('components: { Button }')
+  })
+
   it('inserts into Vue script setup and creates a Vue 2-compatible script when absent', () => {
     const vue = `<template><Button /></template>\n<script setup lang="ts">\nconst x = 1\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))

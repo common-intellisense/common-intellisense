@@ -80,8 +80,8 @@ buttonRef.value
 
     const normal = parseAt(code, 'normalRef.value')
     const setup = parseAt(code, 'buttonRef.value')
-    expect(normal).toMatchObject({ type: 'script', refs: ['normalRef', 'buttonRef'] })
-    expect(setup).toMatchObject({ type: 'script', refs: ['normalRef', 'buttonRef'] })
+    expect(normal).toMatchObject({ type: 'script', refs: ['normalRef'] })
+    expect(setup).toMatchObject({ type: 'script', refs: ['buttonRef'] })
     expect((normal as any).loc.source).toContain('normalRef')
     expect((setup as any).loc.source).toContain('buttonRef')
   })

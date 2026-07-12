@@ -83,6 +83,17 @@ export function getUiImportedName(deps: Record<string, string> | undefined, loca
 export interface UiDepsDocumentContext {
   languageId?: string
   uri?: string
+  /** When provided for a Vue SFC, analyze only the script block containing this offset. */
+  activeOffset?: number
+}
+
+function scriptKindForLang(lang?: string) {
+  switch (lang?.toLowerCase()) {
+    case 'tsx': return ts.ScriptKind.TSX
+    case 'jsx': return ts.ScriptKind.JSX
+    case 'js': return ts.ScriptKind.JS
+    default: return ts.ScriptKind.TS
+  }
 }
 
 export function getUiDeps(text: string, context: UiDepsDocumentContext = {}) {
@@ -92,39 +103,43 @@ export function getUiDeps(text: string, context: UiDepsDocumentContext = {}) {
   const importedNames: Record<string, string> = {}
   const languageId = context.languageId?.toLowerCase()
   const uri = context.uri?.toLowerCase() || ''
-  let sourceText = text
+  let sources: Array<{ code: string, kind: ts.ScriptKind }> = [{ code: text, kind: scriptKindForLang(languageId === 'typescriptreact' ? 'tsx' : languageId === 'javascriptreact' ? 'jsx' : languageId) }]
   if (languageId === 'vue' || uri.endsWith('.vue')) {
     const { descriptor } = parseVueSfc(text)
-    sourceText = [descriptor.script?.content, descriptor.scriptSetup?.content].filter((value): value is string => typeof value === 'string').join('\n')
+    const blocks = [descriptor.script, descriptor.scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
+    const active = typeof context.activeOffset === 'number'
+      ? blocks.find(block => context.activeOffset! >= block.loc.start.offset && context.activeOffset! <= block.loc.end.offset)
+      : undefined
+    sources = (active ? [active] : blocks).map(block => ({ code: block.content, kind: scriptKindForLang(block.lang) }))
   }
   else if (languageId === 'svelte' || uri.endsWith('.svelte')) {
-    // Module-script bindings are not visible to the component template.
-    sourceText = getSvelteInstanceScript(text)?.content || ''
+    const instance = getSvelteInstanceScript(text)
+    sources = instance ? [{ code: instance.content, kind: scriptKindForLang(languageId) }] : []
   }
-  const sourceFile = ts.createSourceFile('component.tsx', sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
-  for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.importClause?.isTypeOnly)
-      continue
-    const from = statement.moduleSpecifier.text
-    const clause = statement.importClause
-    if (!clause)
-      continue
-    if (clause.name) {
-      deps[clause.name.text] = from
-      // A default import's local identifier is also the component name used in
-      // templates/JSX; only named aliases need remapping to an imported name.
-      importedNames[clause.name.text] = clause.name.text
-    }
-    const bindings = clause.namedBindings
-    if (bindings && ts.isNamespaceImport(bindings)) {
-      deps[bindings.name.text] = from
-      importedNames[bindings.name.text] = '*'
-    }
-    else if (bindings) {
-      for (const element of bindings.elements) {
-        if (!element.isTypeOnly) {
-          deps[element.name.text] = from
-          importedNames[element.name.text] = element.propertyName?.text || element.name.text
+  for (const source of sources) {
+    const sourceFile = ts.createSourceFile('component', source.code, ts.ScriptTarget.Latest, true, source.kind)
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.importClause?.isTypeOnly)
+        continue
+      const from = statement.moduleSpecifier.text
+      const clause = statement.importClause
+      if (!clause)
+        continue
+      if (clause.name) {
+        deps[clause.name.text] = from
+        importedNames[clause.name.text] = clause.name.text
+      }
+      const bindings = clause.namedBindings
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        deps[bindings.name.text] = from
+        importedNames[bindings.name.text] = '*'
+      }
+      else if (bindings) {
+        for (const element of bindings.elements) {
+          if (!element.isTypeOnly) {
+            deps[element.name.text] = from
+            importedNames[element.name.text] = element.propertyName?.text || element.name.text
+          }
         }
       }
     }

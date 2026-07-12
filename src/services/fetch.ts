@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import dns from 'node:dns/promises'
 import fsp from 'node:fs/promises'
 import http from 'node:http'
@@ -26,7 +27,7 @@ export const cacheFetch = new Map<string, string>()
 const warnedLegacyAdapterSources = new Set<string>()
 const legacyMigrationUrl = 'https://github.com/common-intellisense/common-intellisense#explain-configuration'
 
-function displayAdapterSource(source: string) {
+export function displayAdapterSource(source: string) {
   try {
     const target = new URL(source)
     target.username = ''
@@ -37,6 +38,22 @@ function displayAdapterSource(source: string) {
   }
   catch {
     return source.split(/[?#]/, 1)[0]
+  }
+}
+
+function sanitizeRemoteError(error: unknown) {
+  const message = String(error instanceof Error ? error.message : error)
+    .replace(/https?:\/\/\S+/g, value => displayAdapterSource(value))
+  return new Error(message)
+}
+
+export function getRemoteSourceIdentity(uri: string) {
+  const digest = createHash('sha256').update(uri).digest('hex')
+  return {
+    requestUri: uri,
+    cacheKey: `remote:${digest}`,
+    id: `http:${digest}`,
+    displayName: displayAdapterSource(uri),
   }
 }
 
@@ -59,7 +76,7 @@ export function notifyLegacyAdapterBlocked(source: string) {
       return vscode.env.openExternal(vscode.Uri.parse(legacyMigrationUrl))
   }).catch(error => logger.error(`Failed to show legacy adapter migration warning: ${String(error)}`))
 }
-const cacheSchemaVersion = 1
+const cacheSchemaVersion = 2
 const maxCacheSize = 16 * 1024 * 1024
 const maxCacheEntrySize = 8 * 1024 * 1024
 const maxCacheEntries = 100
@@ -866,6 +883,9 @@ export async function fetchRemoteText(
   try {
     return await Promise.race([load(), deadline])
   }
+  catch (error) {
+    throw sanitizeRemoteError(error)
+  }
   finally {
     if (timer)
       clearTimeout(timer)
@@ -904,16 +924,19 @@ export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
   const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
   const epoch = sourceEpoch
   const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: isLegacyAdapterEnabled() })
-  return settleCustomSources(uris.map(uri => ({
-    id: `http:${uri}`,
-    taskKey: `${epoch}\0http:${uri}\0${trustIdentity}`,
-    load: () => fetchFromRemoteUrlsInternal([uri], epoch),
-  })))
+  return settleCustomSources(uris.map((uri) => {
+    const identity = getRemoteSourceIdentity(uri)
+    return {
+      id: identity.id,
+      taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`,
+      load: () => fetchFromRemoteUrlsInternal([uri], epoch),
+    }
+  }))
 }
 
 export function fetchFromRemoteUrls() {
   const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
-  const key = getSourceTaskKey('http', uris)
+  const key = getSourceTaskKey('http', uris.map(uri => getRemoteSourceIdentity(uri).cacheKey))
   const existing = remoteHttpTasks.get(key)
   if (existing)
     return existing
@@ -932,17 +955,18 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
 
   const now = Date.now()
   const plans = uris.map((uri) => {
+    const identity = getRemoteSourceIdentity(uri)
     if (!isTrustedRemoteUri(uri)) {
-      logger.error(`Skipped untrusted remoteUri: ${uri}`)
+      logger.error(`Skipped untrusted remoteUri: ${identity.displayName}`)
       return null
     }
-    const cached = getFetchCacheEntry(uri) || ''
-    const lastFetchedAt = remoteUriFetchedAt.get(uri) || 0
-    const retryState = remoteUriRetry.get(uri)
+    const cached = getFetchCacheEntry(identity.cacheKey) || ''
+    const lastFetchedAt = remoteUriFetchedAt.get(identity.cacheKey) || 0
+    const retryState = remoteUriRetry.get(identity.cacheKey)
     const retryDeferred = !!cached && !!retryState && now < retryState.nextRetryAt
     const needsRefresh = !cached || (!retryDeferred && now - lastFetchedAt >= remoteUriCacheTTL)
-    return { uri, cached, needsRefresh }
-  }).filter(Boolean) as Array<{ uri: string, cached: string, needsRefresh: boolean }>
+    return { identity, cached, needsRefresh }
+  }).filter(Boolean) as Array<{ identity: ReturnType<typeof getRemoteSourceIdentity>, cached: string, needsRefresh: boolean }>
   if (!plans.length)
     return {}
 
@@ -958,37 +982,36 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
   })
   logger.info(isZh ? '从 remoteUris 中拉取数据...' : 'Fetching data from remoteUris...')
   try {
-    const loaded = await Promise.all(plans.map(async ({ uri, cached, needsRefresh }) => {
+    const loaded = await Promise.all(plans.map(async ({ identity, cached, needsRefresh }) => {
+      const { requestUri, cacheKey, displayName } = identity
       const evaluate = (scriptContent: string) => {
         const reduced: Record<string, any> = {}
-        appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), uri)
+        appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent, displayName, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), displayName)
         return reduced
       }
       if (!needsRefresh && cached)
         return evaluate(cached)
 
-      logger.info(isZh ? `正在加载 ${uri}` : `Loading ${uri}`)
+      logger.info(isZh ? `正在加载 ${displayName}` : `Loading ${displayName}`)
       try {
-        const fetched = await fetchRemoteText(uri)
+        const fetched = await fetchRemoteText(requestUri)
         if (typeof fetched !== 'string' || fetched.length > maxRemoteScriptSize)
-          throw new Error(`Remote adapter is invalid or too large: ${uri}`)
+          throw new Error(`Remote adapter is invalid or too large: ${displayName}`)
         if (sourceEpoch !== epoch)
-          throw new Error(`Remote adapter configuration changed while loading: ${uri}`)
-        // Validate and reduce before replacing the last-known-good cache entry.
+          throw new Error(`Remote adapter configuration changed while loading: ${displayName}`)
         const reduced = evaluate(fetched)
-        setFetchCacheEntry(uri, fetched)
-        remoteUriFetchedAt.set(uri, Date.now())
-        remoteUriRetry.delete(uri)
+        setFetchCacheEntry(cacheKey, fetched)
+        remoteUriFetchedAt.set(cacheKey, Date.now())
+        remoteUriRetry.delete(cacheKey)
         return reduced
       }
       catch (error) {
         if (!cached)
-          throw error
-        const failureCount = (remoteUriRetry.get(uri)?.failureCount || 0) + 1
+          throw sanitizeRemoteError(error)
+        const failureCount = (remoteUriRetry.get(cacheKey)?.failureCount || 0) + 1
         const delay = remoteRetryDelays[Math.min(failureCount - 1, remoteRetryDelays.length - 1)]
-        remoteUriRetry.set(uri, { failureCount, nextRetryAt: Date.now() + delay })
-        logger.error(isZh ? `刷新失败，使用缓存: ${uri}` : `Refresh failed, using cached module: ${uri}`)
-        // A malformed cached payload is a real failure, not a successful empty source.
+        remoteUriRetry.set(cacheKey, { failureCount, nextRetryAt: Date.now() + delay })
+        logger.error(isZh ? `刷新失败，使用缓存: ${displayName}` : `Refresh failed, using cached module: ${displayName}`)
         return evaluate(cached)
       }
     }))

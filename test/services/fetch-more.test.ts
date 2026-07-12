@@ -304,8 +304,24 @@ describe('fetch service additional tests (mocked)', () => {
     }))
 
     expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
-    expect(mod.cacheFetch.get('https://fake/remote.js')).toBe(good)
+    expect(mod.cacheFetch.get(mod.getRemoteSourceIdentity('https://fake/remote.js').cacheKey)).toBe(good)
     nowSpy.mockRestore()
+  })
+
+  it('uses secret-free identities and cache keys for signed remote URLs', async () => {
+    const mod = await import('../../src/services/fetch')
+    const raw = 'https://user:password@example.com/manifest.json?token=secret-token#private'
+    const identity = mod.getRemoteSourceIdentity(raw)
+
+    expect(identity.requestUri).toBe(raw)
+    expect(identity.cacheKey).toMatch(/^remote:[a-f0-9]{64}$/)
+    expect(identity.id).toMatch(/^http:[a-f0-9]{64}$/)
+    for (const value of [identity.cacheKey, identity.id, identity.displayName]) {
+      expect(value).not.toContain('user')
+      expect(value).not.toContain('password')
+      expect(value).not.toContain('secret-token')
+      expect(value).not.toContain('private')
+    }
   })
 
   it('warns once per blocked legacy source and opens migration actions', async () => {
@@ -403,8 +419,8 @@ describe('fetch service additional tests (mocked)', () => {
 
     const results = await mod.fetchRemoteUrlSourceResults()
     expect(results).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'http:https://fake/good.js', status: 'success' }),
-      expect.objectContaining({ id: 'http:https://fake/bad.js', status: 'failed' }),
+      expect.objectContaining({ id: mod.getRemoteSourceIdentity('https://fake/good.js').id, status: 'success' }),
+      expect.objectContaining({ id: mod.getRemoteSourceIdentity('https://fake/bad.js').id, status: 'failed' }),
     ]))
     expect(results.find(item => item.status === 'success')?.value?.GoodProps().ok).toBe(true)
   })
