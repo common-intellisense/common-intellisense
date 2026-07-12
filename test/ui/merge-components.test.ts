@@ -5,18 +5,35 @@ function provider(lib: string, prefix: string, id: string) {
   return { lib, prefix, data: () => id, directives: {} }
 }
 
-describe('component provider pair deduplication', () => {
-  it('deduplicates exact lib/prefix pairs without dropping another library prefix', () => {
-    const target: any = { prefix: [], data: [], directivesMap: {}, libs: [], providerKeys: new Set() }
-    mergeComponents(target, [
+function target(): any {
+  return { prefix: [], data: [], directivesMap: {}, libs: [], providerKeys: new Set<string>() }
+}
+
+describe('component provider source deduplication', () => {
+  it('deduplicates an exact source/lib/prefix identity', () => {
+    const value = target()
+    mergeComponents(value, [
       provider('A', 'a', 'Aa'),
       provider('A', '', 'A'),
       provider('B', 'b', 'Bb'),
       provider('B', '', 'B'),
       provider('B', '', 'duplicate'),
-    ], {}, [], 'fixture')
+    ], {}, [], 'fixture', 'official:fixture')
 
-    expect(target.data.map((item: any) => item())).toEqual(['Aa', 'A', 'Bb', 'B'])
-    expect(target.providerKeys).toEqual(new Set(['A\0a', 'A\0', 'B\0b', 'B\0']))
+    expect(value.data.map((item: any) => item())).toEqual(['Aa', 'A', 'Bb', 'B'])
+    expect(value.providerKeys).toEqual(new Set([
+      'official:fixture\0A\0a',
+      'official:fixture\0A\0',
+      'official:fixture\0B\0b',
+      'official:fixture\0B\0',
+    ]))
+  })
+
+  it('keeps different sources that contribute the same lib and prefix', () => {
+    const value = target()
+    mergeComponents(value, [provider('element-plus', 'el', 'ElButton')], {}, [], 'elementPlus2', 'official:elementPlus2')
+    mergeComponents(value, [provider('element-plus', 'el', 'ElBusinessTable')], {}, [], 'Custom', 'custom:0:CustomComponents')
+
+    expect(value.data.map((item: any) => item())).toEqual(['ElButton', 'ElBusinessTable'])
   })
 })

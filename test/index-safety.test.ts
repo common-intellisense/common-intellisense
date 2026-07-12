@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRefMembers, selectScopedCompletions } from '../src/index'
+import { getRefMembers, getRefVariableNames, selectScopedCompletions } from '../src/index'
 
 describe('provider safety helpers', () => {
   it('keeps current completions when a multi-UI source has no cache match', () => {
@@ -17,6 +17,12 @@ describe('provider safety helpers', () => {
     const scoped = { ElButton: { methods: [], exposed: [] } }
     const cache = new Map<string, any>([['elementPlus2', scoped], ['x', {}], ['y', {}]])
     expect(selectScopedCompletions(current, cache, 'element-plus', {})).toBe(scoped)
+  })
+
+  it('normalizes Vue tuple refs and falls back to Vine ref-map variables', () => {
+    expect(getRefVariableNames({ refs: [['button', 'buttonRef'], 'plain'], refsMap: {} })).toEqual(['button', 'plain'])
+    expect(getRefVariableNames({ refsMap: { buttonRef: 'ElButton' } })).toEqual(['buttonRef'])
+    expect(getRefVariableNames({})).toEqual([])
   })
 
   it('returns no members for unsupported Vue or React refs', () => {

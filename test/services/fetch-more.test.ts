@@ -148,6 +148,7 @@ describe('fetch service additional tests (mocked)', () => {
     expect(a.ButtonProps()[0].props.size.type).toBe('AType')
     expect(b.ButtonProps()[0].props.size.type).toBe('BType')
     expect(fetchFromTypesMock).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledTimes(1)
   })
 
   it('does not let a stale latest-version request delete or overwrite a newer request', async () => {

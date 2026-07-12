@@ -256,6 +256,31 @@ describe('utils reducer regressions', () => {
     }
   })
 
+  it('resolves related prop snippets from the current parent chain', async () => {
+    const { propsReducer } = await import('../../src/ui/utils')
+    const result = await propsReducer({
+      uiName: 'fixture',
+      lib: 'fixture-lib',
+      prefix: 'el',
+      map: [{
+        name: 'Child',
+        props: {
+          ':value': {
+            type: 'string',
+            related: ['Missing.code', 'Parent.code'],
+            $code: '$code.child',
+          },
+        },
+      }] as any,
+    })
+    const parent = {
+      tag: 'Parent',
+      props: [{ name: 'bind', arg: { content: 'code' }, exp: { content: 'model' } }],
+    }
+    const completions = result.Child.completions[0]({ languageId: 'vue', framework: 'vue', uri: 'file:///Demo.vue', parent })
+    expect(completions.find(item => item.content === ':value')?.snippet).toBe(':value="model.child"')
+  })
+
   it('componentsReducer uses item-local dynamicLib/importWay without enabling HTML markdown', async () => {
     const { componentsReducer } = await import('../../src/ui/utils')
 

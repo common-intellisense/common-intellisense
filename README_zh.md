@@ -133,7 +133,7 @@
 
 ## 如何支持私有库
 
-私有库建议通过 `remoteUris`、`remoteNpmUris` 或 `localUris` 提供纯数据 manifest：
+私有库建议通过 `remoteUris`、`remoteNpmUris` 或 `localUris` 提供纯数据 manifest。为保证 SSRF 防护，`remoteUris` 使用直连且固定 DNS 解析结果的传输方式，目前不会继承 VS Code、`HTTP_PROXY` 或 `HTTPS_PROXY` 代理配置；仅能通过企业代理联网时，请优先使用 `remoteNpmUris` 或工作区内的 `localUris` 数据 manifest：
 
 ```json
 {

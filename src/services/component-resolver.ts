@@ -16,7 +16,7 @@ export interface ComponentSourceContext {
 }
 
 export function isLocalModuleSource(source: string | undefined) {
-  return !!source && (source.startsWith('.') || source.startsWith('/') || source.startsWith('file:'))
+  return !!source && (source.startsWith('.') || source.startsWith('/') || source.startsWith('file:') || source.startsWith('@/'))
 }
 
 export function getPackageSource(source: string) {

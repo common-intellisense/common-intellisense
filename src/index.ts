@@ -59,6 +59,13 @@ export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<stri
   return targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue) ? targetValue as PropsConfig : current
 }
 
+export function getRefVariableNames(result: any): string[] {
+  const names: unknown[] = Array.isArray(result?.refs)
+    ? result.refs.map((ref: string | [string, string]) => Array.isArray(ref) ? ref[0] : ref)
+    : Object.keys(result?.refsMap || {})
+  return [...new Set(names.filter((name: unknown): name is string => typeof name === 'string' && !!name))]
+}
+
 export function getRefMembers(completions: PropsConfig, refName: string | undefined): any[] | undefined {
   if (!refName)
     return
@@ -515,7 +522,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
     const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
-    const renderContext = getCompletionRenderContext(document)
+    const renderContext = { ...getCompletionRenderContext(document), parent: result.parent }
     const analysis = getDocumentAnalysis(document)
     const deps = isVue ? analysis.getImportDeps() : {}
     const uiDeps = analysis.getUiDeps()
@@ -523,7 +530,8 @@ export async function activate(context: vscode.ExtensionContext) {
     const isPreEmpty = lineText[character - 1] === ' '
     const isValue = result.isValue
 
-    if (result.type === 'script' && Object.keys(result.refsMap || {}).length && !isPreEmpty) {
+    const refVariableNames = getRefVariableNames(result)
+    if (result.type === 'script' && (Object.keys(result.refsMap || {}).length || refVariableNames.length) && !isPreEmpty) {
       if (lineText?.slice(-1)[0] === '.') {
         for (const key in result.refsMap) {
           const value = result.refsMap[key]
@@ -534,10 +542,10 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
       if (isVue && lineText.slice(character, character + 6) !== '.value' && /\.value\.?$/.test(lineText.slice(0, character)))
-        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.value`, documentation: `${refName}.value`, preselect: true, sortText: '0' }))
+        return refVariableNames.map(refName => createCompletionItem({ content: refName, snippet: `${refName}.value`, documentation: `${refName}.value`, preselect: true, sortText: '0' }))
 
       if (!isVue && lineText.slice(character, character + 8) !== '.current' && /\.current\.?$/.test(lineText.slice(0, character)))
-        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.current`, documentation: `${refName}.current`, preselect: true, sortText: '0' }))
+        return refVariableNames.map(refName => createCompletionItem({ content: refName, snippet: `${refName}.current`, documentation: `${refName}.current`, preselect: true, sortText: '0' }))
 
       return
     }

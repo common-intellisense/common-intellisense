@@ -28,6 +28,8 @@ export interface CompletionRenderContext {
   framework: CompletionFramework
   uri: string
   version?: number
+  /** Current template node, used by relation-aware prop snippets. */
+  parent?: any
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
 
@@ -234,20 +236,20 @@ export function propsReducer(options: PropsOptions) {
 
         let _prefix = ''
         let _prefixKey = ''
-        if (isVue && value.related && value.related.length) {
+        if (isVue && renderContext.parent && value.related && value.related.length) {
           for (const _item of value.related) {
-            ;[_prefix, _prefixKey] = findValue(isVue, _item)
-            if (prefix)
+            ;[_prefix, _prefixKey] = findValue(renderContext.parent, _item)
+            if (_prefix)
               break
           }
         }
-        if (prefix && value[`$${_prefixKey}`]) {
+        if (_prefix && value[`$${_prefixKey}`]) {
           const prefixValue = value[`$${_prefixKey}`].replace(`$${_prefixKey}`, _prefix)
           // 替换 $()
           const fixedPrefixValue = prefixValue.replace(/\$\(([^)]+)\)/g, (_: string, m: string) => {
             // m 可能存在 xxx.a || xxx.b 的情况
             for (const splitItem of m.split(/\s*\|\|\s*/)) {
-              const [_prefix, _prefixKey] = findValue(isVue, splitItem)
+              const [_prefix, _prefixKey] = findValue(renderContext.parent, splitItem)
               if (_prefix) {
                 let result = _prefix
                 if (isContainCn(result)) {
@@ -261,7 +263,7 @@ export function propsReducer(options: PropsOptions) {
           content = key
           if (fixedPrefixValue === `${_prefix}.`) {
             const fixedKey = key.replace(/^:/, '')
-            snippet = `${key}="${prefix}.${fixedKey[0].toUpperCase()}${fixedKey.slice(1)}"`
+            snippet = `${key}="${_prefix}.${fixedKey[0].toUpperCase()}${fixedKey.slice(1)}"`
           }
           else {
             snippet = `${key}="${fixedPrefixValue}"`

@@ -87,6 +87,7 @@ export function configureCacheStorage(storageUri: vscode.Uri | string) {
 }
 
 const commonIntellisenseInFlight = new Map<string, Promise<any>>()
+const officialAdapterScriptInFlight = new Map<string, Promise<string>>()
 const remoteHttpTasks = new Map<string, Promise<Record<string, any> | undefined>>()
 const remoteNpmTasks = new Map<string, Promise<Record<string, any> | undefined>>()
 const localTasks = new Map<string, Promise<Record<string, any>>>()
@@ -456,6 +457,33 @@ async function getLatestVersion(name: string) {
   return task
 }
 
+function getOfficialAdapterScript(scriptKey: string, name: string, version: string, epoch: number) {
+  const cached = getFetchCacheEntry(scriptKey)
+  if (cached !== undefined) {
+    logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
+    return Promise.resolve(cached)
+  }
+  const pending = officialAdapterScriptInFlight.get(scriptKey)
+  if (pending)
+    return pending
+  logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
+  const task = Promise.any([
+    fetchAndExtractPackage({ name, dist: 'index.cjs', retry, logger }),
+    fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
+  ]).then((scriptContent) => {
+    if (sourceEpoch !== epoch)
+      throw new Error(`Adapter source invalidated before caching: ${scriptKey}`)
+    if (scriptContent)
+      setFetchCacheEntry(scriptKey, scriptContent)
+    return scriptContent
+  }).finally(() => {
+    if (officialAdapterScriptInFlight.get(scriptKey) === task)
+      officialAdapterScriptInFlight.delete(scriptKey)
+  })
+  officialAdapterScriptInFlight.set(scriptKey, task)
+  return task
+}
+
 // todo: add result type replace any
 export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) {
   const uiName = options?.uiName || tag.replace(/-(\w)/g, (_, v) => v.toUpperCase())
@@ -515,26 +543,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     }
 
     try {
-      let scriptContent = ''
-      const cachedScript = getFetchCacheEntry(scriptKey)
-      if (cachedScript !== undefined) {
-        logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
-        scriptContent = cachedScript
-      }
-      else {
-        logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
-        scriptContent = await Promise.any([
-          fetchAndExtractPackage({
-            name,
-            dist: 'index.cjs',
-            retry,
-            logger,
-          }),
-          fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
-        ])
-      }
-      if (scriptContent && sourceEpoch === epoch)
-        setFetchCacheEntry(scriptKey, scriptContent)
+      const scriptContent = await getOfficialAdapterScript(scriptKey, name, version, epoch)
       // Official @common-intellisense packages remain a trusted compatibility source.
       // Custom executable adapters are opt-in and should migrate to data-only manifests.
       const exportsData = evaluateAdapterForEpoch(scriptContent, scriptKey, !!isZh, true, epoch)
@@ -1063,6 +1072,7 @@ export function clearFetchCaches() {
   cacheWriteEpoch++
   cacheFetch.clear()
   commonIntellisenseInFlight.clear()
+  officialAdapterScriptInFlight.clear()
   latestVersionCache.clear()
   latestVersionInFlight.clear()
   remoteUriFetchedAt.clear()

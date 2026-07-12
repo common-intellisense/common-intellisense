@@ -458,7 +458,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     const components = exports[componentsKey]?.()
     if (components) {
       localCache.set(componentsKey, components)
-      mergeComponents(localOptions, components, userPrefix, originNames, name)
+      mergeComponents(localOptions, components, userPrefix, originNames, name, `official:${name}:${componentsKey}`)
     }
     const completion = await exports[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion, adapterMajor: pkgInfo?.adapterMajor })
     if (completion) {
@@ -547,7 +547,7 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
     customSourceSnapshots: snapshotCopy,
   }
 
-  for (const exports of snapshotCopy) {
+  for (const [sourceIndex, exports] of snapshotCopy.entries()) {
     if (!exports)
       continue
     for (const key of Object.keys(exports)) {
@@ -556,7 +556,7 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
           const components = exports[key]?.()
           if (components) {
             composed.cacheMap.set(key, components)
-            mergeComponents(composed.optionsComponents, components, {}, [], key.slice(0, -10))
+            mergeComponents(composed.optionsComponents, components, {}, [], key.slice(0, -10), `custom:${sourceIndex}:${key}`)
           }
         }
         else {
@@ -605,12 +605,12 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
   return enhanced
 }
 
-export function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string) {
+export function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string, sourceId = fallbackName) {
   for (const component of components) {
     let { prefix, data, directives, lib } = component
     if (userPrefix?.[lib])
       prefix = userPrefix[lib]
-    const providerKey = `${lib}\0${prefix}`
+    const providerKey = `${sourceId}\0${lib}\0${prefix}`
     target.providerKeys ||= new Set()
     if (target.providerKeys.has(providerKey))
       continue

@@ -130,7 +130,7 @@ Install the supported ui component library in your project and install the plug-
 ```
 
 ## Explain Configuration
-- `remoteUris`: HTTPS URLs that provide component metadata.
+- `remoteUris`: HTTPS URLs that provide component metadata. Requests use a direct DNS-pinned transport for SSRF protection and currently do not inherit VS Code, `HTTP_PROXY`, or `HTTPS_PROXY` proxy settings. In proxy-only environments, prefer `remoteNpmUris` or a workspace-local data manifest via `localUris`.
 - `remoteNpmUris`: npm packages that provide component metadata.
 - `localUris`: metadata files inside the current workspace. These are disabled in Restricted Mode.
 

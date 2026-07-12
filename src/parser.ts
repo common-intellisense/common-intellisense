@@ -3,10 +3,11 @@ import type { VineCompilerHooks, VineDiagnostic, VineFileCtx } from '@vue-vine/c
 import type { PropsConfig, PropsConfigItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parse as babelParse } from '@babel/parser'
 import traverse from '@babel/traverse'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
-import { createRange, getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getPosition, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
+import { createRange, getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getPosition, getRootPath, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 // @ts-expect-error no problem
 import { parse } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import {
@@ -168,7 +169,7 @@ export function transformVine(vineFileCtx: VineFileCtx, position: vscode.Positio
   const result = dfs(children, parent, position, templateOffset, cursorOffset)
   const refsMap = findRef(children, {})
   if (result)
-    return Object.assign(result, refsMap)
+    return Object.assign(result, { refsMap })
 
   return {
     type: 'script',
@@ -1456,13 +1457,45 @@ export function getImportDeps(text: string) {
 
 export function getAbsoluteUrl(url: string, currentFileUrl?: string) {
   const base = currentFileUrl || getCurrentFileUrl()
-  return base ? path.resolve(base, '..', url) : undefined
+  if (!base)
+    return
+  const clean = url.replace(/[?#].*$/, '')
+  if (clean.startsWith('file:')) {
+    try { return fileURLToPath(clean) }
+    catch { return }
+  }
+  if (clean.startsWith('@/')) {
+    const root = getRootPath()
+    return root ? path.resolve(root, clean.slice(2)) : undefined
+  }
+  return path.isAbsolute(clean) ? clean : path.resolve(base, '..', clean)
+}
+
+const localComponentExtensions = ['.vue', '.ts', '.tsx', '.jsx', '.svelte']
+
+export async function resolveLocalComponentModule(url: string, currentFileUrl?: string) {
+  const base = getAbsoluteUrl(url, currentFileUrl)
+  if (!base)
+    return
+  const candidates = [base]
+  if (!path.extname(base)) {
+    candidates.push(...localComponentExtensions.map(extension => `${base}${extension}`))
+    candidates.push(...localComponentExtensions.map(extension => path.join(base, `index${extension}`)))
+  }
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      const stat = await fsp.stat(candidate)
+      if (stat.isFile())
+        return candidate
+    }
+    catch {}
+  }
 }
 
 export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string, currentFileUrl?: string, preferDependency = false) {
   const dep = deps[name]
   if (preferDependency && dep) {
-    const absoluteUrl = getAbsoluteUrl(dep, currentFileUrl)
+    const absoluteUrl = await resolveLocalComponentModule(dep, currentFileUrl)
     if (!absoluteUrl)
       return
     try {
@@ -1482,7 +1515,7 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
 
   if (dep) {
     // 只往下找一层
-    const absoluteUrl = getAbsoluteUrl(dep, currentFileUrl)
+    const absoluteUrl = await resolveLocalComponentModule(dep, currentFileUrl)
     if (!absoluteUrl)
       return
     const tag = await getTemplateParentElementName(absoluteUrl)
@@ -1560,6 +1593,26 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
 
 async function getTemplateParentElementName(url: string) {
   const code = await fsp.readFile(url, 'utf-8')
+  const extension = path.extname(url).toLowerCase()
+  if (extension === '.tsx' || extension === '.jsx' || extension === '.ts') {
+    const ast = babelParse(code, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
+    let tag: string | undefined
+    traverse(ast as any, {
+      JSXElement(path: any) {
+        if (!tag) {
+          tag = getJsxElementName(path.node.openingElement?.name)
+          path.stop()
+        }
+      },
+    })
+    return tag
+  }
+  if (extension === '.svelte') {
+    const html = getSvelteHtml(code)
+    const elements = (html?.children || []).filter((child: any) => child?.name)
+    return elements.length === 1 ? elements[0].name : undefined
+  }
+
   // 如果有defineProps或者props的忽律，交给v-component-prompter处理
   const {
     descriptor: { template, script, scriptSetup },
