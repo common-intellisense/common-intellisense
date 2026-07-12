@@ -75,7 +75,7 @@ export async function resolveImportedComponent(rawTag: string | undefined, uiDep
   const resolvedSource = importedTag.source || localDeps[importedTag.localRoot]
   if (isLocalModuleSource(resolvedSource)) {
     for (const candidate of importedTag.candidates) {
-      const component = await findDynamicComponent(candidate, localDeps, completions, prefixes, undefined, currentDocumentPath)
+      const component = await findDynamicComponent(candidate, localDeps, completions, prefixes, undefined, currentDocumentPath, true)
       if (component)
         return { component, source: resolvedSource, scoped: completions }
     }
@@ -198,7 +198,7 @@ export async function activate(context: vscode.ExtensionContext) {
     getDocumentWorkspaceRoot(document),
   )
   const analyzeDocumentSlots = async (document: vscode.TextDocument, packageContext: Awaited<ReturnType<typeof ensureContextForPath>>) => {
-    if (!getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
+    if (document.isClosed || !getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
       return
     const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }
     const cached = getDocumentSlotAnalysis(document.uri)
@@ -211,6 +211,8 @@ export async function activate(context: vscode.ExtensionContext) {
     if (cached)
       clearDocumentAnalysis(document.uri)
     const code = document.getText()
+    if (document.isClosed)
+      return
     await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: getImportDeps(code), currentDocumentPath: getDocumentPath(document) })
   }
   const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
@@ -231,6 +233,8 @@ export async function activate(context: vscode.ExtensionContext) {
     for (const editor of vscode.window.visibleTextEditors) {
       const documentPath = getDocumentPath(editor.document)
       void resolvePackagePathForDocument(documentPath).then((nearestPackagePath) => {
+        if (editor.document.isClosed || !vscode.window.visibleTextEditors.includes(editor))
+          return
         if (nearestPackagePath !== packageContext.pkgPath)
           return
         const latestContext = getContextForPackagePath(nearestPackagePath)
@@ -390,6 +394,9 @@ export async function activate(context: vscode.ExtensionContext) {
       return
     const uri = vscode.Uri.parse(editIdentity.uri)
     const document = await vscode.workspace.openTextDocument(uri)
+    const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+    if (document.languageId !== 'vue' && !isVineDocument)
+      return
     if (document.version !== editIdentity.version)
       return
     const packageContext = getContextForDocumentPath(getDocumentPath(document))
@@ -409,7 +416,6 @@ export async function activate(context: vscode.ExtensionContext) {
       slotName = `v-slot:${name}`
     if (detail.params)
       slotName += '="slotProps"'
-    const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
     const workspaceEdit = new vscode.WorkspaceEdit()
     const insertAt = (at: number, text: string) => workspaceEdit.insert(uri, document.positionAt(at), text)
     const replaceAt = (start: number, end: number, text: string) => workspaceEdit.replace(uri, new vscode.Range(document.positionAt(start), document.positionAt(end)), text)

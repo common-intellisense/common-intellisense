@@ -335,6 +335,29 @@ describe('activation registration', () => {
     expect(mocks.applyEdit).not.toHaveBeenCalled()
   })
 
+  it('rejects Vue slot edits for React source documents', async () => {
+    const source = {
+      languageId: 'typescriptreact',
+      version: 2,
+      uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
+      getText: () => '<Button />',
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    }
+    mocks.openTextDocument.mockResolvedValue(source)
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    await mocks.commandHandlers.get('common-intellisense.slots')?.(
+      { range: [0, 10], children: [], openingElement: { selfClosing: true } },
+      'footer',
+      0,
+      {},
+      { uri: 'file:///workspace/A.tsx', version: 2, packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 2 },
+    )
+
+    expect(mocks.applyEdit).not.toHaveBeenCalled()
+  })
+
   it('applies slot edits only to the CodeLens source document', async () => {
     const source = {
       languageId: 'vue',

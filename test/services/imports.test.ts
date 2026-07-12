@@ -221,6 +221,22 @@ const Button = {}
     }
   })
 
+  it('does not register occupied bindings and supports static string component keys', () => {
+    const occupied = `<script>\nconst Button = {}\nexport default { components: {} }\n</script>`
+    expect(createImportEdits(occupied, 'ui', ['Button'], 'specifier', true)).toEqual([])
+
+    for (const key of [`'components'`, `['components']`]) {
+      const vue = `<script>export default { ${key}: { Existing } }</script>`
+      const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
+      expect(output.match(/components/g)?.length).toBe(1)
+      expect(output).toContain('Existing')
+      expect(output).toContain('Button')
+    }
+
+    const dynamic = `<script>const key = 'components'; export default { [key]: {} }</script>`
+    expect(createImportEdits(dynamic, 'ui', ['Button'], 'specifier', true)).toEqual([])
+  })
+
   it('inserts into Vue script setup and creates a Vue 2-compatible script when absent', () => {
     const vue = `<template><Button /></template>\n<script setup lang="ts">\nconst x = 1\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))

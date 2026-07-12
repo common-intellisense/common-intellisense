@@ -870,6 +870,15 @@ export function clearDocumentAnalysesForPackages(packagePaths: string[]) {
     refreshCodeLenses()
 }
 
+function cancelDocumentSlotAnalysis(request: SlotAnalysisRequest) {
+  if (latestSlotRequests.get(request.uri)?.requestId === request.requestId)
+    latestSlotRequests.delete(request.uri)
+  if (documentSlotAnalyses.get(request.uri)?.requestId === request.requestId) {
+    documentSlotAnalyses.delete(request.uri)
+    refreshCodeLenses()
+  }
+}
+
 export function clearDocumentAnalysis(uri?: string | vscode.Uri) {
   if (uri) {
     const key = typeof uri === 'string' ? uri : uri.toString()
@@ -945,7 +954,10 @@ export async function detectSlots(UiCompletions: any, uiDeps: any, prefix: strin
 export async function detectSlots(documentOrCompletions: vscode.TextDocument | any, completionsOrDeps: any, depsOrPrefix: any, maybePrefix?: string[], maybeIdentity?: SlotAnalysisIdentity, maybeSourceContext?: SlotSourceContext) {
   const hasDocument = documentOrCompletions?.uri && typeof documentOrCompletions.getText === 'function'
   const document = hasDocument ? documentOrCompletions as vscode.TextDocument : getActiveTextEditor()?.document
-  if (!document)
+  if (!document || document.isClosed)
+    return
+  const isVineDocument = document.uri.toString().endsWith('.vine.ts')
+  if (document.languageId !== 'vue' && !isVineDocument)
     return
   const UiCompletions = hasDocument ? completionsOrDeps : documentOrCompletions
   const uiDeps = hasDocument ? depsOrPrefix : completionsOrDeps
@@ -955,8 +967,10 @@ export async function detectSlots(documentOrCompletions: vscode.TextDocument | a
   const request = beginDocumentSlotAnalysis(document.uri, document.version, identity || { packagePath: '', contextGeneration: 0, contextRevision: 0 })
   const children = (await getTemplateAst(document, UiCompletions, uiDeps, prefix, sourceContext)).filter(item => item.children.length)
 
-  if (document.version !== request.documentVersion)
+  if (document.isClosed || document.version !== request.documentVersion) {
+    cancelDocumentSlotAnalysis(request)
     return
+  }
   commitDocumentSlotAnalysis(request, children)
 }
 
@@ -967,7 +981,7 @@ export function registerCodeLensProviderFn() {
     provideCodeLenses(document: vscode.TextDocument) {
       const languageId = document.languageId
       const isVineDocument = document.uri.toString().endsWith('.vine.ts')
-      if (languageId === 'typescript' && !isVineDocument)
+      if (languageId !== 'vue' && !isVineDocument)
         return []
       const result: vscode.CodeLens[] = []
       const analysis = getDocumentSlotAnalysis(document.uri)
@@ -1130,7 +1144,7 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
     let target: any
     for (const candidate of importedTag.candidates) {
       target = localSource
-        ? await findDynamicComponent(candidate, sourceContext?.localDeps || uiDeps, UiCompletions, prefix, undefined, sourceContext?.currentDocumentPath)
+        ? await findDynamicComponent(candidate, sourceContext?.localDeps || uiDeps, UiCompletions, prefix, undefined, sourceContext?.currentDocumentPath, true)
         : source
           ? await findDynamicComponent(candidate, {}, scopedCompletions, prefix, normalizedSource)
           : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
@@ -1445,14 +1459,28 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string) {
   return base ? path.resolve(base, '..', url) : undefined
 }
 
-export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string, currentFileUrl?: string) {
-  // const prefix = optionsComponents.prefix
+export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string, currentFileUrl?: string, preferDependency = false) {
+  const dep = deps[name]
+  if (preferDependency && dep) {
+    const absoluteUrl = getAbsoluteUrl(dep, currentFileUrl)
+    if (!absoluteUrl)
+      return
+    try {
+      const tag = await getTemplateParentElementName(absoluteUrl)
+      return tag ? findDynamic(tag, UiCompletions, prefix, from) : undefined
+    }
+    catch {
+      // An explicit local import is authoritative. A missing/incomplete wrapper
+      // must not silently resolve to a flattened component with the same name.
+      return
+    }
+  }
+
   let target = findDynamic(name, UiCompletions, prefix, from)
   if (target)
     return target
 
-  let dep
-  if (dep = deps[name]) {
+  if (dep) {
     // 只往下找一层
     const absoluteUrl = getAbsoluteUrl(dep, currentFileUrl)
     if (!absoluteUrl)

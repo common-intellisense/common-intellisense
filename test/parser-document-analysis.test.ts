@@ -88,6 +88,27 @@ describe('per-document slot analysis', () => {
     expect(provider.provideCodeLenses(document)).toEqual([])
   })
 
+  it('does not expose Vue slot CodeLens in React documents', () => {
+    const uri = 'file:///workspace/a.tsx'
+    commit(uri, 1, [{
+      offset: 0,
+      children: [{
+        child: { tag: 'Modal', children: [], loc: { start: { line: 1, column: 0, offset: 0 }, end: { line: 1, column: 9, offset: 9 } } },
+        slots: [{ name: 'footer' }],
+      }],
+    }])
+    const provider = registerCodeLensProviderFn() as any
+    const document = {
+      languageId: 'typescriptreact',
+      version: 1,
+      uri: { toString: () => uri },
+      getText: () => '<Modal />',
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    }
+
+    expect(provider.provideCodeLenses(document)).toEqual([])
+  })
+
   it('notifies CodeLens consumers after analysis commits', () => {
     const provider = registerCodeLensProviderFn() as any
     const listener = vi.fn()

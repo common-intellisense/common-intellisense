@@ -74,15 +74,20 @@ export function createImportEdits(code: string, source: string, dependencies: st
   }
 
   const sourceFile = ts.createSourceFile(script.fileName, script.code, ts.ScriptTarget.Latest, true, script.scriptKind)
-  const registration = script.vueMode === 'normal' ? getVueRegistrationEdits(sourceFile, script, names) : []
-  if (script.vueMode === 'normal' && !registration)
-    return []
-  const finish = (edits: ImportEdit[]) => [...edits, ...(registration || [])]
   const imports = sourceFile.statements.filter(ts.isImportDeclaration)
   const matching = imports.filter(node => ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === source)
   const runtimeMatching = matching.filter(node => !node.importClause?.isTypeOnly)
   const existing = collectRuntimeBindings(runtimeMatching, importWay)
   const occupied = collectTopLevelBindings(sourceFile)
+  const finish = (edits: ImportEdit[], runtimeNames: string[]) => {
+    const registeredNames = names.filter(name => runtimeNames.includes(name))
+    if (!registeredNames.length)
+      return []
+    if (script.vueMode !== 'normal')
+      return edits
+    const registration = getVueRegistrationEdits(sourceFile, script, registeredNames)
+    return registration ? [...edits, ...registration] : []
+  }
 
   if (importWay === 'default' || importWay === 'as default') {
     const promotion = findTypeOnlyValuePromotion(matching, names, importWay)
@@ -117,7 +122,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
         start: script.offset + promotion.declaration.getStart(sourceFile),
         end: script.offset + promotion.declaration.end,
         text: preserved.join('\n'),
-      }])
+      }], [...existing, promotedName, ...additional])
     }
   }
 
@@ -128,7 +133,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
     if (promotions.length) {
       const promoted = new Set(promotions.flatMap(promotion => promotion.promotedNames))
       const additional = requested.filter(name => !promoted.has(name))
-      return finish(promotions.map((promotion, index) => {
+      const edits = promotions.map((promotion, index) => {
         const named = promotion.elements.map((element) => {
           const text = getImportSpecifierText(element)
           const isTypeOnly = promotion.declaration.importClause?.isTypeOnly || element.isTypeOnly
@@ -141,13 +146,14 @@ export function createImportEdits(code: string, source: string, dependencies: st
         const preservedTypeDefault = clause.isTypeOnly && clause.name ? `import type ${clause.name.text} from ${JSON.stringify(source)}\n` : ''
         const text = `${preservedTypeDefault}import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
         return { start: script.offset + promotion.declaration.getStart(sourceFile), end: script.offset + promotion.declaration.end, text }
-      }))
+      })
+      return finish(edits, [...existing, ...promoted, ...additional])
     }
   }
 
   const missing = names.filter(name => !existing.has(name) && !occupied.has(name))
   if (!missing.length)
-    return finish([])
+    return finish([], [...existing])
 
   if (importWay === 'specifier') {
     const editable = runtimeMatching.find(node => node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings))
@@ -160,19 +166,19 @@ export function createImportEdits(code: string, source: string, dependencies: st
       ]
       const prefix = clause.name ? `${clause.name.text}, ` : ''
       const text = `import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
-      return finish([{ start: script.offset + editable.getStart(sourceFile), end: script.offset + editable.end, text }])
+      return finish([{ start: script.offset + editable.getStart(sourceFile), end: script.offset + editable.end, text }], [...existing, ...missing])
     }
 
     const defaultOnly = runtimeMatching.find(node => node.importClause?.name && !node.importClause.namedBindings)
     if (defaultOnly) {
       const insertion = defaultOnly.importClause!.end
-      return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `, { ${missing.join(', ')} }` }])
+      return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `, { ${missing.join(', ')} }` }], [...existing, ...missing])
     }
   }
 
   const statements = createStatements(source, missing, importWay)
   if (!statements)
-    return finish([])
+    return finish([], [...existing])
   const lastImport = imports.at(-1)
   const insertion = lastImport ? lastImport.end : getPrologueInsertion(sourceFile, script.code)
   const beforeInsertion = script.code.slice(0, insertion)
@@ -180,7 +186,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
     ? script.offset > 0 && script.code.startsWith('\n') ? '\n' : ''
     : beforeInsertion.endsWith('\n') ? '' : '\n'
   const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
-  return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }])
+  return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }], [...existing, ...missing])
 }
 
 function findTypeOnlyValuePromotion(imports: ts.ImportDeclaration[], names: string[], importWay: Exclude<ImportWay, 'specifier'>) {
@@ -382,8 +388,18 @@ function getVueRegistrationEdits(sourceFile: ts.SourceFile, script: ScriptRegion
   if (!object)
     return null
 
-  const components = object.properties.find(property => property.name && ts.isIdentifier(property.name) && property.name.text === 'components')
+  const getStaticPropertyName = (name: ts.PropertyName | undefined) => {
+    if (!name)
+      return
+    if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name))
+      return name.text
+    if (ts.isComputedPropertyName(name) && ts.isStringLiteral(name.expression))
+      return name.expression.text
+  }
+  const components = object.properties.find(property => getStaticPropertyName(property.name) === 'components')
   if (!components) {
+    if (object.properties.some(property => property.name && ts.isComputedPropertyName(property.name) && !ts.isStringLiteral(property.name.expression)))
+      return null
     const insertion = object.getStart(sourceFile) + 1
     return [{ start: script.offset + insertion, end: script.offset + insertion, text: `\n  components: { ${names.join(', ')} },` }]
   }

@@ -55,12 +55,13 @@ export default {}
     const code = `import AppButton from './fixtures-dyn/AppButton.vue'`
     const uiDeps = getUiDeps(code) || {}
     const localDeps = getImportDeps(code)
+    const wrongButton = { lib: 'antd', marker: 'wrong-flattened-button' }
     const button = { lib: 'element-ui', marker: 'button' }
 
     await expect(resolveImportedComponent(
       'AppButton',
       uiDeps,
-      { ElButton: button } as any,
+      { Button: wrongButton, ElButton: button } as any,
       new Map(),
       {},
       ['el'],
@@ -73,7 +74,7 @@ export default {}
     await expect(resolveImportedComponent(
       'AppButton',
       getUiDeps(asyncCode) || {},
-      { ElButton: button } as any,
+      { Button: wrongButton, ElButton: button } as any,
       new Map(),
       {},
       ['el'],
@@ -81,5 +82,19 @@ export default {}
       getImportDeps(asyncCode),
       path.join(process.cwd(), 'test', 'App.vue'),
     )).resolves.toMatchObject({ component: button, source: './fixtures-dyn/AppButton.vue' })
+
+    const missing = await resolveImportedComponent(
+      'Button',
+      { Button: './fixtures-dyn/Missing.vue' },
+      { Button: wrongButton, ElButton: button } as any,
+      new Map(),
+      {},
+      ['el'],
+      new Map(),
+      { Button: './fixtures-dyn/Missing.vue' },
+      path.join(process.cwd(), 'test', 'App.vue'),
+    )
+    expect(missing.source).toBe('./fixtures-dyn/Missing.vue')
+    expect(missing.component).toBeUndefined()
   })
 })
