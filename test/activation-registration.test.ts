@@ -211,7 +211,7 @@ describe('activation registration', () => {
       packagePath: '/workspace/package.json',
       contextGeneration: 1,
       contextRevision: 2,
-    }), { cacheMap: undefined, sourceScopes: undefined })
+    }), { cacheMap: undefined, sourceScopes: undefined, localDeps: {}, currentDocumentPath: '/workspace/App.vue' })
     ;(vscode.window.visibleTextEditors as any).length = 0
   })
 
@@ -294,6 +294,26 @@ describe('activation registration', () => {
     expect(mocks.openTextDocument).toHaveBeenCalledWith(expect.objectContaining({ value: 'file:///workspace/A.tsx' }))
     expect(mocks.applyEdit).toHaveBeenCalledTimes(1)
     expect(mocks.workspaceEdits[0].entries[0][1]).toEqual(expect.objectContaining({ value: 'file:///workspace/A.tsx' }))
+  })
+
+  it('ignores malformed string component import params without throwing', async () => {
+    const source = {
+      languageId: 'typescriptreact',
+      version: 3,
+      uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
+      getText: () => '',
+      positionAt: () => ({ line: 0, character: 0 }),
+    }
+    mocks.openTextDocument.mockResolvedValue(source)
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    await expect(mocks.commandHandlers.get('common-intellisense.import')?.({
+      data: 'Button',
+      lib: 'ui',
+      document: { uri: 'file:///workspace/A.tsx', version: 3 },
+    })).resolves.toBeUndefined()
+    expect(mocks.applyEdit).not.toHaveBeenCalled()
   })
 
   it('rejects import edits when the source document version changed', async () => {

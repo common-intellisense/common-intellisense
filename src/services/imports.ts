@@ -10,6 +10,19 @@ export interface ImportEdit {
   text: string
 }
 
+export interface ImportDocumentContext {
+  languageId?: string
+  uri?: string
+}
+
+interface ScriptRegion {
+  code: string
+  offset: number
+  scriptKind: ts.ScriptKind
+  fileName: string
+  vueMode?: 'setup' | 'normal'
+}
+
 export function resolveImportSource(dataFrom: unknown, dynamicLib: unknown, lib: string, componentName: string, hyphenate: (name: string) => string) {
   if (typeof dataFrom === 'string' && dataFrom.trim())
     return dataFrom
@@ -42,26 +55,29 @@ export function getSuggestedImportNames(suggestions: unknown, prefix: string, im
   return [name]
 }
 
-export function createImportEdits(code: string, source: string, dependencies: string[], importWay: ImportWay = 'specifier', vue = false): ImportEdit[] {
+export function createImportEdits(code: string, source: string, dependencies: string[], importWay: ImportWay = 'specifier', vue = false, context: ImportDocumentContext = {}): ImportEdit[] {
   const names = [...new Set(dependencies.filter(name => isIdentifier(name)))]
   if (!source || !names.length)
     return []
 
-  const script = getScriptRegion(code, vue)
+  const script = getScriptRegion(code, vue, context)
   if (!script) {
     const statements = createStatements(source, names, importWay)
     if (!statements)
       return []
     if (vue) {
-      const openingTag = getNewVueScriptSetupTag(code)
-      if (!openingTag)
+      if (!canCreateVueScript(code))
         return []
-      return [{ start: 0, end: 0, text: `${openingTag}\n${statements}\n</script>\n` }]
+      return [{ start: 0, end: 0, text: `<script>\n${statements}\nexport default { components: { ${names.join(', ')} } }\n</script>\n` }]
     }
     return [{ start: 0, end: 0, text: `<script setup>\n${statements}\n</script>\n` }]
   }
 
-  const sourceFile = ts.createSourceFile('component.tsx', script.code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const sourceFile = ts.createSourceFile(script.fileName, script.code, ts.ScriptTarget.Latest, true, script.scriptKind)
+  const registration = script.vueMode === 'normal' ? getVueRegistrationEdits(sourceFile, script, names) : []
+  if (script.vueMode === 'normal' && !registration)
+    return []
+  const finish = (edits: ImportEdit[]) => [...edits, ...(registration || [])]
   const imports = sourceFile.statements.filter(ts.isImportDeclaration)
   const matching = imports.filter(node => ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === source)
   const runtimeMatching = matching.filter(node => !node.importClause?.isTypeOnly)
@@ -97,11 +113,11 @@ export function createImportEdits(code: string, source: string, dependencies: st
       const extraStatements = createStatements(source, additional, importWay)
       if (extraStatements)
         preserved.push(extraStatements)
-      return [{
+      return finish([{
         start: script.offset + promotion.declaration.getStart(sourceFile),
         end: script.offset + promotion.declaration.end,
         text: preserved.join('\n'),
-      }]
+      }])
     }
   }
 
@@ -112,7 +128,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
     if (promotions.length) {
       const promoted = new Set(promotions.flatMap(promotion => promotion.promotedNames))
       const additional = requested.filter(name => !promoted.has(name))
-      return promotions.map((promotion, index) => {
+      return finish(promotions.map((promotion, index) => {
         const named = promotion.elements.map((element) => {
           const text = getImportSpecifierText(element)
           const isTypeOnly = promotion.declaration.importClause?.isTypeOnly || element.isTypeOnly
@@ -125,13 +141,13 @@ export function createImportEdits(code: string, source: string, dependencies: st
         const preservedTypeDefault = clause.isTypeOnly && clause.name ? `import type ${clause.name.text} from ${JSON.stringify(source)}\n` : ''
         const text = `${preservedTypeDefault}import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
         return { start: script.offset + promotion.declaration.getStart(sourceFile), end: script.offset + promotion.declaration.end, text }
-      })
+      }))
     }
   }
 
   const missing = names.filter(name => !existing.has(name) && !occupied.has(name))
   if (!missing.length)
-    return []
+    return finish([])
 
   if (importWay === 'specifier') {
     const editable = runtimeMatching.find(node => node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings))
@@ -144,19 +160,19 @@ export function createImportEdits(code: string, source: string, dependencies: st
       ]
       const prefix = clause.name ? `${clause.name.text}, ` : ''
       const text = `import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
-      return [{ start: script.offset + editable.getStart(sourceFile), end: script.offset + editable.end, text }]
+      return finish([{ start: script.offset + editable.getStart(sourceFile), end: script.offset + editable.end, text }])
     }
 
     const defaultOnly = runtimeMatching.find(node => node.importClause?.name && !node.importClause.namedBindings)
     if (defaultOnly) {
       const insertion = defaultOnly.importClause!.end
-      return [{ start: script.offset + insertion, end: script.offset + insertion, text: `, { ${missing.join(', ')} }` }]
+      return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `, { ${missing.join(', ')} }` }])
     }
   }
 
   const statements = createStatements(source, missing, importWay)
   if (!statements)
-    return []
+    return finish([])
   const lastImport = imports.at(-1)
   const insertion = lastImport ? lastImport.end : getPrologueInsertion(sourceFile, script.code)
   const beforeInsertion = script.code.slice(0, insertion)
@@ -164,7 +180,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
     ? script.offset > 0 && script.code.startsWith('\n') ? '\n' : ''
     : beforeInsertion.endsWith('\n') ? '' : '\n'
   const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
-  return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }]
+  return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }])
 }
 
 function findTypeOnlyValuePromotion(imports: ts.ImportDeclaration[], names: string[], importWay: Exclude<ImportWay, 'specifier'>) {
@@ -323,28 +339,72 @@ function createStatements(source: string, names: string[], importWay: ImportWay)
   return `import { ${names.join(', ')} } from ${quoted}`
 }
 
-function getScriptRegion(code: string, vue: boolean) {
-  if (!vue)
-    return { code, offset: 0 }
+function getScriptRegion(code: string, vue: boolean, context: ImportDocumentContext): ScriptRegion | null {
+  if (!vue) {
+    const language = context.languageId?.toLowerCase()
+    const extension = context.uri?.match(/\.([^.?#/]+)(?:[?#]|$)/)?.[1]?.toLowerCase()
+    const kind = language === 'typescriptreact' || extension === 'tsx'
+      ? ts.ScriptKind.TSX
+      : language === 'javascriptreact' || extension === 'jsx'
+        ? ts.ScriptKind.JSX
+        : language === 'javascript' || extension === 'js'
+          ? ts.ScriptKind.JS
+          : ts.ScriptKind.TS
+    return { code, offset: 0, scriptKind: kind, fileName: `component.${extension || (kind === ts.ScriptKind.TSX ? 'tsx' : kind === ts.ScriptKind.JSX ? 'jsx' : kind === ts.ScriptKind.JS ? 'js' : 'ts')}` }
+  }
 
   const { descriptor } = parseVueSfc(code)
   const selected = descriptor.scriptSetup && !descriptor.scriptSetup.src
     ? descriptor.scriptSetup
-    : undefined
+    : descriptor.script && !descriptor.script.src ? descriptor.script : undefined
   if (!selected)
     return null
-  return { code: selected.content, offset: selected.loc.start.offset }
+  const lang = selected.lang?.toLowerCase()
+  const scriptKind = lang === 'tsx' ? ts.ScriptKind.TSX : lang === 'jsx' ? ts.ScriptKind.JSX : lang === 'ts' ? ts.ScriptKind.TS : ts.ScriptKind.JS
+  return { code: selected.content, offset: selected.loc.start.offset, scriptKind, fileName: `component.${lang || 'js'}`, vueMode: selected === descriptor.scriptSetup ? 'setup' : 'normal' }
 }
 
-function getNewVueScriptSetupTag(code: string) {
+function canCreateVueScript(code: string) {
   const { descriptor, errors } = parseVueSfc(code)
-  // Vue does not support an external script-setup block. The compiler omits it
-  // from the descriptor and reports an error, so decline rather than creating
-  // a second setup block in an already invalid SFC.
-  if (descriptor.scriptSetup || errors.some((error: any) => String(error?.message || error).includes('<script setup> cannot use the "src" attribute')))
-    return
-  const lang = descriptor.script?.lang
-  return lang ? `<script setup lang=${JSON.stringify(lang)}>` : '<script setup>'
+  return !descriptor.script && !descriptor.scriptSetup
+    && !errors.some((error: any) => String(error?.message || error).includes('<script setup> cannot use the "src" attribute'))
+}
+
+function getVueRegistrationEdits(sourceFile: ts.SourceFile, script: ScriptRegion, names: string[]): ImportEdit[] | null {
+  const assignment = sourceFile.statements.find(ts.isExportAssignment)
+  if (!assignment || assignment.isExportEquals)
+    return null
+  let object: ts.ObjectLiteralExpression | undefined
+  if (ts.isObjectLiteralExpression(assignment.expression))
+    object = assignment.expression
+  else if (ts.isCallExpression(assignment.expression) && assignment.expression.arguments[0] && ts.isObjectLiteralExpression(assignment.expression.arguments[0]))
+    object = assignment.expression.arguments[0]
+  if (!object)
+    return null
+
+  const components = object.properties.find(property => property.name && ts.isIdentifier(property.name) && property.name.text === 'components')
+  if (!components) {
+    const insertion = object.getStart(sourceFile) + 1
+    return [{ start: script.offset + insertion, end: script.offset + insertion, text: `\n  components: { ${names.join(', ')} },` }]
+  }
+  if (!ts.isPropertyAssignment(components) || !ts.isObjectLiteralExpression(components.initializer))
+    return null
+  const existing = new Set(components.initializer.properties.flatMap((property) => {
+    if (ts.isShorthandPropertyAssignment(property))
+      return [property.name.text]
+    if (property.name && ts.isIdentifier(property.name))
+      return [property.name.text]
+    return []
+  }))
+  const missing = names.filter(name => !existing.has(name))
+  if (!missing.length)
+    return []
+  const initializer = components.initializer
+  const insertion = initializer.end - 1
+  const lastProperty = initializer.properties.at(-1)
+  const tail = lastProperty ? sourceFile.text.slice(lastProperty.end, insertion) : ''
+  const prefix = !lastProperty ? ' ' : tail.includes(',') ? '' : ', '
+  return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${prefix}${missing.join(', ')} ` }]
 }
 
 function isIdentifier(name: string) {

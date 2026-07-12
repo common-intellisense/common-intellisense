@@ -166,18 +166,27 @@ const view = [Button, Input]
     expect(applyEdits(code, mixed)).not.toContain('import { Button, Input } from "ui"')
   })
 
-  it('does not inject inline code into an external Vue script', () => {
+  it('declines edits for an external Vue script that cannot be registered locally', () => {
     const vue = '<template><Button /></template>\n<script src="./component.ts"></script>\n'
-    const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
-    expect(output).toContain('<script src="./component.ts"></script>')
-    expect(output).toContain('<script setup>\nimport { Button } from "ui"\n</script>')
+    expect(createImportEdits(vue, 'ui', ['Button'], 'specifier', true)).toEqual([])
   })
 
   it('ignores script-like text inside Vue comments', () => {
     const vue = '<!-- <script setup>fake</script> -->\n<template><Button /></template>\n'
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
     expect(output).toContain('<!-- <script setup>fake</script> -->')
-    expect(output).toContain('<script setup>\nimport { Button } from "ui"\n</script>')
+    expect(output).toContain('<script>\nimport { Button } from "ui"\nexport default { components: { Button } }\n</script>')
+  })
+
+  it('parses TypeScript generic arrows with the TS script kind', () => {
+    const vue = `<script setup lang="ts">
+const identity = <T>(value: T) => value
+const Button = {}
+</script>`
+    expect(createImportEdits(vue, 'ui', ['Button'], 'specifier', true)).toEqual([])
+    const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Input'], 'specifier', true))
+    expect(output).toContain('import { Input } from "ui"')
+    expect(output).toContain('const identity = <T>(value: T) => value')
   })
 
   it('declines edits when script setup is external', () => {
@@ -185,29 +194,41 @@ const view = [Button, Input]
     expect(createImportEdits(vue, 'ui', ['Button'], 'specifier', true)).toEqual([])
   })
 
-  it('creates a local script setup instead of importing into an Options API script', () => {
+  it('imports and registers components in an Options API script', () => {
     const vue = `<template><Button /></template>\n<script lang="ts">\nexport default { name: 'Page' }\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
-    expect(output).toContain('<script setup lang="ts">\nimport { Button } from "ui"\n</script>')
-    expect(output).toContain(`<script lang="ts">\nexport default { name: 'Page' }\n</script>`)
-    expect(output).not.toContain(`<script lang="ts">\nimport { Button }`)
+    expect(output).toContain(`<script lang="ts">\nimport { Button } from "ui"`)
+    expect(output).toContain(`components: { Button }`)
+    expect(output).not.toContain('<script setup')
   })
 
-  it('creates script setup alongside defineComponent Options API code', () => {
+  it('registers into an existing defineComponent components option', () => {
     const vue = `<template><Button /></template>\n<script>\nexport default defineComponent({ components: { Existing } })\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
-    expect(output).toContain('<script setup>\nimport { Button } from "ui"\n</script>')
-    expect(output).toContain('export default defineComponent({ components: { Existing } })')
+    expect(output).toContain('import { Button } from "ui"')
+    expect(output).toContain('components: { Existing , Button }')
+    expect(output).not.toContain('<script setup')
   })
 
-  it('inserts into Vue script setup and creates one when absent', () => {
+  it('preserves trailing commas when extending an Options API components object', () => {
+    const multiline = `<script>\nexport default {\n  components: {\n    Existing,\n  },\n}\n</script>`
+    const singleLine = `<script>export default { components: { Existing, } }</script>`
+    for (const vue of [multiline, singleLine]) {
+      const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
+      expect(output).not.toContain(',,')
+      expect(output).not.toMatch(/,\s*,\s*Button/)
+      expect(output).toContain('Button')
+    }
+  })
+
+  it('inserts into Vue script setup and creates a Vue 2-compatible script when absent', () => {
     const vue = `<template><Button /></template>\n<script setup lang="ts">\nconst x = 1\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
     expect(output).toContain('<script setup lang="ts">\nimport { Button } from "ui"\nconst x = 1')
 
     const withoutScript = '<template><Button /></template>\n'
     expect(applyEdits(withoutScript, createImportEdits(withoutScript, 'ui', ['Button'], 'specifier', true))).toContain(
-      '<script setup>\nimport { Button } from "ui"\n</script>',
+      '<script>\nimport { Button } from "ui"\nexport default { components: { Button } }\n</script>',
     )
   })
 })

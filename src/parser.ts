@@ -19,7 +19,7 @@ import { nameMap } from './constants'
 import { convertPrefixedComponentName, findPrefixedComponent, hyphenate } from './ui/utils'
 import { getSourceScope, logger } from './ui/ui-find'
 import type { ComponentSourceScope } from './services/component-resolver'
-import { resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
+import { isLocalModuleSource, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
 import { getNodeOffsetRange } from './services/node-range'
 
 const { parse: svelteParser } = require('svelte/compiler')
@@ -471,10 +471,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
     else if (type === 'ObjectExpression') { children = child.properties }
     else if (type === 'Property' && child.value.type === 'FunctionExpression') { children = child.value.body.body }
     else if (type === 'ExportDefaultDeclaration') {
-      if (child.declaration.type === 'FunctionDeclaration')
-        children = child.declaration.body.body
-      else
-        children = child.declaration.arguments
+      children = child.declaration
     }
     else if (type === 'ExpressionStatement') { children = child.expression }
     else if (type === 'JSXExpressionContainer' || type === 'ChainExpression') {
@@ -600,9 +597,7 @@ function findJsxRefs(childrens: any, map: any = {}, refs: any = []) {
       children = child.children
     }
     else if (type === 'ExportDefaultDeclaration') {
-      if (child.declaration.type === 'FunctionDeclaration') {
-        children = child.declaration.body.body
-      }
+      children = child.declaration
     }
     else if (!children) {
       continue
@@ -941,6 +936,8 @@ export function commitDocumentSlotAnalysis(request: SlotAnalysisRequest, childre
 export interface SlotSourceContext {
   cacheMap: Map<string, any>
   sourceScopes: Map<string, ComponentSourceScope>
+  localDeps?: Record<string, string>
+  currentDocumentPath?: string
 }
 
 export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[], identity?: SlotAnalysisIdentity, sourceContext?: SlotSourceContext): Promise<void>
@@ -977,6 +974,10 @@ export function registerCodeLensProviderFn() {
       if (!analysis || analysis.documentVersion !== document.version)
         return result
       const children = analysis.children
+      let documentCode: string | undefined
+      const positionAt = (offset: number) => typeof document.positionAt === 'function'
+        ? document.positionAt(offset)
+        : getPosition(offset, documentCode ??= document.getText()).position
       children.forEach((child: any) => {
         const offset = child.offset
         child.children.forEach((m: any) => {
@@ -1021,10 +1022,7 @@ export function registerCodeLensProviderFn() {
             // Normalize compiler AST and ESTree nodes into absolute document offsets.
             const absoluteRange = getNodeOffsetRange(child, offset)
             const codeLensRange = absoluteRange
-              ? createRange(
-                  getPosition(absoluteRange.start, document.getText()).position,
-                  getPosition(absoluteRange.end, document.getText()).position,
-                )
+              ? new vscode.Range(positionAt(absoluteRange.start), positionAt(absoluteRange.end))
               : createRange(range.start.line - 1, range.start.column, range.end.line - 1, range.end.column)
 
             result.push(new vscode.CodeLens(codeLensRange, {
@@ -1115,10 +1113,11 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
       continue
 
     const importedTag = resolveImportedTag(tag, uiDeps)
-    const source = importedTag.source
+    const source = importedTag.source || sourceContext?.localDeps?.[importedTag.localRoot]
+    const localSource = isLocalModuleSource(source)
     let scopedCompletions = UiCompletions
     let normalizedSource = source
-    if (source && sourceContext) {
+    if (source && sourceContext && !localSource) {
       const scope = getSourceScope(sourceContext, source)
       if (scope) {
         const scoped = sourceContext.cacheMap.get(scope.key)
@@ -1130,13 +1129,15 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
 
     let target: any
     for (const candidate of importedTag.candidates) {
-      target = source
-        ? await findDynamicComponent(candidate, {}, scopedCompletions, prefix, normalizedSource)
-        : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
-          || scopedCompletions[candidate]
-          || await findDynamicComponent(candidate, {}, scopedCompletions, prefix)
-      const scope = source && sourceContext ? getSourceScope(sourceContext, source) : undefined
-      if (target && sourceScopeAccepts(scope, target.lib))
+      target = localSource
+        ? await findDynamicComponent(candidate, sourceContext?.localDeps || uiDeps, UiCompletions, prefix, undefined, sourceContext?.currentDocumentPath)
+        : source
+          ? await findDynamicComponent(candidate, {}, scopedCompletions, prefix, normalizedSource)
+          : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
+            || scopedCompletions[candidate]
+            || await findDynamicComponent(candidate, {}, scopedCompletions, prefix)
+      const scope = source && sourceContext && !localSource ? getSourceScope(sourceContext, source) : undefined
+      if (target && (localSource || sourceScopeAccepts(scope, target.lib)))
         break
       target = undefined
     }

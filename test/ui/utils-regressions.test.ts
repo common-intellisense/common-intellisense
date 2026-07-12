@@ -244,6 +244,18 @@ describe('utils reducer regressions', () => {
     ])
   })
 
+  it('normalizes string component entries for every provider branch', async () => {
+    const { componentsReducer } = await import('../../src/ui/utils')
+    const context = { languageId: 'vue', framework: 'vue', uri: 'file:///Demo.vue', version: 1 } as const
+    const prefixed = componentsReducer({ lib: 'ui', prefix: 'El', map: [['ElButton', 'Button']] as any })
+    const direct = componentsReducer({ lib: 'ui', isReact: true, map: [['Button', 'Button']] as any })
+
+    for (const provider of [...prefixed, ...direct]) {
+      const [item] = await Promise.all(provider.data(undefined, context as any)) as any[]
+      expect(item.params.data.name).toBe(provider.prefix ? 'ElButton' : provider.isReact ? 'Button' : 'Button')
+    }
+  })
+
   it('componentsReducer uses item-local dynamicLib/importWay without enabling HTML markdown', async () => {
     const { componentsReducer } = await import('../../src/ui/utils')
 

@@ -31,6 +31,34 @@ describe('parser edge cases', () => {
     expect(() => mod.parserJSX('return;', { line: 1, character: 2 } as any)).not.toThrow()
   })
 
+  it('recurses into a default-exported arrow function', async () => {
+    tsParseMock.mockReturnValue({
+      body: [{
+        type: 'ExportDefaultDeclaration',
+        loc: { start: { line: 1, column: 0 }, end: { line: 1, column: 40 } },
+        declaration: {
+          type: 'ArrowFunctionExpression',
+          loc: { start: { line: 1, column: 15 }, end: { line: 1, column: 40 } },
+          body: {
+            type: 'JSXElement',
+            name: 'Button',
+            expression: null,
+            loc: { start: { line: 1, column: 21 }, end: { line: 1, column: 40 } },
+            children: [],
+            openingElement: {
+              name: { type: 'JSXIdentifier', name: 'Button' },
+              loc: { start: { line: 1, column: 21 }, end: { line: 1, column: 40 } },
+              attributes: [{ type: 'JSXAttribute', name: { name: 'disabled' }, value: null, loc: { start: { line: 1, column: 29 }, end: { line: 1, column: 37 } } }],
+            },
+          },
+        },
+      }],
+    })
+    const mod = await import('../src/parser')
+    expect(mod.parserJSX('export default () => <Button disabled />', { line: 0, character: 23 } as any)).toMatchObject({ type: 'tag', tag: 'Button' })
+    expect(mod.parserJSX('export default () => <Button disabled />', { line: 0, character: 31 } as any)).toMatchObject({ type: 'props', tag: 'Button', propName: 'disabled' })
+  })
+
   it('uses the supplied document context instead of the active editor path', async () => {
     tsParseMock.mockReturnValue({ body: [] })
     const mod = await import('../src/parser')

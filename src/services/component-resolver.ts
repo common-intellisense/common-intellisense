@@ -15,6 +15,10 @@ export interface ComponentSourceContext {
   sourceScopes: Map<string, ComponentSourceScope>
 }
 
+export function isLocalModuleSource(source: string | undefined) {
+  return !!source && (source.startsWith('.') || source.startsWith('/') || source.startsWith('file:'))
+}
+
 export function getPackageSource(source: string) {
   return source.startsWith('@') ? source.split('/').slice(0, 2).join('/') : source.split('/')[0]
 }

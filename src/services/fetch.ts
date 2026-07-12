@@ -652,6 +652,16 @@ function normalizeAddress(address: string) {
   return normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized
 }
 
+export function isLoopbackAddress(address: string) {
+  const normalized = normalizeAddress(address)
+  if (normalized === '::1')
+    return true
+  if (isIP(normalized) !== 4)
+    return false
+  const firstOctet = Number(normalized.split('.')[0])
+  return firstOctet === 127
+}
+
 async function resolvePinnedAddress(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
   const target = new URL(uri)
   const hostname = normalizeHostname(target.hostname)
@@ -662,6 +672,8 @@ async function resolvePinnedAddress(uri: string, trust: RemoteTrustClass, resolv
     throw new Error(`Remote adapter hostname did not resolve: ${hostname}`)
   if (trust.kind === 'publicHttps' && addresses.some(({ address }) => isPrivateNetworkHost(address)))
     throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
+  if (trust.kind === 'localhostHttp' && addresses.some(({ address }) => !isLoopbackAddress(address)))
+    throw new Error(`Localhost adapter resolved to a non-loopback address: ${uri}`)
   return addresses[0]
 }
 
@@ -726,8 +738,11 @@ function requestPinnedText(uri: string, pinned: { address: string, family: numbe
     request.on('socket', (socket) => {
       socket.once('connect', () => {
         const remoteAddress = normalizeAddress(socket.remoteAddress || '')
-        if (remoteAddress !== normalizeAddress(pinned.address) || (trust.kind === 'publicHttps' && isPrivateNetworkHost(remoteAddress)))
+        if (remoteAddress !== normalizeAddress(pinned.address)
+          || (trust.kind === 'publicHttps' && isPrivateNetworkHost(remoteAddress))
+          || (trust.kind === 'localhostHttp' && !isLoopbackAddress(remoteAddress))) {
           request.destroy(new Error(`Remote adapter connected to an untrusted address: ${socket.remoteAddress || 'unknown'}`))
+        }
       })
     })
     request.on('error', reject)

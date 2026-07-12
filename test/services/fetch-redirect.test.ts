@@ -38,6 +38,17 @@ describe('remote redirect validation', () => {
     expect(requester).toHaveBeenCalledWith('http://[::1]/adapter', expect.objectContaining({ address: '::1', family: 6 }), expect.objectContaining({ kind: 'localhostHttp', hostname: '::1' }))
   })
 
+  it('rejects localhost DNS results outside the loopback range', async () => {
+    const { fetchRemoteText, isLoopbackAddress } = await import('../../src/services/fetch')
+    const requester = vi.fn(async () => ({ status: 200, body: 'manifest' }))
+
+    expect(isLoopbackAddress('127.0.0.2')).toBe(true)
+    expect(isLoopbackAddress('::ffff:127.0.0.1')).toBe(true)
+    expect(isLoopbackAddress('169.254.169.254')).toBe(false)
+    await expect(fetchRemoteText('http://localhost/adapter', async () => [{ address: '169.254.169.254', family: 4 }], requester)).rejects.toThrow('non-loopback')
+    expect(requester).not.toHaveBeenCalled()
+  })
+
   it('pins the validated address into the actual request lookup', async () => {
     const server = createServer((_request, response) => response.end('manifest'))
     server.listen(0, '127.0.0.1')
