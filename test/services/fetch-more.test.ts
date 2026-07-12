@@ -329,6 +329,25 @@ describe('fetch service additional tests (mocked)', () => {
     await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Unsupported adapter manifest schema')
   })
 
+  it('isolates mixed remote URI failures per configured source', async () => {
+    remoteUris = ['https://fake/good.js', 'https://fake/bad.js']
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockImplementation(async (uri: any) => {
+      if (String(uri).includes('bad'))
+        throw new Error('offline')
+      return 'module.exports = { GoodProps: () => ({ ok: true }) }'
+    })
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const results = await mod.fetchRemoteUrlSourceResults()
+    expect(results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'http:https://fake/good.js', status: 'success' }),
+      expect.objectContaining({ id: 'http:https://fake/bad.js', status: 'failed' }),
+    ]))
+    expect(results.find(item => item.status === 'success')?.value?.GoodProps().ok).toBe(true)
+  })
+
   it('shares a remote source task between concurrent callers', async () => {
     let resolveRemote!: (value: string) => void
     const pending = new Promise<string>((resolve) => { resolveRemote = resolve })

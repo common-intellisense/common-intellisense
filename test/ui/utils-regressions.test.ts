@@ -281,6 +281,33 @@ describe('utils reducer regressions', () => {
     expect(completions.find(item => item.content === ':value')?.snippet).toBe(':value="model.child"')
   })
 
+  it('ignores malformed related metadata and incomplete parent props', async () => {
+    const { propsReducer } = await import('../../src/ui/utils')
+    const result = await propsReducer({
+      uiName: 'fixture',
+      lib: 'fixture-lib',
+      map: [{
+        name: 'Child',
+        props: {
+          ':value': { type: 'string', related: [42, 'Parent.code'] },
+        },
+      }] as any,
+    })
+
+    for (const props of [
+      [{ name: 'bind', arg: { content: 'code' } }],
+      [{ name: 'code' }],
+      undefined,
+    ]) {
+      expect(() => result.Child.completions[0]({
+        languageId: 'vue',
+        framework: 'vue',
+        uri: 'file:///Demo.vue',
+        parent: { tag: 'Parent', props },
+      })).not.toThrow()
+    }
+  })
+
   it('componentsReducer uses item-local dynamicLib/importWay without enabling HTML markdown', async () => {
     const { componentsReducer } = await import('../../src/ui/utils')
 

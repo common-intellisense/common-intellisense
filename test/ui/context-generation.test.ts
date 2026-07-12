@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock } = vi.hoisted(() => ({
   findUpMock: vi.fn(),
   fetchMock: vi.fn(),
-  localFetchMock: vi.fn(async () => ({})),
+  localFetchMock: vi.fn(async (_root?: string) => ({})),
   remoteFetchMock: vi.fn(async () => ({})),
   npmFetchMock: vi.fn(async () => ({})),
 }))
@@ -18,9 +18,9 @@ vi.mock('node:fs/promises', () => ({
 }))
 vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchMock,
-  fetchFromLocalUris: localFetchMock,
-  fetchFromRemoteNpmUrls: npmFetchMock,
-  fetchFromRemoteUrls: remoteFetchMock,
+  fetchLocalSourceResults: async (root?: string) => [{ id: 'local:test', status: 'success', value: await localFetchMock(root) }],
+  fetchRemoteNpmSourceResults: async () => [{ id: 'npm:test', status: 'success', value: await npmFetchMock() }],
+  fetchRemoteUrlSourceResults: async () => [{ id: 'http:test', status: 'success', value: await remoteFetchMock() }],
   getLocalCache: Promise.resolve('done'),
   writeLocalCache: vi.fn(async () => {}),
 }))

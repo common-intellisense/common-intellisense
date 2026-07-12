@@ -13,6 +13,7 @@ describe('data-only adapter manifest validation', () => {
           props: { disabled: { type: 'boolean', required: false, default: false } },
           events: [{ name: 'change' }],
           methods: [{ name: 'focus' }],
+          exposed: [{ name: 'focus' }],
           slots: [{ name: 'default' }],
         }],
       },
@@ -25,6 +26,9 @@ describe('data-only adapter manifest validation', () => {
   it.each([
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { disabled: null } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { type: 42 } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', exposed: [{ name: 'focus', version: 3 }] }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', suggestions: [{ name: 42 }] }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { related: [42] } } }] },
   ])('rejects malformed props before reducers are created', (value) => {
     expect(() => normalizeAdapterManifestExports({ demo: value }, 'fixture')).toThrow(/Invalid adapter manifest field/)
   })

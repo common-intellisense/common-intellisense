@@ -13,7 +13,7 @@ import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
 import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getUiImportedName } from './ui/ui-utils'
-import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
+import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn, resolveLocalWrappedComponent } from './parser'
 
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
 interface DocumentAnalysisCacheEntry {
@@ -81,12 +81,8 @@ export async function resolveImportedComponent(rawTag: string | undefined, uiDep
   const importedTag = resolveImportedTag(rawTag, uiDeps)
   const resolvedSource = importedTag.source || localDeps[importedTag.localRoot]
   if (isLocalModuleSource(resolvedSource)) {
-    for (const candidate of importedTag.candidates) {
-      const component = await findDynamicComponent(candidate, localDeps, completions, prefixes, undefined, currentDocumentPath, true, workspaceRoot)
-      if (component)
-        return { component, source: resolvedSource, scoped: completions }
-    }
-    return { source: resolvedSource, scoped: completions }
+    const component = await resolveLocalWrappedComponent(resolvedSource, completions, prefixes, currentDocumentPath, workspaceRoot)
+    return { component, source: resolvedSource, scoped: completions }
   }
   const scoped = resolvedSource
     ? selectScopedCompletions(completions, cacheMap, resolvedSource, alias, sourceScopes)

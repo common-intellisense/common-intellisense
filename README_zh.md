@@ -147,6 +147,8 @@
 
 自定义来源的旧 CommonJS 适配器属于可执行代码，默认禁用，并且在 Restricted Mode 中始终禁用。仅当你完全信任来源时才设置 `"common-intellisense.allowLegacyAdapters": true`。`node:vm` 仅用于限制执行时间，不是安全沙箱。`localUris` 只允许工作区内部文件。
 
+Slot CodeLens 当前仅支持 Vue 与 Vine；在提供 React 专属子节点插入语法前，React/TSX Slot CodeLens 保持禁用。
+
 ## 如何配置组件的json
 ```json
 {

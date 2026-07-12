@@ -7,40 +7,135 @@ function isPlainRecord(value: unknown): value is PlainRecord {
   return prototype === Object.prototype || prototype === null
 }
 
+function invalid(path: string): never {
+  throw new TypeError(`Invalid adapter manifest field: ${path}`)
+}
+
 function requireNonEmptyString(value: unknown, path: string): string {
   if (typeof value !== 'string' || !value.trim())
-    throw new Error(`Invalid adapter manifest field: ${path}`)
+    invalid(path)
   return value
+}
+
+function validateOptionalString(record: PlainRecord, key: string, path: string) {
+  if (record[key] !== undefined && typeof record[key] !== 'string')
+    invalid(`${path}.${key}`)
+}
+
+function validateOptionalBoolean(record: PlainRecord, key: string, path: string) {
+  if (record[key] !== undefined && typeof record[key] !== 'boolean')
+    invalid(`${path}.${key}`)
+}
+
+function normalizeParams(value: unknown, path: string) {
+  if (value === undefined)
+    return undefined
+  if (typeof value === 'string')
+    return value
+  if (!Array.isArray(value))
+    invalid(path)
+  return value.map((entry, index) => {
+    if (typeof entry === 'string')
+      return entry
+    if (!isPlainRecord(entry))
+      invalid(`${path}[${index}]`)
+    for (const key of ['name', 'description', 'description_zh', 'type', 'default'])
+      validateOptionalString(entry, key, `${path}[${index}]`)
+    return { ...entry }
+  })
+}
+
+function normalizeTypeDetail(value: unknown, path: string) {
+  if (value === undefined)
+    return undefined
+  if (!isPlainRecord(value))
+    invalid(path)
+  const normalized: PlainRecord = {}
+  for (const [key, detail] of Object.entries(value)) {
+    if (typeof detail === 'string') {
+      normalized[key] = detail
+      continue
+    }
+    if (!Array.isArray(detail))
+      invalid(`${path}.${key}`)
+    normalized[key] = detail.map((entry, index) => {
+      if (!isPlainRecord(entry))
+        invalid(`${path}.${key}[${index}]`)
+      for (const field of ['name', 'description', 'description_zh', 'type', 'params', 'value'])
+        validateOptionalString(entry, field, `${path}.${key}[${index}]`)
+      validateOptionalBoolean(entry, 'optional', `${path}.${key}[${index}]`)
+      return { ...entry }
+    })
+  }
+  return normalized
+}
+
+function normalizeSuggestions(value: unknown, path: string) {
+  if (value === undefined)
+    return []
+  if (!Array.isArray(value))
+    invalid(path)
+  return value.map((entry, index) => {
+    if (typeof entry === 'string')
+      return requireNonEmptyString(entry, `${path}[${index}]`)
+    if (!isPlainRecord(entry))
+      invalid(`${path}[${index}]`)
+    requireNonEmptyString(entry.name, `${path}[${index}].name`)
+    validateOptionalString(entry, 'description', `${path}[${index}]`)
+    validateOptionalString(entry, 'description_zh', `${path}[${index}]`)
+    return { ...entry }
+  })
 }
 
 function normalizeNamedArray(value: unknown, path: string) {
   if (value === undefined)
     return []
   if (!Array.isArray(value))
-    throw new TypeError(`Invalid adapter manifest field: ${path}`)
+    invalid(path)
   return value.map((entry, index) => {
+    const entryPath = `${path}[${index}]`
     if (!isPlainRecord(entry))
-      throw new TypeError(`Invalid adapter manifest field: ${path}[${index}]`)
-    requireNonEmptyString(entry.name, `${path}[${index}].name`)
-    return { ...entry }
+      invalid(entryPath)
+    requireNonEmptyString(entry.name, `${entryPath}.name`)
+    for (const key of ['description', 'description_zh', 'version', 'detail', 'platform', 'value'])
+      validateOptionalString(entry, key, entryPath)
+    return { ...entry, params: normalizeParams(entry.params, `${entryPath}.params`) }
   })
+}
+
+function normalizeProp(prop: PlainRecord, path: string) {
+  for (const key of ['type', 'version', 'description', 'description_zh', 'platform'])
+    validateOptionalString(prop, key, path)
+  for (const key of ['required', 'foreach'])
+    validateOptionalBoolean(prop, key, path)
+  if (prop.related !== undefined && (!Array.isArray(prop.related) || prop.related.some(item => typeof item !== 'string')))
+    invalid(`${path}.related`)
+  if (Array.isArray(prop.value) && prop.value.some(item => typeof item !== 'string'))
+    invalid(`${path}.value`)
+  if (prop.typeDetail !== undefined)
+    normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`)
+  for (const [key, value] of Object.entries(prop)) {
+    if (key.startsWith('$') && typeof value !== 'string')
+      invalid(`${path}.${key}`)
+  }
+  return { ...prop, typeDetail: normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`) }
 }
 
 function normalizeComponent(value: unknown, path: string) {
   if (!isPlainRecord(value))
-    throw new TypeError(`Invalid adapter manifest field: ${path}`)
+    invalid(path)
   requireNonEmptyString(value.name, `${path}.name`)
+  for (const key of ['description', 'description_zh', 'tag', 'link', 'link_zh', 'dynamicLib', 'version'])
+    validateOptionalString(value, key, path)
+  if (value.importWay !== undefined && !['as default', 'default', 'specifier'].includes(String(value.importWay)))
+    invalid(`${path}.importWay`)
   if (value.props !== undefined && !isPlainRecord(value.props))
-    throw new TypeError(`Invalid adapter manifest field: ${path}.props`)
+    invalid(`${path}.props`)
   const props: PlainRecord = {}
   for (const [name, prop] of Object.entries(value.props || {})) {
     if (!isPlainRecord(prop))
-      throw new TypeError(`Invalid adapter manifest field: ${path}.props.${name}`)
-    if (prop.type !== undefined && typeof prop.type !== 'string')
-      throw new TypeError(`Invalid adapter manifest field: ${path}.props.${name}.type`)
-    if (prop.required !== undefined && typeof prop.required !== 'boolean')
-      throw new TypeError(`Invalid adapter manifest field: ${path}.props.${name}.required`)
-    props[name] = { ...prop }
+      invalid(`${path}.props.${name}`)
+    props[name] = normalizeProp(prop, `${path}.props.${name}`)
   }
   return {
     ...value,
@@ -49,24 +144,30 @@ function normalizeComponent(value: unknown, path: string) {
     methods: normalizeNamedArray(value.methods, `${path}.methods`),
     slots: normalizeNamedArray(value.slots, `${path}.slots`),
     exposed: normalizeNamedArray(value.exposed, `${path}.exposed`),
+    suggestions: normalizeSuggestions(value.suggestions, `${path}.suggestions`),
+    typeDetail: normalizeTypeDetail(value.typeDetail, `${path}.typeDetail`),
   }
 }
 
 function normalizeComponentsExport(value: PlainRecord, path: string) {
   requireNonEmptyString(value.lib, `${path}.lib`)
+  for (const key of ['prefix', 'dynamicLib'])
+    validateOptionalString(value, key, path)
+  if (value.importWay !== undefined && !['as default', 'default', 'specifier'].includes(String(value.importWay)))
+    invalid(`${path}.importWay`)
   if (!Array.isArray(value.map))
-    throw new TypeError(`Invalid adapter manifest field: ${path}.map`)
+    invalid(`${path}.map`)
   const map = value.map.map((entry, index) => {
     if (!Array.isArray(entry) || !entry.length)
-      throw new TypeError(`Invalid adapter manifest field: ${path}.map[${index}]`)
+      invalid(`${path}.map[${index}]`)
     const component = entry[0]
     const normalizedComponent = typeof component === 'string'
       ? requireNonEmptyString(component, `${path}.map[${index}][0]`)
       : normalizeComponent(component, `${path}.map[${index}][0]`)
     if (entry[1] !== undefined && typeof entry[1] !== 'string')
-      throw new TypeError(`Invalid adapter manifest field: ${path}.map[${index}][1]`)
+      invalid(`${path}.map[${index}][1]`)
     if (entry[2] !== undefined && typeof entry[2] !== 'string')
-      throw new TypeError(`Invalid adapter manifest field: ${path}.map[${index}][2]`)
+      invalid(`${path}.map[${index}][2]`)
     return [normalizedComponent, ...entry.slice(1)]
   })
   return { ...value, map }
@@ -75,12 +176,11 @@ function normalizeComponentsExport(value: PlainRecord, path: string) {
 function normalizePropsExport(value: PlainRecord, path: string) {
   requireNonEmptyString(value.uiName, `${path}.uiName`)
   requireNonEmptyString(value.lib, `${path}.lib`)
+  for (const key of ['prefix', 'dynamicLib', 'resolveFrom', 'installedVersion', 'adapterMajor'])
+    validateOptionalString(value, key, path)
   if (!Array.isArray(value.map))
-    throw new TypeError(`Invalid adapter manifest field: ${path}.map`)
-  return {
-    ...value,
-    map: value.map.map((component, index) => normalizeComponent(component, `${path}.map[${index}]`)),
-  }
+    invalid(`${path}.map`)
+  return { ...value, map: value.map.map((component, index) => normalizeComponent(component, `${path}.map[${index}]`)) }
 }
 
 /** Validate and clone data-only adapter exports before reducer closures are created. */

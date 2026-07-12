@@ -803,6 +803,33 @@ export async function fetchRemoteText(
   throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
 }
 
+export interface CustomSourceResult {
+  id: string
+  status: 'success' | 'failed'
+  value?: Record<string, any>
+  error?: unknown
+}
+
+async function settleCustomSources(items: Array<{ id: string, load: () => Promise<Record<string, any> | undefined> }>): Promise<CustomSourceResult[]> {
+  return Promise.all(items.map(async ({ id, load }) => {
+    try {
+      return { id, status: 'success' as const, value: (await load()) || {} }
+    }
+    catch (error) {
+      return { id, status: 'failed' as const, error }
+    }
+  }))
+}
+
+export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
+  const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
+  const epoch = sourceEpoch
+  return settleCustomSources(uris.map(uri => ({
+    id: `http:${uri}`,
+    load: () => fetchFromRemoteUrlsInternal([uri], epoch),
+  })))
+}
+
 export function fetchFromRemoteUrls() {
   const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
   const key = getSourceTaskKey('http', uris)
@@ -899,6 +926,19 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
   }
 }
 
+export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
+  const uris = (getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[] | undefined) || []
+  const epoch = sourceEpoch
+  return settleCustomSources(uris.map((item) => {
+    const name = typeof item === 'string' ? item : item.name
+    const resource = typeof item === 'string' ? 'index.cjs' : item.resource || 'index.cjs'
+    return {
+      id: `npm:${name}::${resource}`,
+      load: () => fetchFromRemoteNpmUrlsInternal([item], epoch),
+    }
+  }))
+}
+
 export function fetchFromRemoteNpmUrls() {
   const uris = (getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[] | undefined) || []
   const key = getSourceTaskKey('npm', uris)
@@ -989,6 +1029,16 @@ export function resolveLocalAdapterPath(workspaceRoot: string, configuredUri: st
   const target = path.resolve(root, configuredUri)
   const relative = path.relative(root, target)
   return relative.startsWith('..') || path.isAbsolute(relative) ? undefined : target
+}
+
+export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomSourceResult[]> {
+  const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
+  const epoch = sourceEpoch
+  const root = workspaceRoot || getRootPath() || ''
+  return settleCustomSources(uris.map(configuredUri => ({
+    id: `local:${resolveLocalAdapterPath(root, configuredUri) || configuredUri}`,
+    load: () => fetchFromLocalUrisInternal([configuredUri], epoch, workspaceRoot),
+  })))
 }
 
 export function fetchFromLocalUris(workspaceRoot?: string) {

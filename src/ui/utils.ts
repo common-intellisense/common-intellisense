@@ -52,7 +52,7 @@ function normalizeRenderContext(input?: CompletionRenderInput): CompletionRender
 function isVisibleForVersion(value: { version?: string } | undefined, installedVersion?: string, adapterMajor?: string) {
   if (!value)
     return true
-  const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
+  const version = typeof value.version === 'string' ? value.version.match(/\d+\.\d+\.\d+/)?.[0] : undefined
   if (!version)
     return true
   if (installedVersion)
@@ -379,7 +379,7 @@ export function propsReducer(options: PropsOptions) {
       // 过滤在某个版本才增加的新事件
       const filterEvents = localVersion
         ? localEvents.filter((event) => {
-            const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
+            const version = typeof event.version === 'string' ? event.version.match(/\d+\.\d+\.\d+/)?.[0] : undefined
             return !(version && compareVersion(version, localVersion!) === 1)
           })
         : localEvents
@@ -496,7 +496,8 @@ export function propsReducer(options: PropsOptions) {
 
         documentation.appendMarkdown(details.join('\n\n'))
         const hover = createHover(documentation)
-        return proxyCreateCompletionItem({ content: expose.name, snippet: expose.detail.startsWith('()') ? `${expose.name}()` : expose.name, detail, documentation, type: 1, sortText: 'a', preselect: true, params: uiName, hover })
+        const exposedDetail = typeof expose.detail === 'string' ? expose.detail : ''
+        return proxyCreateCompletionItem({ content: expose.name, snippet: exposedDetail.startsWith('()') ? `${expose.name}()` : expose.name, detail: exposedDetail, documentation, type: 1, sortText: 'a', preselect: true, params: uiName, hover })
       }))
     }
 
@@ -1204,7 +1205,9 @@ async function getSuggestionsTemplateStr(content: any, map: any, index: number, 
   return `$${++index}`
 }
 
-function findValue(parent: any, item: string) {
+function findValue(parent: any, item: unknown) {
+  if (typeof item !== 'string' || !item.includes('.'))
+    return ['', '']
   let p = parent
   const name = item.split('.').slice(0, -1).join('.')
   const prop = item.split('.').slice(-1)[0]
@@ -1212,14 +1215,14 @@ function findValue(parent: any, item: string) {
   const prefixKey = prop
   outerLoop: while (p) {
     if (p.tag === name) {
-      const props = p.props
+      const props = Array.isArray(p.props) ? p.props : []
       if (props.length) {
         for (const p of props) {
-          if (p.name === 'bind' && p.arg && p.arg.content === prop) {
+          if (p?.name === 'bind' && p.arg?.content === prop && typeof p.exp?.content === 'string') {
             prefix = p.exp.content
             break outerLoop
           }
-          else if (p.name === prop) {
+          else if (p?.name === prop && typeof p.value?.content === 'string') {
             prefix = p.value.content
             break outerLoop
           }

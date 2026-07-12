@@ -107,6 +107,21 @@ export default {}
     expect(missing.source).toBe('./fixtures-dyn/Missing.vue')
     expect(missing.component).toBeUndefined()
 
+    const missingAliasCode = `import { Foo as LocalFoo } from './fixtures-dyn/Missing.vue'`
+    const missingAlias = await resolveImportedComponent(
+      'LocalFoo',
+      getUiDeps(missingAliasCode) || {},
+      { Foo: { lib: 'other-ui', marker: 'wrong' } } as any,
+      new Map(),
+      {},
+      [],
+      new Map(),
+      getImportDeps(missingAliasCode),
+      path.join(process.cwd(), 'test', 'App.vue'),
+    )
+    expect(missingAlias.source).toBe('./fixtures-dyn/Missing.vue')
+    expect(missingAlias.component).toBeUndefined()
+
     await expect(resolveImportedComponent(
       'Button',
       { Button: '@/fixtures-dyn/AppButton.vue' },

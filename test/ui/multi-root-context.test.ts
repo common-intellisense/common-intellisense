@@ -29,9 +29,9 @@ vi.mock('@vscode-use/utils', () => ({
 }))
 vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchOfficial,
-  fetchFromLocalUris: vi.fn(async () => ({})),
-  fetchFromRemoteNpmUrls: vi.fn(async () => ({})),
-  fetchFromRemoteUrls: vi.fn(async () => ({})),
+  fetchLocalSourceResults: vi.fn(async () => []),
+  fetchRemoteNpmSourceResults: vi.fn(async () => []),
+  fetchRemoteUrlSourceResults: vi.fn(async () => []),
   getLocalCache: Promise.resolve('done'),
   writeLocalCache: vi.fn(async () => {}),
 }))

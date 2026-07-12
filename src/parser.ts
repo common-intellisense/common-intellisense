@@ -978,7 +978,9 @@ export async function detectSlots(documentOrCompletions: vscode.TextDocument | a
 
 export function registerCodeLensProviderFn() {
   const isZh = getLocale().includes('zh')
-  return registerCodeLensProvider(['vue', 'javascriptreact', 'typescriptreact', 'typescript'], {
+  // Slot edits currently emit Vue/Vine template syntax. Keep the TypeScript
+  // selector only for `.vine.ts`; React requires framework-specific edits.
+  return registerCodeLensProvider(['vue', 'typescript'], {
     onDidChangeCodeLenses: codeLensEmitter.event,
     provideCodeLenses(document: vscode.TextDocument) {
       const languageId = document.languageId
@@ -1101,13 +1103,6 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
       return r
     })) as any
   }
-  else if (['javascriptreact', 'typescriptreact'].includes(document.languageId)) {
-    const children = findAllJsxElements(code)
-    return [{
-      children: await findUiTag(children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
-      offset: 0,
-    }]
-  }
   return []
 }
 const originTag = ['div', 'span', 'ul', 'li', 'ol', 'p', 'main', 'header', 'footer', 'template', 'img', 'aside', 'body', 'a', 'video', 'table', 'th', 'tr', 'td', 'form', 'input', 'label', 'button', 'article', 'section']
@@ -1144,18 +1139,21 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
     }
 
     let target: any
-    for (const candidate of importedTag.candidates) {
-      target = localSource
-        ? await findDynamicComponent(candidate, sourceContext?.localDeps || uiDeps, UiCompletions, prefix, undefined, sourceContext?.currentDocumentPath, true, sourceContext?.workspaceRoot)
-        : source
+    if (localSource) {
+      target = await resolveLocalWrappedComponent(source!, UiCompletions, prefix, sourceContext?.currentDocumentPath, sourceContext?.workspaceRoot)
+    }
+    else {
+      for (const candidate of importedTag.candidates) {
+        target = source
           ? await findDynamicComponent(candidate, {}, scopedCompletions, prefix, normalizedSource)
           : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
             || scopedCompletions[candidate]
             || await findDynamicComponent(candidate, {}, scopedCompletions, prefix)
-      const scope = source && sourceContext && !localSource ? getSourceScope(sourceContext, source) : undefined
-      if (target && (localSource || sourceScopeAccepts(scope, target.lib)))
-        break
-      target = undefined
+        const scope = source && sourceContext ? getSourceScope(sourceContext, source) : undefined
+        if (target && sourceScopeAccepts(scope, target.lib))
+          break
+        target = undefined
+      }
     }
 
     // An explicit import source is authoritative. Never fall back to a same-name
@@ -1491,6 +1489,17 @@ export async function resolveLocalComponentModule(url: string, currentFileUrl?: 
     }
     catch {}
   }
+}
+
+export async function resolveLocalWrappedComponent(source: string, UiCompletions: PropsConfig, prefix: string[], currentFileUrl?: string, workspaceRoot?: string) {
+  const absoluteUrl = await resolveLocalComponentModule(source, currentFileUrl, workspaceRoot)
+  if (!absoluteUrl)
+    return
+  try {
+    const tag = await getTemplateParentElementName(absoluteUrl)
+    return tag ? findDynamic(tag, UiCompletions, prefix) : undefined
+  }
+  catch {}
 }
 
 export async function findDynamicComponent(name: string, deps: Record<string, string>, UiCompletions: PropsConfig, prefix: string[], from?: string, currentFileUrl?: string, preferDependency = false, workspaceRoot?: string) {

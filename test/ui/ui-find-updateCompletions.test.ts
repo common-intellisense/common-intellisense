@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const resolveInstalledPackageVersion = vi.fn(async () => undefined)
-const fetchFromLocalUris = vi.fn(async () => ({}))
+const fetchFromLocalUris = vi.fn(async (_root?: string) => ({}))
 const writeLocalCache = vi.fn(async () => {})
 const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => {
   const uiName = options.uiName
@@ -26,9 +26,9 @@ vi.mock('../../src/services/package-version', async importOriginal => ({
 vi.mock('../../src/services/fetch', () => ({
   cacheFetch: new Map(),
   fetchFromCommonIntellisense,
-  fetchFromLocalUris,
-  fetchFromRemoteNpmUrls: vi.fn(async () => ({})),
-  fetchFromRemoteUrls: vi.fn(async () => ({})),
+  fetchLocalSourceResults: async (root?: string) => [{ id: 'local:test', status: 'success', value: await fetchFromLocalUris(root) }],
+  fetchRemoteNpmSourceResults: vi.fn(async () => []),
+  fetchRemoteUrlSourceResults: vi.fn(async () => []),
   getLocalCache: Promise.resolve('done'),
   localCacheUri: '/tmp/common-intellisense-mapping-test.json',
   writeLocalCache,

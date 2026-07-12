@@ -7,7 +7,7 @@ import { createLog, getCurrentFileUrl, getRootPath, watchFile } from '@vscode-us
 import { findUp } from 'find-up'
 import semver from 'semver'
 import { UINames as configUINames } from '../constants'
-import { fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, writeLocalCache } from '../services/fetch'
+import { fetchFromCommonIntellisense, fetchLocalSourceResults, fetchRemoteNpmSourceResults, fetchRemoteUrlSourceResults, getLocalCache, writeLocalCache } from '../services/fetch'
 import type { ComponentSourceScope } from '../services/component-resolver'
 import { findComponentSourceScope, getPackageSource } from '../services/component-resolver'
 import { clearPackageVersionCache, resolveInstalledPackageVersion } from '../services/package-version'
@@ -24,7 +24,7 @@ interface ContextModel {
   sourceScopes: Map<string, ComponentSourceScope>
 }
 
-type CustomSourceSnapshots = Array<Record<string, any> | undefined>
+type CustomSourceSnapshots = Map<string, Record<string, any>>
 
 export interface PackageContext {
   cwd: string
@@ -327,7 +327,7 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
       if (hadOfficialData && !hasRefreshedOfficialData)
         throw new Error('No official adapters were refreshed')
       refreshed.customSourcesCheckedAt = registered.customSourcesCheckedAt
-      refreshed.customSourceSnapshots = [...registered.customSourceSnapshots]
+      refreshed.customSourceSnapshots = new Map(registered.customSourceSnapshots)
       const composed = await composeContextFromSnapshots(refreshed, refreshed.customSourceSnapshots)
       const latest = contexts.get(contextKey)
       if (registryEpoch !== expectedEpoch || latest !== registered || generations.get(contextKey) !== context.generation)
@@ -501,7 +501,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     currentPkgUiNames: availableNames,
     ...cloneModel(officialModel),
     officialModel,
-    customSourceSnapshots: Array.from({ length: 3 }),
+    customSourceSnapshots: new Map(),
   }
 }
 
@@ -515,50 +515,79 @@ function startTrackedContextEnhancements(context: PackageContext, expectedEpoch:
 
 function startContextEnhancements(context: PackageContext, expectedEpoch: number, onSettled?: () => void) {
   const loaders = [
-    () => fetchFromLocalUris(context.workspaceRoot),
-    fetchFromRemoteUrls,
-    fetchFromRemoteNpmUrls,
+    { prefix: 'local:', load: () => fetchLocalSourceResults(context.workspaceRoot) },
+    { prefix: 'http:', load: fetchRemoteUrlSourceResults },
+    { prefix: 'npm:', load: fetchRemoteNpmSourceResults },
   ]
-  const sourceResults: CustomSourceSnapshots = [...context.customSourceSnapshots]
-  let publishQueue: Promise<unknown> = Promise.resolve()
+  const sourceResults: CustomSourceSnapshots = new Map(context.customSourceSnapshots)
+  let publishQueue: Promise<void> = Promise.resolve()
+  let publishedAny = false
+  let loaderFailed = false
+  let publicationFailed = false
 
-  let settled = 0
-  loaders.forEach((loader, index) => {
-    void Promise.resolve()
-      .then(loader)
-      .then((exports) => {
-        // A successful empty result is a replacement snapshot and removes data
-        // previously published by this source. Rejections retain the old one.
-        sourceResults[index] = exports || {}
-        // Serialize publications, but never source loading. Rebuild from the
-        // official baseline in fixed loader order so completion timing cannot
-        // change collision precedence.
-        publishQueue = publishQueue
-          .then(() => publishContextEnhancement(context, expectedEpoch, sourceResults))
-          .catch(error => logger.error(`custom source enhancement failed: ${String(error)}`))
-      })
-      .catch(error => logger.error(`custom source failed: ${String(error)}`))
-      .finally(() => {
-        settled++
-        if (settled === loaders.length) {
-          const current = contexts.get(context.pkgPath || context.cwd)
-          if (registryEpoch === expectedEpoch && current?.generation === context.generation && current.officialCheckedAt === context.officialCheckedAt)
-            current.customSourcesCheckedAt = Date.now()
-          onSettled?.()
+  const loaderTasks = loaders.map(({ prefix, load }) => Promise.resolve()
+    .then(load)
+    .then((results) => {
+      const previous = new Map(sourceResults)
+      for (const id of sourceResults.keys()) {
+        if (id.startsWith(prefix))
+          sourceResults.delete(id)
+      }
+      for (const result of results) {
+        if (result.status === 'success')
+          sourceResults.set(result.id, result.value || {})
+        else if (previous.has(result.id))
+          sourceResults.set(result.id, previous.get(result.id)!)
+        if (result.status === 'failed') {
+          loaderFailed = true
+          logger.error(`custom source failed [${result.id}]: ${String(result.error)}`)
+        }
+      }
+      publishQueue = publishQueue.then(async () => {
+        try {
+          const published = await publishContextEnhancement(context, expectedEpoch, sourceResults)
+          publishedAny ||= !!published
+        }
+        catch (error) {
+          publicationFailed = true
+          logger.error(`custom source enhancement failed: ${String(error)}`)
         }
       })
-  })
+    })
+    .catch((error) => {
+      loaderFailed = true
+      logger.error(`custom source loader failed: ${String(error)}`)
+    }))
+
+  void Promise.allSettled(loaderTasks)
+    .then(async () => {
+      // Every fulfilled loader has enqueued its publication before its task
+      // settles, so this waits for the complete, latest publication queue.
+      await publishQueue
+      const current = contexts.get(context.pkgPath || context.cwd)
+      if (!loaderFailed
+        && !publicationFailed
+        && publishedAny
+        && registryEpoch === expectedEpoch
+        && current?.generation === context.generation
+        && current.officialCheckedAt === context.officialCheckedAt) {
+        current.customSourcesCheckedAt = Date.now()
+      }
+    })
+    .finally(() => onSettled?.())
 }
 
 async function composeContextFromSnapshots(context: PackageContext, snapshots: CustomSourceSnapshots) {
-  const snapshotCopy: CustomSourceSnapshots = [...snapshots]
+  const snapshotCopy: CustomSourceSnapshots = new Map(snapshots)
   const composed: PackageContext = {
     ...context,
     ...cloneModel(context.officialModel),
     customSourceSnapshots: snapshotCopy,
   }
 
-  for (const [sourceIndex, exports] of snapshotCopy.entries()) {
+  const sourceOrder = (id: string) => id.startsWith('local:') ? 0 : id.startsWith('http:') ? 1 : 2
+  const orderedSnapshots = [...snapshotCopy.entries()].sort(([a], [b]) => sourceOrder(a) - sourceOrder(b) || a.localeCompare(b))
+  for (const [sourceId, exports] of orderedSnapshots) {
     if (!exports)
       continue
     for (const key of Object.keys(exports)) {
@@ -567,7 +596,7 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
           const components = exports[key]?.()
           if (components) {
             composed.cacheMap.set(key, components)
-            mergeComponents(composed.optionsComponents, components, {}, [], key.slice(0, -10), `custom:${sourceIndex}:${key}`)
+            mergeComponents(composed.optionsComponents, components, {}, [], key.slice(0, -10), `custom:${sourceId}:${key}`)
           }
         }
         else {
@@ -608,7 +637,7 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
   if (registryEpoch !== expectedEpoch || registered !== current || registered.generation !== context.generation || registered.officialCheckedAt !== context.officialCheckedAt || generation !== context.generation)
     return
   enhanced.revision = registered.revision + 1
-  enhanced.customSourcesCheckedAt = Date.now()
+  enhanced.customSourcesCheckedAt = registered.customSourcesCheckedAt
   contexts.set(contextKey, enhanced)
   applyContext(enhanced)
   notifyContextUpdated(enhanced)
