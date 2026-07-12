@@ -140,6 +140,7 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
       map,
       lib: pkgName,
       isReact,
+      isSeperatorByHyphen: !isReact,
     })
     const propsConfig = await propsReducer({
       uiName,

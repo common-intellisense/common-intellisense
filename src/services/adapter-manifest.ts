@@ -133,6 +133,8 @@ function normalizeComponent(value: unknown, path: string) {
     invalid(`${path}.props`)
   const props: PlainRecord = {}
   for (const [name, prop] of Object.entries(value.props || {})) {
+    if (!name.trim() || (name.startsWith(':') && name.length < 2))
+      invalid(`${path}.props.${name || '<empty>'}`)
     if (!isPlainRecord(prop))
       invalid(`${path}.props.${name}`)
     props[name] = normalizeProp(prop, `${path}.props.${name}`)

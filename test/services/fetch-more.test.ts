@@ -70,6 +70,22 @@ describe('fetch service additional tests (mocked)', () => {
     await useMockRemoteRequester(mod)
   })
 
+  it('does not disguise an official failure as an unrelated local adapter success', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    vi.mocked(npm.fetchAndExtractPackage).mockRejectedValueOnce(new Error('registry offline'))
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockRejectedValueOnce(new Error('registry offline'))
+    fetchFromTypesMock.mockResolvedValue(undefined)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromCommonIntellisense('button', {
+      pkgName: 'button',
+      uiName: 'button',
+      resolveFrom: '/workspace/package.json',
+    })).resolves.toBeUndefined()
+  })
+
   it('fetchFromCommonIntellisense returns parsed exports and caches the result', async () => {
     const mod = await import('../../src/services/fetch')
     if (mod.cacheFetch && typeof mod.cacheFetch.clear === 'function')

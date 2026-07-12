@@ -43,7 +43,7 @@ describe('package-version service', () => {
     await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.7')
   })
 
-  it('returns refreshed versions after clearing the cache', async () => {
+  it('refreshes cached versions when the installed package manifest changes', async () => {
     const pkgDir = path.join(tempDir, 'node_modules', 'element-plus')
     const manifestPath = path.join(pkgDir, 'package.json')
     await fsp.mkdir(pkgDir, { recursive: true })
@@ -58,10 +58,6 @@ describe('package-version service', () => {
       name: 'element-plus',
       version: '2.9.8',
     }))
-
-    await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.7')
-
-    clearPackageVersionCache()
 
     await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.8')
   })

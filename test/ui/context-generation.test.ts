@@ -213,7 +213,7 @@ describe('package context generations', () => {
     let now = 3_000_000
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
     findUpMock.mockResolvedValue('/workspace/package.json')
-    fetchMock.mockResolvedValue({})
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
     localFetchMock
       .mockResolvedValueOnce({ CustomProps: () => ({ OldButton: { source: 'old' } }) })
       .mockResolvedValueOnce({ CustomProps: () => ({ NewButton: { source: 'new' } }) })
@@ -351,7 +351,7 @@ describe('package context generations', () => {
     let now = 1_000_000
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
     findUpMock.mockResolvedValue('/workspace/package.json')
-    fetchMock.mockResolvedValue({})
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
     remoteFetchMock.mockResolvedValue({})
     const mod = await import('../../src/ui/ui-find')
     const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any

@@ -240,7 +240,8 @@ export async function activate(context: vscode.ExtensionContext) {
     const code = document.getText()
     if (document.isClosed)
       return
-    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: getImportDeps(code), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
+    const analysis = getDocumentAnalysis(document, code)
+    await detectSlots(document, packageContext.uiCompletions, analysis.getUiDeps(), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: analysis.getImportDeps(), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
   }
   const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
     await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
@@ -514,7 +515,8 @@ export async function activate(context: vscode.ExtensionContext) {
         const code = document.getText()
         if (document.isClosed)
           return
-        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: getImportDeps(code), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
+        const analysis = getDocumentAnalysis(document, code)
+        await detectSlots(document, packageContext.uiCompletions, analysis.getUiDeps(), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: analysis.getImportDeps(), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
       }
       void analyze().catch(error => logger.error(`Slot analysis failed: ${String(error)}`))
     }, 200))

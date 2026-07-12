@@ -1615,16 +1615,67 @@ async function getTemplateParentElementName(url: string) {
   }
   if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extension)) {
     const plugins: any[] = extension === '.ts' || extension === '.tsx' ? ['typescript', 'jsx'] : ['jsx']
-    const ast = babelParse(code, { sourceType: 'module', plugins })
-    let tag: string | undefined
-    traverse(ast as any, {
-      JSXElement(path: any) {
-        if (!tag) {
-          tag = getJsxElementName(path.node.openingElement?.name)
-          path.stop()
+    const ast = babelParse(code, { sourceType: 'module', plugins }) as any
+    const programBody = ast.program?.body || []
+    const defaultExport = programBody.find((node: any) => node.type === 'ExportDefaultDeclaration')?.declaration
+
+    const resolveIdentifier = (name: string) => {
+      for (const node of programBody) {
+        if (node.type === 'FunctionDeclaration' && node.id?.name === name)
+          return node
+        if (node.type !== 'VariableDeclaration')
+          continue
+        const declaration = node.declarations?.find((item: any) => item.id?.type === 'Identifier' && item.id.name === name)
+        if (declaration)
+          return declaration.init
+      }
+    }
+    const collectReturnedJsx = (node: any, results: any[]): void => {
+      if (!node)
+        return
+      if (node.type === 'JSXElement') {
+        results.push(node)
+        return
+      }
+      if (node.type === 'Identifier') {
+        collectReturnedJsx(resolveIdentifier(node.name), results)
+        return
+      }
+      if (['TSAsExpression', 'TSTypeAssertion', 'TSNonNullExpression', 'ParenthesizedExpression'].includes(node.type)) {
+        collectReturnedJsx(node.expression, results)
+        return
+      }
+      if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression' || node.type === 'FunctionDeclaration') {
+        collectReturnedJsx(node.body, results)
+        return
+      }
+      if (node.type === 'ReturnStatement') {
+        collectReturnedJsx(node.argument, results)
+        return
+      }
+      if (node.type === 'ConditionalExpression') {
+        collectReturnedJsx(node.consequent, results)
+        collectReturnedJsx(node.alternate, results)
+        return
+      }
+      if (node.type === 'BlockStatement') {
+        for (const statement of node.body || []) {
+          // Nested declarations are not part of the default component's render path.
+          if (statement.type === 'FunctionDeclaration')
+            continue
+          collectReturnedJsx(statement, results)
         }
-      },
-    })
+        return
+      }
+      if (node.type === 'IfStatement') {
+        collectReturnedJsx(node.consequent, results)
+        collectReturnedJsx(node.alternate, results)
+      }
+    }
+
+    const roots: any[] = []
+    collectReturnedJsx(defaultExport, roots)
+    const tag = roots.length === 1 ? getJsxElementName(roots[0].openingElement?.name) : undefined
     return cache(tag)
   }
   if (extension === '.svelte') {

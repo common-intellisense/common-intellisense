@@ -14,6 +14,7 @@ const tsxWrapper = path.join(fixturesDir, 'TsxButton.tsx')
 const svelteWrapper = path.join(fixturesDir, 'SvelteButton.svelte')
 const _jsWrappers = ['JsButton.js', 'MjsButton.mjs', 'CjsButton.cjs'].map(name => path.join(fixturesDir, name))
 const _directoryJsWrapper = path.join(fixturesDir, 'DirectoryJsButton', 'index.js')
+const defaultRootWrapper = path.join(fixturesDir, 'DefaultRootButton.tsx')
 
 beforeAll(async () => {
   await fsp.mkdir(fixturesDir, { recursive: true })
@@ -27,6 +28,7 @@ beforeAll(async () => {
     await fsp.writeFile(wrapper, `export default () => <ElButton />`, 'utf8')
   await fsp.mkdir(path.dirname(_directoryJsWrapper), { recursive: true })
   await fsp.writeFile(_directoryJsWrapper, `export default () => <ElButton />`, 'utf8')
+  await fsp.writeFile(defaultRootWrapper, `const preview = <Spinner />\nconst Wrapped = () => <ElButton />\nexport default Wrapped`, 'utf8')
   // ensure getCurrentFileUrl resolves into the repo so relative imports point to test dir
   try {
     ;(vsutils as any).getCurrentFileUrl = () => path.join(process.cwd(), 'test', 'index.html')
@@ -44,6 +46,7 @@ afterAll(async () => {
     for (const wrapper of _jsWrappers)
       await fsp.rm(wrapper)
     await fsp.rm(path.dirname(_directoryJsWrapper), { recursive: true })
+    await fsp.rm(defaultRootWrapper)
     await fsp.rmdir(fixturesDir)
   }
   catch {}
@@ -144,7 +147,7 @@ export default {}
       path.join(process.cwd(), 'test'),
     )).resolves.toMatchObject({ component: button, source: '@/fixtures-dyn/AppButton.vue' })
 
-    for (const source of ['./fixtures-dyn/AppButton', './fixtures-dyn/AppButton.vue?component', './fixtures-dyn/DirectoryButton', './fixtures-dyn/TsxButton', './fixtures-dyn/SvelteButton', './fixtures-dyn/JsButton.js', './fixtures-dyn/JsButton', './fixtures-dyn/MjsButton.mjs', './fixtures-dyn/CjsButton.cjs', './fixtures-dyn/DirectoryJsButton', '~/fixtures-dyn/JsButton.js']) {
+    for (const source of ['./fixtures-dyn/AppButton', './fixtures-dyn/AppButton.vue?component', './fixtures-dyn/DirectoryButton', './fixtures-dyn/TsxButton', './fixtures-dyn/SvelteButton', './fixtures-dyn/JsButton.js', './fixtures-dyn/JsButton', './fixtures-dyn/MjsButton.mjs', './fixtures-dyn/CjsButton.cjs', './fixtures-dyn/DirectoryJsButton', './fixtures-dyn/DefaultRootButton.tsx', '~/fixtures-dyn/JsButton.js']) {
       await expect(resolveImportedComponent(
         'Button',
         { Button: source },

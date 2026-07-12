@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeAdapterManifestExports } from '../../src/services/adapter-manifest'
+import { propsReducer } from '../../src/ui/utils'
 
 describe('data-only adapter manifest validation', () => {
   it('accepts valid component and props exports', () => {
@@ -34,6 +35,15 @@ describe('data-only adapter manifest validation', () => {
     expect(exportsData.demoComponents.directives[0].params[0]).toMatchObject({ name: 'delay', type: 'number' })
   })
 
+  it('keeps reducer execution safe when a configured prefix is longer than the component name', async () => {
+    const exportsData = normalizeAdapterManifestExports({
+      demo: { uiName: 'demo', lib: 'demo', prefix: 'VeryLongPrefix', map: [{ name: 'A', props: { value: { type: 'string' } } }] },
+    }, 'fixture') as any
+    const reduced = await propsReducer(exportsData.demo)
+    expect(reduced.A).toBeDefined()
+    expect(reduced.A.completions[0]({ languageId: 'vue', framework: 'vue', syntax: 'template', uri: '' })).toBeTruthy()
+  })
+
   it.each([
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { disabled: null } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { type: 42 } } }] },
@@ -42,6 +52,7 @@ describe('data-only adapter manifest validation', () => {
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { related: [42] } } }] },
     { lib: 'demo', directives: {}, map: [['Demo', 'Demo']] },
     { lib: 'demo', directives: [{ name: 'loading', params: [{ name: 'delay' }] }], map: [['Demo', 'Demo']] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { ':': { type: 'string' } } }] },
   ])('rejects malformed props before reducers are created', (value) => {
     expect(() => normalizeAdapterManifestExports({ demo: value }, 'fixture')).toThrow(/Invalid adapter manifest field/)
   })

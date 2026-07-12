@@ -4,7 +4,14 @@ import path from 'node:path'
 import process from 'node:process'
 import { getRootPath } from '@vscode-use/utils'
 
-const packageVersionCache = new Map<string, string>()
+interface VersionCacheEntry {
+  version: string
+  packageJsonPath: string
+  mtimeMs: number
+  size: number
+}
+
+const packageVersionCache = new Map<string, VersionCacheEntry>()
 
 function getBasePath(resolveFrom?: string) {
   if (!resolveFrom)
@@ -21,8 +28,16 @@ export async function resolveInstalledPackageVersion(pkgName: string, resolveFro
 
   const basePath = getBasePath(resolveFrom)
   const cacheKey = `${basePath}::${pkgName}`
-  if (packageVersionCache.has(cacheKey))
-    return packageVersionCache.get(cacheKey)
+  const cached = packageVersionCache.get(cacheKey)
+  if (cached) {
+    try {
+      const stat = await fsp.stat(cached.packageJsonPath)
+      if (stat.mtimeMs === cached.mtimeMs && stat.size === cached.size)
+        return cached.version
+    }
+    catch {}
+    packageVersionCache.delete(cacheKey)
+  }
 
   const requireBase = path.resolve(basePath, 'package.json')
   const require = createRequire(requireBase)
@@ -36,10 +51,14 @@ export async function resolveInstalledPackageVersion(pkgName: string, resolveFro
   }
 
   try {
-    const pkgJson = JSON.parse(await fsp.readFile(pkgJsonPath, 'utf-8'))
+    const [content, stat] = await Promise.all([
+      fsp.readFile(pkgJsonPath, 'utf-8'),
+      fsp.stat(pkgJsonPath),
+    ])
+    const pkgJson = JSON.parse(content)
     const version = typeof pkgJson?.version === 'string' ? pkgJson.version : undefined
     if (version)
-      packageVersionCache.set(cacheKey, version)
+      packageVersionCache.set(cacheKey, { version, packageJsonPath: pkgJsonPath, mtimeMs: stat.mtimeMs, size: stat.size })
     return version
   }
   catch {}

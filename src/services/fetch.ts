@@ -612,10 +612,10 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
         logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
         return fallback
       }
-      const fallbackRoot = options?.resolveFrom
-        ? path.extname(options.resolveFrom) ? path.dirname(options.resolveFrom) : options.resolveFrom
-        : undefined
-      return fetchFromLocalUris(fallbackRoot)
+      // Workspace-local adapters are custom sources and are loaded independently
+      // by the package enhancement pipeline. Never treat unrelated local exports
+      // as a successful official adapter fallback.
+      return undefined
       // todo：增加重试机制
     }
   })()

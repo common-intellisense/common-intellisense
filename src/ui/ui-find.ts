@@ -334,7 +334,7 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
   context.officialNextRetryAt = now + sourceRetryDelays[0]
   sourceRefreshes.add(refreshKey)
   const expectedEpoch = registryEpoch
-  void buildContext(context.cwd, extensionContext, detectSlots, context.generation, workspaceRoot)
+  void buildContext(context.cwd, extensionContext, detectSlots, context.generation, workspaceRoot, true)
     .then(async (refreshed) => {
       const registered = contexts.get(contextKey)
       if (!refreshed || registryEpoch !== expectedEpoch || !registered || registered.generation !== context.generation || registered.officialCheckedAt !== context.officialCheckedAt || generations.get(contextKey) !== context.generation)
@@ -384,13 +384,13 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
   }
 }
 
-async function buildContext(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, generation: number, workspaceRoot?: string) {
+async function buildContext(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, generation: number, workspaceRoot?: string, refreshDiscovery = false) {
   const onChange = () => {
     invalidatePackageContext(cwd)
     void ensureContextForPath(cwd, extensionContext, detectSlots, false, workspaceRoot)
       .catch(error => logger.error(`Failed to rebuild package context: ${String(error)}`))
   }
-  const discovered = urlCache.get(cwd) || await findPkgUI(cwd, onChange, workspaceRoot)
+  const discovered = (!refreshDiscovery && urlCache.get(cwd)) || await findPkgUI(cwd, onChange, workspaceRoot)
   if (!discovered)
     return
   urlCache.set(cwd, discovered)
@@ -480,7 +480,8 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
         name.replace(/([A-Z])/g, '-$1').toLowerCase(),
         pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath, installedVersion: pkgInfo.installedVersion, adapterMajor: pkgInfo.adapterMajor } : { uiName: name, resolveFrom: pkgPath },
       )
-      return { name, pkgInfo, exports, failed: !exports }
+      const hasExpectedExport = !!(exports?.[name] || exports?.[`${name}Components`])
+      return { name, pkgInfo, exports, failed: !hasExpectedExport }
     }
     catch (error) {
       logger.error(`fetch fetchFromCommonIntellisense [${name}] error: ${String(error)}`)

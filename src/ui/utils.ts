@@ -304,14 +304,20 @@ export function propsReducer(options: PropsOptions) {
           }
         }
         else if (key.startsWith(':')) {
+          const bareKey = key.slice(1)
+          if (!bareKey)
+            return
           if (isVue) {
             const _key = key.replace('v-model', 'model')
-            content = `${key.replace(':v-model', 'v-model')}="${getComponentTagName(item.name)}${_key[1].toUpperCase()}${toCamel(_key.slice(2))}"`
+            const keyHead = _key[1]
+            if (!keyHead)
+              return
+            content = `${key.replace(':v-model', 'v-model')}="${getComponentTagName(item.name)}${keyHead.toUpperCase()}${toCamel(_key.slice(2))}"`
             snippet = `${key.replace(':v-model', 'v-model')}="\${1|${generateSnippetNameOptions(item, _key, prefix)}|}"$2`
           }
           else {
-            content = `${key.slice(1)}={${getComponentTagName(item.name)}${key[1].toUpperCase()}${toCamel(key.slice(2))}}`
-            snippet = `${key.slice(1)}={\${1|${generateSnippetNameOptions(item, key, prefix)}|}}$2`
+            content = `${bareKey}={${getComponentTagName(item.name)}${bareKey[0].toUpperCase()}${toCamel(bareKey.slice(1))}}`
+            snippet = `${bareKey}={\${1|${generateSnippetNameOptions(item, key, prefix)}|}}$2`
           }
         }
         else {
@@ -1110,9 +1116,15 @@ function generateSnippetNameOptions(item: any, keyName: string, prefix: string) 
   if (keyName[0] === ':')
     keyName = keyName.slice(1)
   keyName = toCamel(keyName.replace(/:.*/, ''))
-  const componentName = prefix ? item.name[prefix.length].toLowerCase() + item.name.slice(prefix.length + 1) : item.name
-  const splitNames = componentName.split(/(?=[A-Z])/).map((i: string) => `${i.toLocaleLowerCase()}${keyName[0].toUpperCase()}${keyName.slice(1)}`)
-  const splitNamesReverse = componentName.split(/(?=[A-Z])/).map((i: string) => `${keyName.toLocaleLowerCase()}${i}`)
+  if (!keyName)
+    return ''
+  const itemName = typeof item?.name === 'string' ? item.name : ''
+  const unprefixed = prefix && itemName.startsWith(prefix) && itemName.length > prefix.length
+    ? itemName.slice(prefix.length)
+    : itemName
+  const componentName = unprefixed ? `${unprefixed[0].toLowerCase()}${unprefixed.slice(1)}` : itemName
+  const splitNames = componentName.split(/(?=[A-Z])/).filter(Boolean).map((i: string) => `${i.toLocaleLowerCase()}${keyName[0].toUpperCase()}${keyName.slice(1)}`)
+  const splitNamesReverse = componentName.split(/(?=[A-Z])/).filter(Boolean).map((i: string) => `${keyName.toLocaleLowerCase()}${i}`)
   return [
     keyName,
     `${keyName}Value`,
