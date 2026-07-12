@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const fetchOfficial = vi.hoisted(() => vi.fn(async () => ({})))
+const { fetchOfficial, watchFileMock } = vi.hoisted(() => ({
+  fetchOfficial: vi.fn(async () => ({})),
+  watchFileMock: vi.fn(() => () => {}),
+}))
 
 vi.mock('find-up', () => ({
   findUp: vi.fn(async (_name: string, options: any) => options.cwd.startsWith('/workspace-b')
@@ -25,7 +28,7 @@ vi.mock('@vscode-use/utils', () => ({
   getLocale: () => 'en',
   getRootPath: () => '/workspace-a',
   getConfiguration: () => null,
-  watchFile: () => () => {},
+  watchFile: watchFileMock,
 }))
 vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchOfficial,
@@ -42,7 +45,10 @@ vi.mock('../../src/services/package-version', () => ({
 vi.mock('../../src/type-extract/cache', () => ({ clearTypeCache: vi.fn() }))
 
 describe('multi-root package contexts', () => {
-  beforeEach(() => vi.resetModules())
+  beforeEach(() => {
+    vi.resetModules()
+    watchFileMock.mockClear()
+  })
 
   it('uses each document workspace root for root dependencies', async () => {
     const mod = await import('../../src/ui/ui-find')
@@ -74,6 +80,33 @@ describe('multi-root package contexts', () => {
 
     expect(first?.uis).toEqual([['antd', '5.0.0']])
     expect(second?.uis).toEqual([])
+  })
+
+  it('watches an existing non-monorepo root for a false-to-true transition', async () => {
+    const fs = await import('node:fs/promises')
+    let rootHasWorkspaces = false
+    vi.mocked(fs.default.readFile).mockImplementation(async (file: any) => {
+      if (file === '/workspace-a/package.json') {
+        return JSON.stringify(rootHasWorkspaces
+          ? { workspaces: ['packages/*'], dependencies: { antd: '^5.0.0' } }
+          : { dependencies: { antd: '^5.0.0' } })
+      }
+      return JSON.stringify({ dependencies: {} })
+    })
+    vi.mocked(fs.default.access).mockRejectedValue(new Error('no workspace file'))
+    const onChange = vi.fn()
+    const mod = await import('../../src/ui/ui-find')
+
+    const first = await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', onChange, '/workspace-a')
+    expect(first?.uis).toEqual([])
+    const rootWatch = (watchFileMock.mock.calls as any[][]).find(([file]) => file === '/workspace-a/package.json')
+    expect(rootWatch).toBeDefined()
+
+    rootHasWorkspaces = true
+    rootWatch![1].onChange()
+    expect(onChange).toHaveBeenCalled()
+    const second = await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', onChange, '/workspace-a')
+    expect(second?.uis).toEqual([['antd', '5.0.0']])
   })
 
   it('does not inherit workspace-root dependencies without monorepo metadata', async () => {

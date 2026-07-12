@@ -341,8 +341,8 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
         return
       const hadOfficialData = !!context.officialModel.uiCompletions || context.officialModel.optionsComponents.data.length > 0
       const hasRefreshedOfficialData = !!refreshed.officialModel.uiCompletions || refreshed.officialModel.optionsComponents.data.length > 0
-      if (hadOfficialData && !hasRefreshedOfficialData)
-        throw new Error('No official adapters were refreshed')
+      if (refreshed.officialFailureCount > 0 || (hadOfficialData && !hasRefreshedOfficialData))
+        throw new Error('One or more official adapters failed to refresh')
       refreshed.customSourcesCheckedAt = registered.customSourcesCheckedAt
       refreshed.customLastAttemptAt = registered.customLastAttemptAt
       refreshed.customFailureCount = registered.customFailureCount
@@ -480,7 +480,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
         name.replace(/([A-Z])/g, '-$1').toLowerCase(),
         pkgInfo ? { pkgName: pkgInfo.pkgName, uiName: name, resolveFrom: pkgPath, installedVersion: pkgInfo.installedVersion, adapterMajor: pkgInfo.adapterMajor } : { uiName: name, resolveFrom: pkgPath },
       )
-      return { name, pkgInfo, exports, failed: false }
+      return { name, pkgInfo, exports, failed: !exports }
     }
     catch (error) {
       logger.error(`fetch fetchFromCommonIntellisense [${name}] error: ${String(error)}`)
@@ -488,8 +488,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     }
   }))
 
-  if (uiNames.length && loadedLibraries.every(item => item.failed))
-    throw new Error('No official adapters were refreshed')
+  const officialLoadFailed = uiNames.length > 0 && loadedLibraries.some(item => item.failed)
 
   for (const { name, pkgInfo, exports } of loadedLibraries) {
     if (!exports)
@@ -525,13 +524,13 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     workspaceRoot,
     generation,
     revision: 1,
-    officialCheckedAt: checkedAt,
+    officialCheckedAt: officialLoadFailed ? 0 : checkedAt,
     customSourcesCheckedAt: 0,
     officialLastAttemptAt: checkedAt,
     customLastAttemptAt: 0,
-    officialFailureCount: 0,
+    officialFailureCount: officialLoadFailed ? 1 : 0,
     customFailureCount: 0,
-    officialNextRetryAt: 0,
+    officialNextRetryAt: officialLoadFailed ? checkedAt + getRetryDelay(1) : 0,
     customNextRetryAt: 0,
     uiNames,
     currentPkgUiNames: availableNames,
@@ -861,7 +860,9 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
       onChange()
     }
     mainWatchers.set(pkg, watchFile(pkg, { onChange: invalidate }))
-    if (isMonorepo && rootPath && rootPkgPath && rootPkgPath !== pkg) {
+    // Always watch an existing workspace-root manifest, even before it becomes a
+    // monorepo. Adding `workspaces` to that file must invalidate child contexts.
+    if (rootPath && rootPkgPath && rootPkgPath !== pkg) {
       const cached = rootPkgCache.get(rootPath)!
       if (!cached.stopRoot) {
         cached.stopRoot = watchFile(rootPkgPath, {

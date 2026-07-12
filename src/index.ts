@@ -59,6 +59,21 @@ export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<stri
   return targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue) ? targetValue as PropsConfig : current
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, match => `\\${match}`)
+}
+
+export function hasComponentTag(code: string, name: string, prefix = '') {
+  const rootName = name.split('.')[0]
+  const candidates = new Set([name, rootName])
+  if (prefix) {
+    candidates.add(`${prefix}${rootName}`)
+    candidates.add(`${prefix[0]?.toUpperCase() || ''}${prefix.slice(1)}${rootName}`)
+    candidates.add(`${prefix}-${rootName.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')}`)
+  }
+  return [...candidates].some(candidate => new RegExp(`<\\s*${escapeRegExp(candidate)}(?=[\\s/>.])`).test(code))
+}
+
 export function getRefVariableNames(result: any): string[] {
   const names: unknown[] = Array.isArray(result?.refs)
     ? result.refs.map((ref: string | [string, string]) => Array.isArray(ref) ? ref[0] : ref)
@@ -369,14 +384,17 @@ export async function activate(context: vscode.ExtensionContext) {
       return
     const uri = vscode.Uri.parse(params.document.uri)
     const document = await vscode.workspace.openTextDocument(uri)
-    // Completion commands run after VS Code applies the selected snippet, which
-    // advances the source document by one version. Reject any additional edit.
-    if (document.version < params.document.version || document.version > params.document.version + 1)
+    // The completion list may be filtered for several keystrokes before the
+    // selected snippet is applied. A version delta is therefore not a reliable
+    // freshness check; only reject a document older than the captured request.
+    if (document.version < params.document.version)
       return
     const { data, lib, prefix = '', dynamicLib, importWay = 'specifier' } = params
     if (typeof data?.name !== 'string' || !data.name.trim())
       return
     const code = document.getText()
+    if (!hasComponentTag(code, data.name, prefix))
+      return
     const name = data.name.split('.')[0]
     const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
     const deps = [...getSuggestedImportNames(data.suggestions, prefix, importWay), name]

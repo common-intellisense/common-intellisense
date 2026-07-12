@@ -209,4 +209,23 @@ describe('ui-find updateCompletions', () => {
     expect(fetchFromCommonIntellisense).not.toHaveBeenCalled()
     expect(context.uiNames).toEqual([])
   })
+
+  it('marks a partial official load as failed while keeping successful metadata', async () => {
+    fetchFromCommonIntellisense
+      .mockImplementationOnce((async (_tag: string, options: any) => ({
+        [options.uiName]: () => ({ GoodButton: { completions: [() => []], events: [() => []], methods: [], exposed: [], suggestions: [] } }),
+      })) as any)
+      .mockResolvedValueOnce(undefined as any)
+    const mod = await import('../../src/ui/ui-find')
+
+    const context = await mod.updateCompletions(
+      [['antd', '5.0.0'], ['element-plus', '2.0.0']] as any,
+      { selectedUIs: ['auto'], alias: {}, detectSlots: () => {}, prefix: {}, pkgPath: '/tmp/partial.json' },
+    )
+
+    expect(context.uiCompletions?.GoodButton).toBeDefined()
+    expect(context.officialCheckedAt).toBe(0)
+    expect(context.officialFailureCount).toBe(1)
+    expect(context.officialNextRetryAt).toBeGreaterThan(0)
+  })
 })

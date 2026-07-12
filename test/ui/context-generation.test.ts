@@ -411,6 +411,30 @@ describe('package context generations', () => {
     expect(mod.getContextRegistryStats()).toMatchObject({ contexts: 20, documents: 0 })
   })
 
+  it('backs off an initial undefined official result and retries after 30 seconds', async () => {
+    let now = 4_500_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ antd5: () => ({ Button: { lib: 'antd' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    const initial = await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(initial?.officialFailureCount).toBe(1)
+    expect(initial?.officialCheckedAt).toBe(0)
+    for (let index = 0; index < 100; index++)
+      await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    now += 31_000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toBeDefined())
+    nowSpy.mockRestore()
+  })
+
   it('retains last-known-good official metadata when a stale refresh fails', async () => {
     let now = 5_000_000
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)

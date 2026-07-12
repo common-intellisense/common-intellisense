@@ -1431,11 +1431,43 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRo
 }
 
 const localComponentExtensions = ['.vue', '.ts', '.tsx', '.jsx', '.svelte']
+const maxLocalComponentSize = 4 * 1024 * 1024
+const maxLocalComponentCacheEntries = 20
+const localComponentTagCache = new Map<string, { signature: string, tag?: string }>()
+
+function isSameOrWithinPath(target: string, root: string) {
+  const relative = path.relative(root, target)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function touchLocalComponentCache(key: string, value: { signature: string, tag?: string }) {
+  localComponentTagCache.delete(key)
+  localComponentTagCache.set(key, value)
+  while (localComponentTagCache.size > maxLocalComponentCacheEntries)
+    localComponentTagCache.delete(localComponentTagCache.keys().next().value!)
+}
+
+export function clearLocalComponentCache() {
+  localComponentTagCache.clear()
+}
 
 export async function resolveLocalComponentModule(url: string, currentFileUrl?: string, workspaceRoot?: string) {
-  const base = getAbsoluteUrl(url, currentFileUrl, workspaceRoot)
+  // Provider paths always pass workspaceRoot. Legacy calls are limited to the
+  // current document directory rather than being allowed to read arbitrary files.
+  const effectiveCurrentFile = currentFileUrl || getCurrentFileUrl()
+  const allowedRoot = workspaceRoot || (effectiveCurrentFile ? path.dirname(effectiveCurrentFile) : undefined)
+  if (!allowedRoot)
+    return
+  const base = getAbsoluteUrl(url, effectiveCurrentFile, workspaceRoot)
   if (!base)
     return
+  const lexicalRoot = path.resolve(allowedRoot)
+  if (!isSameOrWithinPath(path.resolve(base), lexicalRoot))
+    return
+  let realRoot: string
+  try { realRoot = await fsp.realpath(lexicalRoot) }
+  catch { return }
+
   const candidates = [base]
   if (!path.extname(base)) {
     candidates.push(...localComponentExtensions.map(extension => `${base}${extension}`))
@@ -1443,9 +1475,12 @@ export async function resolveLocalComponentModule(url: string, currentFileUrl?: 
   }
   for (const candidate of [...new Set(candidates)]) {
     try {
-      const stat = await fsp.stat(candidate)
-      if (stat.isFile())
-        return candidate
+      const realCandidate = await fsp.realpath(candidate)
+      if (!isSameOrWithinPath(realCandidate, realRoot))
+        continue
+      const stat = await fsp.stat(realCandidate)
+      if (stat.isFile() && stat.size <= maxLocalComponentSize)
+        return realCandidate
     }
     catch {}
   }
@@ -1562,8 +1597,22 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
 }
 
 async function getTemplateParentElementName(url: string) {
-  const code = await fsp.readFile(url, 'utf-8')
-  const extension = path.extname(url).toLowerCase()
+  const realUrl = await fsp.realpath(url)
+  const stat = await fsp.stat(realUrl)
+  if (!stat.isFile() || stat.size > maxLocalComponentSize)
+    return
+  const signature = `${stat.mtimeMs}:${stat.size}`
+  const cached = localComponentTagCache.get(realUrl)
+  if (cached?.signature === signature) {
+    touchLocalComponentCache(realUrl, cached)
+    return cached.tag
+  }
+  const code = await fsp.readFile(realUrl, 'utf-8')
+  const extension = path.extname(realUrl).toLowerCase()
+  const cache = (tag?: string) => {
+    touchLocalComponentCache(realUrl, { signature, tag })
+    return tag
+  }
   if (extension === '.tsx' || extension === '.jsx' || extension === '.ts') {
     const ast = babelParse(code, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
     let tag: string | undefined
@@ -1580,7 +1629,7 @@ async function getTemplateParentElementName(url: string) {
   if (extension === '.svelte') {
     const html = getSvelteHtml(code)
     const elements = (html?.children || []).filter((child: any) => child?.name)
-    return elements.length === 1 ? elements[0].name : undefined
+    return cache(elements.length === 1 ? elements[0].name : undefined)
   }
 
   // 如果有defineProps或者props的忽律，交给v-component-prompter处理
@@ -1589,20 +1638,20 @@ async function getTemplateParentElementName(url: string) {
   } = getVueSfcParseResult(code)
 
   if (script?.content && /^\s*props:\s*\{/.test(script.content))
-    return
+    return cache()
   if (scriptSetup?.content && /defineProps\(/.test(scriptSetup.content))
-    return
+    return cache()
   if (!template?.ast?.children?.length)
-    return
+    return cache()
 
   let result = ''
   for (const child of template.ast.children) {
     const node = child as any
     if (node.tag) {
       if (result) // 说明template下不是唯一父节点
-        return
+        return cache()
       result = node.tag
     }
   }
-  return result
+  return cache(result || undefined)
 }

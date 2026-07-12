@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRefMembers, getRefVariableNames, selectScopedCompletions } from '../src/index'
+import { getRefMembers, getRefVariableNames, hasComponentTag, selectScopedCompletions } from '../src/index'
 
 describe('provider safety helpers', () => {
   it('keeps current completions when a multi-UI source has no cache match', () => {
@@ -23,6 +23,12 @@ describe('provider safety helpers', () => {
     expect(getRefVariableNames({ refs: [['button', 'buttonRef'], 'plain'], refsMap: {} })).toEqual(['button', 'plain'])
     expect(getRefVariableNames({ refsMap: { buttonRef: 'ElButton' } })).toEqual(['buttonRef'])
     expect(getRefVariableNames({})).toEqual([])
+  })
+
+  it('does not confuse a native lowercase tag with a PascalCase component', () => {
+    expect(hasComponentTag('<button />', 'Button')).toBe(false)
+    expect(hasComponentTag('<Button />', 'Button')).toBe(true)
+    expect(hasComponentTag('<el-button />', 'Button', 'el')).toBe(true)
   })
 
   it('returns no members for unsupported Vue or React refs', () => {

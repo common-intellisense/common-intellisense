@@ -316,12 +316,31 @@ describe('activation registration', () => {
     expect(mocks.applyEdit).not.toHaveBeenCalled()
   })
 
-  it('rejects import edits when the source document version changed', async () => {
+  it('accepts a filtered completion after multiple document versions when its tag was inserted', async () => {
     mocks.openTextDocument.mockResolvedValue({
       languageId: 'typescriptreact',
-      version: 5,
+      version: 8,
       uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
-      getText: () => '',
+      getText: () => 'export default () => <Button />',
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    })
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+    await mocks.commandHandlers.get('common-intellisense.import')?.({
+      data: { name: 'Button' },
+      lib: 'ui',
+      importWay: 'specifier',
+      document: { uri: 'file:///workspace/A.tsx', version: 3 },
+    })
+    expect(mocks.applyEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not import when the selected component tag is absent', async () => {
+    mocks.openTextDocument.mockResolvedValue({
+      languageId: 'typescriptreact',
+      version: 8,
+      uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
+      getText: () => 'const Button = factory()',
       positionAt: () => ({ line: 0, character: 0 }),
     })
     const { activate } = await import('../src/index')
