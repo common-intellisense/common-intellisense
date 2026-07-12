@@ -859,17 +859,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const analysis = getDocumentAnalysis(document)
       const code = analysis.code
-      const uiDeps = analysis.getUiDeps()
-      const deps = analysis.getImportDeps()
-      let parsedResult: any
-      let parsedResolved = false
-      const getParsedResult = () => {
-        if (!parsedResolved) {
-          parsedResolved = true
-          parsedResult = parser(code, position as any, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, position as any, code) })
-        }
-        return parsedResult
-      }
+      const parsedResult: any = parser(code, position as any, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, position as any, code) })
+      const activeScriptOffset = document.languageId === 'vue' && typeof parsedResult?.loc?.start?.offset === 'number'
+        ? parsedResult.loc.start.offset
+        : undefined
+      const uiDeps = analysis.getUiDeps(activeScriptOffset)
+      const deps = analysis.getImportDeps(activeScriptOffset)
+      const getParsedResult = () => parsedResult
       // word 修正
       if (lineText[range.end.character] === '.' || lineText[range.end.character] === '-') {
         let index = range.end.character
