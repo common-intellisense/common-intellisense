@@ -1,5 +1,6 @@
 import type * as vscode from 'vscode'
 import type { OptionsComponents, PropsConfig, Uis } from './types'
+import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createLog, getCurrentFileUrl, getRootPath, watchFile } from '@vscode-use/utils'
@@ -7,8 +8,10 @@ import { findUp } from 'find-up'
 import semver from 'semver'
 import { UINames as configUINames } from '../constants'
 import { fetchFromCommonIntellisense, fetchFromLocalUris, fetchFromRemoteNpmUrls, fetchFromRemoteUrls, getLocalCache, writeLocalCache } from '../services/fetch'
+import type { ComponentSourceScope } from '../services/component-resolver'
+import { findComponentSourceScope, getPackageSource } from '../services/component-resolver'
 import { clearPackageVersionCache, resolveInstalledPackageVersion } from '../services/package-version'
-import { cacheMap, deactivateUICache as deactivateCache, getCacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../services/ui-cache'
+import { cacheMap, deactivateUICache as deactivateCache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../services/ui-cache'
 import { clearTypeCache } from '../type-extract/cache'
 import { formatUIName, getAlias, getPrefix, getSelectedUIs } from './ui-utils'
 
@@ -18,7 +21,7 @@ interface ContextModel {
   optionsComponents: OptionsComponents
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
-  sourceScopes: Map<string, { key: string, lib: string }>
+  sourceScopes: Map<string, ComponentSourceScope>
 }
 
 type CustomSourceSnapshots = Array<Record<string, any> | undefined>
@@ -36,44 +39,42 @@ export interface PackageContext {
   optionsComponents: OptionsComponents
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
-  sourceScopes: Map<string, { key: string, lib: string }>
+  sourceScopes: Map<string, ComponentSourceScope>
   officialModel: ContextModel
   customSourceSnapshots: CustomSourceSnapshots
 }
 
 const contexts = new Map<string, PackageContext>()
 
-function sourceVariants(source: string) {
-  const packageName = source.startsWith('@') ? source.split('/').slice(0, 2).join('/') : source.split('/')[0]
-  return new Set([source, packageName, formatUIName(source), formatUIName(packageName)])
+function setSourceScope(scopes: Map<string, ComponentSourceScope>, source: string, scope: ComponentSourceScope) {
+  scopes.set(source, scope)
+  scopes.set(formatUIName(source), scope)
 }
 
-function registerSourceScope(scopes: Map<string, { key: string, lib: string }>, source: string, key: string, lib: string) {
-  for (const variant of sourceVariants(source))
-    scopes.set(variant, { key, lib })
-}
-
-function registerCompletionScopes(scopes: Map<string, { key: string, lib: string }>, completion: PropsConfig, key: string, sources: string[]) {
+function registerCompletionScopes(scopes: Map<string, ComponentSourceScope>, completion: PropsConfig, key: string, sources: string[]) {
   const canonicalLibs = new Set(
     (Object.values(completion) as any[])
       .map(item => typeof item?.lib === 'string' ? item.lib : undefined)
       .filter((lib): lib is string => !!lib),
   )
-  const fallbackLib = canonicalLibs.values().next().value || key.replace(/\d+$/, '')
-  for (const source of sources)
-    registerSourceScope(scopes, source, key, fallbackLib)
+  const fallbackLib = key.replace(/\d+$/, '')
+  const acceptedLibs = canonicalLibs.size ? canonicalLibs : new Set([fallbackLib])
+  // Declared package roots and wrappers select the adapter while accepting all
+  // of its per-component dynamic module ids.
+  for (const source of sources) {
+    const root = getPackageSource(source)
+    const broad: ComponentSourceScope = { key, acceptedLibs: new Set(acceptedLibs), ...(acceptedLibs.size === 1 ? { lib: [...acceptedLibs][0] } : {}) }
+    setSourceScope(scopes, source, source === root ? broad : { key, acceptedLibs: new Set(acceptedLibs) })
+    if (!scopes.has(root))
+      setSourceScope(scopes, root, broad)
+  }
+  // Exact dynamic module paths never overwrite their package-root scope.
   for (const lib of canonicalLibs)
-    registerSourceScope(scopes, lib, key, lib)
+    setSourceScope(scopes, lib, { key, exactLib: lib, acceptedLibs: new Set(acceptedLibs) })
 }
 
 export function getSourceScope(context: Pick<PackageContext, 'sourceScopes'>, source: string | undefined) {
-  if (!source)
-    return
-  for (const variant of sourceVariants(source)) {
-    const scope = context.sourceScopes.get(variant)
-    if (scope)
-      return scope
-  }
+  return findComponentSourceScope(context.sourceScopes, source)
 }
 interface ContextLoad {
   epoch: number
@@ -84,6 +85,7 @@ const contextLoads = new Map<string, ContextLoad>()
 const generations = new Map<string, number>()
 const documentPackageCache = new Map<string, string | null>()
 const mainWatchers = new Map<string, () => void>()
+const maxInactivePackageContexts = 20
 const sourceRefreshes = new Set<string>()
 const officialSourceTTL = 10 * 60 * 1000
 const customSourceTTL = 5 * 60 * 1000
@@ -140,8 +142,10 @@ function cloneModel(model: ContextModel): ContextModel {
   }
 }
 
+let generationSequence = 0
+
 function nextGeneration(key: string) {
-  const generation = (generations.get(key) || 0) + 1
+  const generation = ++generationSequence
   generations.set(key, generation)
   return generation
 }
@@ -151,6 +155,50 @@ function applyContext(context: PackageContext) {
   cacheMap.clear()
   for (const [key, value] of context.cacheMap)
     cacheMap.set(key, value)
+}
+
+function touchContext(pkgPath: string, context: PackageContext) {
+  contexts.delete(pkgPath)
+  contexts.set(pkgPath, context)
+}
+
+function disposePackageWatcher(pkgPath: string) {
+  const stop = mainWatchers.get(pkgPath)
+  if (!stop)
+    return
+  try { stop() }
+  catch {}
+  mainWatchers.delete(pkgPath)
+}
+
+function pruneInactiveContexts() {
+  if (contexts.size <= maxInactivePackageContexts)
+    return
+  const referenced = new Set([...documentPackageCache.values()].filter((value): value is string => !!value))
+  for (const [pkgPath] of contexts) {
+    if (contexts.size <= maxInactivePackageContexts)
+      break
+    if (referenced.has(pkgPath))
+      continue
+    contexts.delete(pkgPath)
+    contextLoads.delete(pkgPath)
+    generations.delete(pkgPath)
+    disposePackageWatcher(pkgPath)
+    for (const [documentPath, cached] of urlCache) {
+      if (cached.pkg === pkgPath)
+        urlCache.delete(documentPath)
+    }
+  }
+}
+
+export function releaseDocumentContext(documentPath: string) {
+  documentPackageCache.delete(documentPath)
+  urlCache.delete(documentPath)
+  pruneInactiveContexts()
+}
+
+export function getContextRegistryStats() {
+  return { contexts: contexts.size, documents: documentPackageCache.size, watchers: mainWatchers.size }
 }
 
 export function getContextForDocumentPath(cwd: string) {
@@ -207,6 +255,8 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
 
   const existing = contexts.get(pkgPath)
   if (existing) {
+    touchContext(pkgPath, existing)
+    documentPackageCache.set(cwd, pkgPath)
     applyContext(existing)
     revalidateStaleContext(existing, extensionContext, detectSlots, workspaceRoot || existing.workspaceRoot)
     return existing
@@ -225,8 +275,9 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
       const context = await buildContext(cwd, extensionContext, detectSlots, generation, workspaceRoot || path.dirname(pkgPath))
       if (!context || registryEpoch !== epoch || generations.get(pkgPath) !== generation)
         return
-      contexts.set(context.pkgPath, context)
+      touchContext(context.pkgPath, context)
       documentPackageCache.set(cwd, context.pkgPath)
+      pruneInactiveContexts()
       applyContext(context)
       notifyContextUpdated(context)
       startTrackedContextEnhancements(context, epoch)
@@ -348,7 +399,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   const originNames: string[] = []
   const formatToPkg = new Map<string, { pkgName: string, version: string, installedVersion?: string, adapterMajor: string }>()
   const selectionToAdapter = new Map<string, string>()
-  const sourceScopes = new Map<string, { key: string, lib: string }>()
+  const sourceScopes = new Map<string, ComponentSourceScope>()
   const adapterSources = new Map<string, string[]>()
 
   for (const [declaredName, version] of uis) {
@@ -423,7 +474,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     }
   }
 
-  await writeLocalCache()
+  void writeLocalCache().catch(error => logger.error(`cache write failed: ${String(error)}`))
 
   const checkedAt = Date.now()
   const officialModel: ContextModel = { optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache, sourceScopes }
@@ -550,7 +601,7 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
   contexts.set(contextKey, enhanced)
   applyContext(enhanced)
   notifyContextUpdated(enhanced)
-  await writeLocalCache()
+  void writeLocalCache().catch(error => logger.error(`cache write failed: ${String(error)}`))
   return enhanced
 }
 
@@ -654,6 +705,18 @@ export function selectDependencyVersion(installed: string | undefined, declaredM
   return declaredMajor
 }
 
+async function computeMonorepoState(rootPath: string, rootPkg: any) {
+  if (rootPkg?.workspaces || rootPkg?.pnpm?.workspaces)
+    return true
+  try {
+    await fsp.access(path.resolve(rootPath, 'pnpm-workspace.yaml'))
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
 export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRoot?: string) {
   if (!cwd)
     return
@@ -675,7 +738,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
       if (rootPkgPath && rootPkgPath !== pkg) {
         try {
           rootPkg = JSON.parse(await fsp.readFile(rootPkgPath, 'utf8'))
-          isMonorepo = !!(rootPkg?.workspaces || rootPkg?.pnpm?.workspaces || isMonorepo)
+          isMonorepo = await computeMonorepoState(rootPath, rootPkg)
           cached.rootPkg = rootPkg
           cached.isMonorepo = isMonorepo
         }
@@ -687,11 +750,7 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
       if (rootPkgPath !== pkg) {
         try {
           rootPkg = JSON.parse(await fsp.readFile(rootPkgPath, 'utf8'))
-          isMonorepo = !!(rootPkg?.workspaces || rootPkg?.pnpm?.workspaces)
-          if (!isMonorepo) {
-            try { await fsp.access(path.resolve(rootPath, 'pnpm-workspace.yaml')); isMonorepo = true }
-            catch {}
-          }
+          isMonorepo = await computeMonorepoState(rootPath, rootPkg)
         }
         catch {}
       }
@@ -715,6 +774,23 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
           },
         })
       }
+    }
+  }
+
+  if (onChange && rootPath && rootPkgPath && rootPkgPath !== pkg) {
+    const cached = rootPkgCache.get(rootPath)!
+    if (!cached.stopWorkspace) {
+      try {
+        const watcher = fs.watch(rootPath, (_event, filename) => {
+          if (filename?.toString() !== 'pnpm-workspace.yaml')
+            return
+          cached.isMonorepo = false
+          invalidatePackageContext(rootPath)
+          onChange()
+        })
+        cached.stopWorkspace = () => watcher.close()
+      }
+      catch {}
     }
   }
 
@@ -769,6 +845,7 @@ export function invalidatePackageContext(cwdOrPkg: string) {
     nextGeneration(pkgPath)
     contexts.delete(pkgPath)
     contextLoads.delete(pkgPath)
+    disposePackageWatcher(pkgPath)
   }
   for (const [documentPath, packagePath] of documentPackageCache) {
     if (packagePath && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg)))
@@ -789,6 +866,8 @@ export function invalidatePackageContext(cwdOrPkg: string) {
 
 export function invalidateContexts() {
   registryEpoch++
+  disposeUIWatchers()
+  disposeRootWatchers()
   contexts.clear()
   contextLoads.clear()
   sourceRefreshes.clear()

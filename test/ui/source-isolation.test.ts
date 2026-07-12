@@ -64,11 +64,30 @@ describe('source-aware component resolution', () => {
     await expect(resolveRefMembers('AntForm.Item', deps, flattened, cache, {}, [], scopes)).resolves.toEqual([{ label: 'focus' }])
   })
 
+  it('resolves package roots with multiple dynamic per-component libs', async () => {
+    const button = { lib: 'primevue/button', marker: 'button' }
+    const input = { lib: 'primevue/inputtext', marker: 'input' }
+    const completion = { Button: button, InputText: input } as any
+    const cache = new Map<string, any>([['primevue4', completion]])
+    const acceptedLibs = new Set(['primevue/button', 'primevue/inputtext'])
+    const broad = { key: 'primevue4', acceptedLibs }
+    const scopes = new Map<string, any>([
+      ['primevue', broad],
+      ['@private/ui', broad],
+      ['primevue/button', { key: 'primevue4', exactLib: 'primevue/button', acceptedLibs }],
+    ])
+
+    await expect(resolveImportedComponent('Button', { Button: 'primevue' }, {}, cache, {}, [], scopes)).resolves.toMatchObject({ component: button })
+    await expect(resolveImportedComponent('Button', { Button: '@private/ui' }, {}, cache, {}, [], scopes)).resolves.toMatchObject({ component: button })
+    await expect(resolveImportedComponent('Button', { Button: 'primevue/button' }, {}, cache, {}, [], scopes)).resolves.toMatchObject({ component: button })
+    await expect(resolveImportedComponent('InputText', { InputText: 'primevue' }, {}, cache, {}, [], scopes)).resolves.toMatchObject({ component: input })
+  })
+
   it('records local names for aliased and default imports', () => {
     const deps = getUiDeps(`<script setup lang="ts">
 import DefaultButton from 'private-ui'
 import { Button as AppButton, type ButtonProps } from 'antd'
-</script>`)
+</script>`, { languageId: 'vue', uri: 'file:///App.vue' })
 
     expect(deps).toEqual({ DefaultButton: 'private-ui', AppButton: 'antd' })
     expect(getUiImportedName(deps, 'DefaultButton')).toBe('DefaultButton')

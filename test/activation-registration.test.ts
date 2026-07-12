@@ -54,6 +54,7 @@ vi.mock('../src/ui/ui-find', () => ({
     return { dispose: vi.fn() }
   }),
   resolvePackagePathForDocument: mocks.resolvePackagePath,
+  releaseDocumentContext: vi.fn(),
   logger: { info: vi.fn(), error: vi.fn() },
 }))
 vi.mock('../src/parser', () => ({

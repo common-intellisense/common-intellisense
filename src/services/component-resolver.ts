@@ -2,7 +2,12 @@ import { fixedTagName, formatUIName, getUiImportedName } from '../ui/ui-utils'
 
 export interface ComponentSourceScope {
   key: string
-  lib: string
+  /** Exact per-component module, for example `primevue/button`. */
+  exactLib?: string
+  /** Compatibility/canonical value when the adapter has exactly one lib. */
+  lib?: string
+  /** Package roots and wrappers may resolve to any library in this adapter. */
+  acceptedLibs?: Set<string>
 }
 
 export interface ComponentSourceContext {
@@ -10,19 +15,49 @@ export interface ComponentSourceContext {
   sourceScopes: Map<string, ComponentSourceScope>
 }
 
+export function getPackageSource(source: string) {
+  return source.startsWith('@') ? source.split('/').slice(0, 2).join('/') : source.split('/')[0]
+}
+
+function exactVariants(source: string) {
+  return [source, formatUIName(source)]
+}
+
 function sourceVariants(source: string) {
-  const packageName = source.startsWith('@') ? source.split('/').slice(0, 2).join('/') : source.split('/')[0]
-  return [source, packageName, formatUIName(source), formatUIName(packageName)]
+  const packageName = getPackageSource(source)
+  return [...exactVariants(source), packageName, formatUIName(packageName)]
 }
 
 export function findComponentSourceScope(sourceScopes: Map<string, ComponentSourceScope> | undefined, source: string | undefined) {
   if (!sourceScopes || !source)
     return
-  for (const variant of sourceVariants(source)) {
+  for (const variant of exactVariants(source)) {
     const scope = sourceScopes.get(variant)
-    if (scope)
+    if (scope?.exactLib)
       return scope
   }
+  for (const variant of sourceVariants(source)) {
+    const scope = sourceScopes.get(variant)
+    if (!scope)
+      continue
+    const suffix = source.slice(getPackageSource(source).length).replace(/^\//, '')
+    if (suffix && scope.acceptedLibs) {
+      const exactLib = [...scope.acceptedLibs].find(lib => lib.slice(getPackageSource(lib).length).replace(/^\//, '') === suffix)
+      if (exactLib)
+        return { ...scope, exactLib }
+    }
+    return scope
+  }
+}
+
+export function sourceScopeAccepts(scope: ComponentSourceScope | undefined, lib: unknown) {
+  if (!scope)
+    return true
+  if (typeof lib !== 'string')
+    return false
+  if (scope.exactLib)
+    return lib === scope.exactLib
+  return !scope.acceptedLibs?.size || scope.acceptedLibs.has(lib)
 }
 
 export interface ImportedTagResolution {
@@ -41,21 +76,8 @@ export function resolveImportedTag(rawTag: string, deps: Record<string, string> 
   const importedRoot = mappedRoot === '*' ? localRoot : mappedRoot
   const rawDotted = [localRoot, ...members].join('.')
   const importedDotted = [importedRoot, ...members].join('.')
-  const candidates = [
-    rawDotted,
-    importedDotted,
-    fixedTagName(rawDotted),
-    fixedTagName(importedDotted),
-  ]
-  // A member-only fallback is safe only after callers have selected the explicit source scope.
+  const candidates = [rawDotted, importedDotted, fixedTagName(rawDotted), fixedTagName(importedDotted)]
   if (members.length)
     candidates.push(members.join('.'), fixedTagName(members.join('.')))
-  return {
-    rawTag,
-    localRoot,
-    importedRoot,
-    members,
-    source: deps?.[localRoot],
-    candidates: [...new Set(candidates.filter(Boolean))],
-  }
+  return { rawTag, localRoot, importedRoot, members, source: deps?.[localRoot], candidates: [...new Set(candidates.filter(Boolean))] }
 }

@@ -5,12 +5,13 @@ import { addEventListener, createCompletionItem, createHover, createMarkdownStri
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri, normalizeHostname } from './services/fetch'
-import { resolveImportedTag } from './services/component-resolver'
+import type { ComponentSourceScope } from './services/component-resolver'
+import { findComponentSourceScope, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { getNodeOffsetRange } from './services/node-range'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, resolvePackagePathForDocument } from './ui/ui-find'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getUiImportedName } from './ui/ui-utils'
 import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
 
@@ -30,20 +31,20 @@ function refreshExcludeFilter() {
   excludeFilter = createFilter(getConfiguration('common-intellisense.exclude') || [])
 }
 
-export function normalizeScopedSource(from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, { key: string, lib: string }>): string | undefined {
+export function normalizeScopedSource(from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): string | undefined {
   if (!from)
     return
   if (sourceScopes) {
     const scope = getSourceScope({ sourceScopes }, from)
     if (scope)
-      return scope.lib
+      return scope.exactLib || scope.lib
   }
   const packageName = from.startsWith('@') ? from.split('/').slice(0, 2).join('/') : from.split('/')[0]
   const configured = alias[from] || alias[packageName] || nameMap[from] || nameMap[packageName] || packageName
   return configured.replace(/\d+$/, '')
 }
 
-export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, { key: string, lib: string }>): PropsConfig {
+export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): PropsConfig {
   if (!from)
     return current
   const explicitScope = sourceScopes ? getSourceScope({ sourceScopes }, from) : undefined
@@ -67,23 +68,24 @@ export function getRefMembers(completions: PropsConfig, refName: string | undefi
   return [...(component.methods || []), ...(component.exposed || [])]
 }
 
-export async function resolveImportedComponent(rawTag: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, { key: string, lib: string }>) {
+export async function resolveImportedComponent(rawTag: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>) {
   if (!rawTag)
     return {}
   const importedTag = resolveImportedTag(rawTag, uiDeps)
   const scoped = importedTag.source
     ? selectScopedCompletions(completions, cacheMap, importedTag.source, alias, sourceScopes)
     : completions
-  const normalizedSource = normalizeScopedSource(importedTag.source, alias, sourceScopes)
+  const scope = findComponentSourceScope(sourceScopes, importedTag.source)
+  const normalizedSource = scope?.exactLib || scope?.lib || (!scope ? normalizeScopedSource(importedTag.source, alias, sourceScopes) : undefined)
   for (const candidate of importedTag.candidates) {
     const component = await findDynamicComponent(candidate, {}, scoped, prefixes, normalizedSource)
-    if (component)
+    if (component && sourceScopeAccepts(scope, component.lib))
       return { component, source: importedTag.source, scoped }
   }
   return { source: importedTag.source, scoped }
 }
 
-export async function resolveRefMembers(localName: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, { key: string, lib: string }>) {
+export async function resolveRefMembers(localName: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>) {
   const { component } = await resolveImportedComponent(localName, uiDeps, completions, cacheMap, alias, prefixes, sourceScopes)
   return component ? [...(component.methods || []), ...(component.exposed || [])] : undefined
 }
@@ -103,7 +105,7 @@ export function getDocumentAnalysis(document: vscode.TextDocument) {
       return entry!.code
     },
     getUiDeps() {
-      entry!.uiDeps ||= getUiDeps(entry!.code) || {}
+      entry!.uiDeps ||= getUiDeps(entry!.code, { languageId: document.languageId, uri }) || {}
       return entry!.uiDeps
     },
     getImportDeps() {
@@ -200,7 +202,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (cached)
       clearDocumentAnalysis(document.uri)
     const code = document.getText()
-    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes })
+    await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes })
   }
   const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
     await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
@@ -266,6 +268,7 @@ export async function activate(context: vscode.ExtensionContext) {
     slotTimers.delete(key)
     clearDocumentAnalysis(document.uri)
     clearLocalDocumentAnalysis(document.uri)
+    releaseDocumentContext(getDocumentPath(document))
   }))
 
   context.subscriptions.push(registerCommand('intellisense.copyDemo', (demo) => {
@@ -464,7 +467,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const code = document.getText()
         if (document.isClosed)
           return
-        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes })
+        await detectSlots(document, packageContext.uiCompletions, getUiDeps(code, { languageId: document.languageId, uri: document.uri.toString() }), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes })
       }
       void analyze().catch(error => logger.error(`Slot analysis failed: ${String(error)}`))
     }, 200))

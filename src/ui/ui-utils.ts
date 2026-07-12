@@ -7,6 +7,8 @@ import process from 'node:process'
 import { getConfiguration } from '@vscode-use/utils'
 import { findUp } from 'find-up'
 import ts from 'typescript'
+// @ts-expect-error browser build avoids optional Node template-engine dependencies
+import { parse as parseVueSfc } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import { nameMap } from '../constants'
 import { toCamel } from '../ui/utils'
 // import { componentsReducer, propsReducer } from './ui/utils'
@@ -77,13 +79,27 @@ export function getUiImportedName(deps: Record<string, string> | undefined, loca
   return deps ? uiImportedNames.get(deps)?.[localName] || localName : localName
 }
 
-export function getUiDeps(text: string) {
+export interface UiDepsDocumentContext {
+  languageId?: string
+  uri?: string
+}
+
+export function getUiDeps(text: string, context: UiDepsDocumentContext = {}) {
   if (!text)
     return
   const deps: Record<string, string> = {}
   const importedNames: Record<string, string> = {}
-  const scriptBlocks = [...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(match => match[1])
-  const sourceText = scriptBlocks.length ? scriptBlocks.join('\n') : text
+  const languageId = context.languageId?.toLowerCase()
+  const uri = context.uri?.toLowerCase() || ''
+  let sourceText = text
+  if (languageId === 'vue' || uri.endsWith('.vue')) {
+    const { descriptor } = parseVueSfc(text)
+    sourceText = [descriptor.script?.content, descriptor.scriptSetup?.content].filter((value): value is string => typeof value === 'string').join('\n')
+  }
+  else if (languageId === 'svelte' || uri.endsWith('.svelte')) {
+    // Only perform SFC extraction when the caller explicitly identifies Svelte.
+    sourceText = [...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(match => match[1]).join('\n')
+  }
   const sourceFile = ts.createSourceFile('component.tsx', sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.importClause?.isTypeOnly)

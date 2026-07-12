@@ -4,14 +4,16 @@ import { clearPackageVersionCache } from './package-version'
 export const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
 export const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
 export const urlCache = new Map<string, { uis: Uis, pkg: string }>()
-export const rootPkgCache: Map<string, { rootPkgPath: string, rootPkg: any, isMonorepo: boolean, stopRoot?: () => void }> = new Map()
+export const rootPkgCache: Map<string, { rootPkgPath: string, rootPkg: any, isMonorepo: boolean, stopRoot?: () => void, stopWorkspace?: () => void }> = new Map()
 
-function disposeRootWatchers() {
+export function disposeRootWatchers() {
   for (const value of rootPkgCache.values()) {
-    try {
-      value.stopRoot?.()
-    }
+    try { value.stopRoot?.() }
     catch {}
+    try { value.stopWorkspace?.() }
+    catch {}
+    value.stopRoot = undefined
+    value.stopWorkspace = undefined
   }
 }
 

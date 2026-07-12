@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const resolveInstalledPackageVersion = vi.fn(async () => undefined)
 const fetchFromLocalUris = vi.fn(async () => ({}))
+const writeLocalCache = vi.fn(async () => {})
 const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => {
   const uiName = options.uiName
   return {
@@ -30,7 +31,7 @@ vi.mock('../../src/services/fetch', () => ({
   fetchFromRemoteUrls: vi.fn(async () => ({})),
   getLocalCache: Promise.resolve('done'),
   localCacheUri: '/tmp/common-intellisense-mapping-test.json',
-  writeLocalCache: vi.fn(async () => {}),
+  writeLocalCache,
 }))
 
 describe('ui-find updateCompletions', () => {
@@ -38,7 +39,22 @@ describe('ui-find updateCompletions', () => {
     vi.resetModules()
     fetchFromCommonIntellisense.mockClear()
     fetchFromLocalUris.mockClear()
+    writeLocalCache.mockReset().mockResolvedValue(undefined)
     resolveInstalledPackageVersion.mockReset().mockResolvedValue(undefined)
+  })
+
+  it('does not block the initial context on persistent cache writes', async () => {
+    let release!: () => void
+    writeLocalCache.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+
+    const result = await Promise.race([
+      mod.updateCompletions([], { selectedUIs: [], alias: {}, detectSlots: () => {}, prefix: {}, pkgPath: '/tmp/pkg.json' }),
+      new Promise(resolve => setTimeout(() => resolve('blocked'), 100)),
+    ])
+
+    expect(result).not.toBe('blocked')
+    release()
   })
 
   it('selects only the aliased adapter when selectedUIs uses the origin name', async () => {
@@ -124,6 +140,30 @@ describe('ui-find updateCompletions', () => {
 
     for (const [source, key] of cases)
       expect(mod.getSourceScope(context, source)?.key).toBe(key)
+  })
+
+  it('keeps package roots broad for adapters with per-component dynamic libs', async () => {
+    fetchFromCommonIntellisense.mockResolvedValueOnce({
+      primevue4: () => ({
+        Button: { lib: 'primevue/button' },
+        InputText: { lib: 'primevue/inputtext' },
+      } as any),
+    })
+    const mod = await import('../../src/ui/ui-find')
+    const context = await mod.updateCompletions([['@private/ui', '1.0.0']] as any, {
+      selectedUIs: [],
+      alias: { '@private/ui': 'primevue4' },
+      detectSlots: () => {},
+      prefix: {},
+      pkgPath: '/repo/package.json',
+      workspaceRoot: '/repo',
+    })
+
+    expect(mod.getSourceScope(context, 'primevue')).toMatchObject({ key: 'primevue4' })
+    expect(mod.getSourceScope(context, '@private/ui')).toMatchObject({ key: 'primevue4' })
+    expect(mod.getSourceScope(context, 'primevue/button')).toMatchObject({ key: 'primevue4', exactLib: 'primevue/button' })
+    expect(mod.getSourceScope(context, '@private/ui/button')).toMatchObject({ key: 'primevue4', exactLib: 'primevue/button' })
+    expect(mod.getSourceScope(context, 'primevue')?.acceptedLibs).toEqual(new Set(['primevue/button', 'primevue/inputtext']))
   })
 
   it('uses the workspace root rather than the nested package root for local adapters', async () => {

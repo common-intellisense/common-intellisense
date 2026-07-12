@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizePackageRecordConfiguration, normalizeSelectedUIs } from '../../src/ui/ui-utils'
+import { getUiDeps, normalizePackageRecordConfiguration, normalizeSelectedUIs } from '../../src/ui/ui-utils'
 
 describe('package-scoped UI configuration', () => {
   it('returns direct legacy configuration shapes', () => {
@@ -16,6 +16,24 @@ describe('package-scoped UI configuration', () => {
     expect(normalizePackageRecordConfiguration({
       '/workspace/a/package.json': { antd: 'a-' },
     }, '/workspace/a/package.json')).toEqual({ antd: 'a-' })
+  })
+
+  it('does not infer an SFC from a JSX script element', () => {
+    const deps = getUiDeps(`
+      import { Button } from 'antd'
+      export const App = () => <script>console.log('bootstrap')</script>
+    `, { languageId: 'typescriptreact', uri: 'file:///App.tsx' })
+    expect(deps).toEqual({ Button: 'antd' })
+  })
+
+  it('uses the Vue descriptor and ignores fake script text', () => {
+    const deps = getUiDeps(`
+      <!-- <script>import { Fake } from 'fake'</script> -->
+      <template><Button /></template>
+      <script>import DefaultThing from 'first'</script>
+      <script setup>import { Button as AppButton } from 'antd'</script>
+    `, { languageId: 'vue', uri: 'file:///App.vue' })
+    expect(deps).toEqual({ DefaultThing: 'first', AppButton: 'antd' })
   })
 
   it('uses typed defaults when the package mapping has no current entry', () => {

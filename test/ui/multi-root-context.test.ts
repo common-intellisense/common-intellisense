@@ -57,6 +57,25 @@ describe('multi-root package contexts', () => {
     expect(a?.uiNames).toEqual(['antd5'])
     expect(b?.uiNames).toEqual(['elementPlus2'])
   })
+  it('recomputes monorepo state from true to false', async () => {
+    const fs = await import('node:fs/promises')
+    let rootHasWorkspaces = true
+    vi.mocked(fs.default.readFile).mockImplementation(async (file: any) => {
+      if (file === '/workspace-a/package.json')
+        return JSON.stringify(rootHasWorkspaces ? { workspaces: ['packages/*'], dependencies: { antd: '^5.0.0' } } : { dependencies: { antd: '^5.0.0' } })
+      return JSON.stringify({ dependencies: {} })
+    })
+    vi.mocked(fs.default.access).mockRejectedValue(new Error('no workspace file'))
+    const mod = await import('../../src/ui/ui-find')
+
+    const first = await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a')
+    rootHasWorkspaces = false
+    const second = await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a')
+
+    expect(first?.uis).toEqual([['antd', '5.0.0']])
+    expect(second?.uis).toEqual([])
+  })
+
   it('does not inherit workspace-root dependencies without monorepo metadata', async () => {
     const fs = await import('node:fs/promises')
     vi.mocked(fs.default.readFile).mockImplementation(async (file: any) => {

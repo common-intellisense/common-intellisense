@@ -18,7 +18,8 @@ import * as vscode from 'vscode'
 import { nameMap } from './constants'
 import { convertPrefixedComponentName, findPrefixedComponent, hyphenate } from './ui/utils'
 import { getSourceScope, logger } from './ui/ui-find'
-import { resolveImportedTag } from './services/component-resolver'
+import type { ComponentSourceScope } from './services/component-resolver'
+import { resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
 import { getNodeOffsetRange } from './services/node-range'
 
 const { parse: svelteParser } = require('svelte/compiler')
@@ -939,7 +940,7 @@ export function commitDocumentSlotAnalysis(request: SlotAnalysisRequest, childre
 
 export interface SlotSourceContext {
   cacheMap: Map<string, any>
-  sourceScopes: Map<string, { key: string, lib: string }>
+  sourceScopes: Map<string, ComponentSourceScope>
 }
 
 export async function detectSlots(document: vscode.TextDocument, UiCompletions: any, uiDeps: any, prefix: string[], identity?: SlotAnalysisIdentity, sourceContext?: SlotSourceContext): Promise<void>
@@ -1123,7 +1124,7 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
         const scoped = sourceContext.cacheMap.get(scope.key)
         if (scoped && typeof scoped === 'object' && !Array.isArray(scoped))
           scopedCompletions = scoped
-        normalizedSource = scope.lib
+        normalizedSource = scope.exactLib || scope.lib
       }
     }
 
@@ -1134,8 +1135,10 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
         : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
           || scopedCompletions[candidate]
           || await findDynamicComponent(candidate, {}, scopedCompletions, prefix)
-      if (target)
+      const scope = source && sourceContext ? getSourceScope(sourceContext, source) : undefined
+      if (target && sourceScopeAccepts(scope, target.lib))
         break
+      target = undefined
     }
 
     // An explicit import source is authoritative. Never fall back to a same-name

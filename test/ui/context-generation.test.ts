@@ -206,7 +206,7 @@ describe('package context generations', () => {
     await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.VendorButton).toBeDefined())
 
     const context = mod.getContextForDocumentPath(documentPath)!
-    expect(mod.getSourceScope(context, '@vendor/ui/button')).toEqual({ key: 'VendorProps', lib: '@vendor/ui' })
+    expect(mod.getSourceScope(context, '@vendor/ui/button')).toMatchObject({ key: 'VendorProps', exactLib: '@vendor/ui' })
   })
 
   it('removes metadata deleted by a successful custom-source refresh', async () => {
@@ -391,6 +391,24 @@ describe('package context generations', () => {
     expect(first?.generation).toBe(baseline?.generation)
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     nowSpy.mockRestore()
+  })
+
+  it('bounds inactive package contexts after documents close', async () => {
+    findUpMock.mockImplementation(async (_name: string, options: any) => {
+      const match = String(options.cwd).match(/\/workspace\/pkg-(\d+)/)
+      return match ? `/workspace/pkg-${match[1]}/package.json` : '/workspace/package.json'
+    })
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    for (let index = 0; index < 25; index++) {
+      const documentPath = `/workspace/pkg-${index}/src/App.tsx`
+      await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, `/workspace/pkg-${index}`)
+      mod.releaseDocumentContext(documentPath)
+    }
+
+    expect(mod.getContextRegistryStats()).toMatchObject({ contexts: 20, documents: 0 })
   })
 
   it('discovers a nested package instead of reusing a loaded parent context', async () => {

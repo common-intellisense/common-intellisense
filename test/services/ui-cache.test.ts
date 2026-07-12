@@ -1,7 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
-import { cacheMap, clearUICache, getCacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../../src/services/ui-cache'
+import { cacheMap, clearUICache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../../src/services/ui-cache'
 
 describe('ui-cache service', () => {
+  it('clears disposed watcher handles so rebuilds can register them again', () => {
+    rootPkgCache.clear()
+    const stopRoot = vi.fn()
+    const stopWorkspace = vi.fn()
+    rootPkgCache.set('r', { rootPkgPath: '/tmp/package.json', rootPkg: {}, isMonorepo: true, stopRoot, stopWorkspace })
+
+    disposeRootWatchers()
+
+    expect(stopRoot).toHaveBeenCalledOnce()
+    expect(stopWorkspace).toHaveBeenCalledOnce()
+    expect(rootPkgCache.get('r')).toMatchObject({ stopRoot: undefined, stopWorkspace: undefined })
+  })
+
   it('exports cache maps and clearUICache clears them', () => {
     // ensure maps are present
     cacheMap.set('x', { dummy: true } as any)
