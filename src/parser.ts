@@ -1423,14 +1423,14 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRo
     try { return fileURLToPath(clean) }
     catch { return }
   }
-  if (clean.startsWith('@/')) {
+  if (clean.startsWith('@/') || clean.startsWith('~/')) {
     const root = workspaceRoot || (!currentFileUrl ? getRootPath() : undefined)
     return root ? path.resolve(root, clean.slice(2)) : undefined
   }
   return path.isAbsolute(clean) ? clean : path.resolve(base, '..', clean)
 }
 
-const localComponentExtensions = ['.vue', '.ts', '.tsx', '.jsx', '.svelte']
+const localComponentExtensions = ['.vue', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte']
 const maxLocalComponentSize = 4 * 1024 * 1024
 const maxLocalComponentCacheEntries = 20
 const localComponentTagCache = new Map<string, { signature: string, tag?: string }>()
@@ -1613,8 +1613,9 @@ async function getTemplateParentElementName(url: string) {
     touchLocalComponentCache(realUrl, { signature, tag })
     return tag
   }
-  if (extension === '.tsx' || extension === '.jsx' || extension === '.ts') {
-    const ast = babelParse(code, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
+  if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extension)) {
+    const plugins: any[] = extension === '.ts' || extension === '.tsx' ? ['typescript', 'jsx'] : ['jsx']
+    const ast = babelParse(code, { sourceType: 'module', plugins })
     let tag: string | undefined
     traverse(ast as any, {
       JSXElement(path: any) {
@@ -1624,7 +1625,7 @@ async function getTemplateParentElementName(url: string) {
         }
       },
     })
-    return tag
+    return cache(tag)
   }
   if (extension === '.svelte') {
     const html = getSvelteHtml(code)

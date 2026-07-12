@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createImportEdits, getSuggestedImportNames, resolveImportSource } from '../../src/services/imports'
+import { createImportEdits, getSuggestedImportNames, isSafeBindingIdentifier, resolveImportSource } from '../../src/services/imports'
 
 function applyEdits(code: string, edits: ReturnType<typeof createImportEdits>) {
   return [...edits].sort((a, b) => b.start - a.start).reduce(
@@ -9,6 +9,15 @@ function applyEdits(code: string, edits: ReturnType<typeof createImportEdits>) {
 }
 
 describe('import transforms', () => {
+  it('accepts binding identifiers but rejects JavaScript keywords', () => {
+    expect(isSafeBindingIdentifier('$Button')).toBe(true)
+    expect(isSafeBindingIdentifier('按钮')).toBe(true)
+    for (const keyword of ['class', 'default', 'enum', 'await', 'yield', 'implements']) {
+      expect(isSafeBindingIdentifier(keyword)).toBe(false)
+      expect(createImportEdits('', 'ui', [keyword])).toEqual([])
+    }
+  })
+
   it('prefers an explicit component source over a dynamic source', () => {
     expect(resolveImportSource('@custom/button', '@fallback/${name}', 'ui', 'Button', name => name.toLowerCase())).toBe('@custom/button')
     expect(resolveImportSource(undefined, '@fallback/${name}', 'ui', 'Button', name => name.toLowerCase())).toBe('@fallback/button')

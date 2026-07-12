@@ -228,4 +228,25 @@ describe('ui-find updateCompletions', () => {
     expect(context.officialFailureCount).toBe(1)
     expect(context.officialNextRetryAt).toBeGreaterThan(0)
   })
+  it('isolates official reducer failures while preserving healthy libraries', async () => {
+    fetchFromCommonIntellisense
+      .mockImplementationOnce((async (_tag: string, options: any) => ({
+        [options.uiName]: () => ({ HealthyButton: { completions: [() => []], events: [() => []], methods: [], exposed: [], suggestions: [] } }),
+      })) as any)
+      .mockImplementationOnce((async (_tag: string, options: any) => ({
+        [`${options.uiName}Components`]: () => { throw new Error('bad components') },
+        [options.uiName]: async () => { throw new Error('bad props') },
+      })) as any)
+    const mod = await import('../../src/ui/ui-find')
+
+    const context = await mod.updateCompletions(
+      [['antd', '5.0.0'], ['element-plus', '2.0.0']] as any,
+      { selectedUIs: ['auto'], alias: {}, detectSlots: () => {}, prefix: {}, pkgPath: '/tmp/reducer-error.json' },
+    )
+
+    expect(context.uiCompletions?.HealthyButton).toBeDefined()
+    expect(context.officialCheckedAt).toBe(0)
+    expect(context.officialFailureCount).toBe(1)
+    expect(context.officialNextRetryAt).toBeGreaterThan(0)
+  })
 })

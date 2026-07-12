@@ -12,6 +12,8 @@ const wrapperFile = path.join(fixturesDir, 'AppButton.vue')
 const directoryWrapper = path.join(fixturesDir, 'DirectoryButton', 'index.vue')
 const tsxWrapper = path.join(fixturesDir, 'TsxButton.tsx')
 const svelteWrapper = path.join(fixturesDir, 'SvelteButton.svelte')
+const _jsWrappers = ['JsButton.js', 'MjsButton.mjs', 'CjsButton.cjs'].map(name => path.join(fixturesDir, name))
+const _directoryJsWrapper = path.join(fixturesDir, 'DirectoryJsButton', 'index.js')
 
 beforeAll(async () => {
   await fsp.mkdir(fixturesDir, { recursive: true })
@@ -21,6 +23,10 @@ beforeAll(async () => {
   await fsp.writeFile(directoryWrapper, `<template><el-button /></template>`, 'utf8')
   await fsp.writeFile(tsxWrapper, `export default () => <ElButton />`, 'utf8')
   await fsp.writeFile(svelteWrapper, `<ElButton />`, 'utf8')
+  for (const wrapper of _jsWrappers)
+    await fsp.writeFile(wrapper, `export default () => <ElButton />`, 'utf8')
+  await fsp.mkdir(path.dirname(_directoryJsWrapper), { recursive: true })
+  await fsp.writeFile(_directoryJsWrapper, `export default () => <ElButton />`, 'utf8')
   // ensure getCurrentFileUrl resolves into the repo so relative imports point to test dir
   try {
     ;(vsutils as any).getCurrentFileUrl = () => path.join(process.cwd(), 'test', 'index.html')
@@ -35,6 +41,9 @@ afterAll(async () => {
     await fsp.rm(path.dirname(directoryWrapper), { recursive: true })
     await fsp.rm(tsxWrapper)
     await fsp.rm(svelteWrapper)
+    for (const wrapper of _jsWrappers)
+      await fsp.rm(wrapper)
+    await fsp.rm(path.dirname(_directoryJsWrapper), { recursive: true })
     await fsp.rmdir(fixturesDir)
   }
   catch {}
@@ -135,7 +144,7 @@ export default {}
       path.join(process.cwd(), 'test'),
     )).resolves.toMatchObject({ component: button, source: '@/fixtures-dyn/AppButton.vue' })
 
-    for (const source of ['./fixtures-dyn/AppButton', './fixtures-dyn/AppButton.vue?component', './fixtures-dyn/DirectoryButton', './fixtures-dyn/TsxButton', './fixtures-dyn/SvelteButton']) {
+    for (const source of ['./fixtures-dyn/AppButton', './fixtures-dyn/AppButton.vue?component', './fixtures-dyn/DirectoryButton', './fixtures-dyn/TsxButton', './fixtures-dyn/SvelteButton', './fixtures-dyn/JsButton.js', './fixtures-dyn/JsButton', './fixtures-dyn/MjsButton.mjs', './fixtures-dyn/CjsButton.cjs', './fixtures-dyn/DirectoryJsButton', '~/fixtures-dyn/JsButton.js']) {
       await expect(resolveImportedComponent(
         'Button',
         { Button: source },
@@ -146,6 +155,7 @@ export default {}
         new Map(),
         { Button: source },
         path.join(process.cwd(), 'test', 'App.vue'),
+        path.join(process.cwd(), 'test'),
       )).resolves.toMatchObject({ component: button, source })
     }
   })

@@ -56,7 +56,7 @@ export function getSuggestedImportNames(suggestions: unknown, prefix: string, im
 }
 
 export function createImportEdits(code: string, source: string, dependencies: string[], importWay: ImportWay = 'specifier', vue = false, context: ImportDocumentContext = {}): ImportEdit[] {
-  const names = [...new Set(dependencies.filter(name => isIdentifier(name)))]
+  const names = [...new Set(dependencies.filter(name => isSafeBindingIdentifier(name)))]
   if (!source || !names.length)
     return []
 
@@ -423,6 +423,11 @@ function getVueRegistrationEdits(sourceFile: ts.SourceFile, script: ScriptRegion
   return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${prefix}${missing.join(', ')} ` }]
 }
 
-function isIdentifier(name: string) {
-  return /^[$a-z_][$\w]*$/i.test(name)
+export function isSafeBindingIdentifier(name: string) {
+  if (!name)
+    return false
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, name)
+  return scanner.scan() === ts.SyntaxKind.Identifier
+    && scanner.getTokenText() === name
+    && scanner.scan() === ts.SyntaxKind.EndOfFileToken
 }

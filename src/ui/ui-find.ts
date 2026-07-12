@@ -488,29 +488,41 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     }
   }))
 
-  const officialLoadFailed = uiNames.length > 0 && loadedLibraries.some(item => item.failed)
+  let officialLoadFailed = uiNames.length > 0 && loadedLibraries.some(item => item.failed)
 
   for (const { name, pkgInfo, exports } of loadedLibraries) {
     if (!exports)
       continue
     Object.assign(localUI, exports)
     const componentsKey = `${name}Components`
-    const components = exports[componentsKey]?.()
-    if (components) {
-      localCache.set(componentsKey, components)
-      mergeComponents(localOptions, components, userPrefix, originNames, name, `official:${name}:${componentsKey}`)
+    try {
+      const components = exports[componentsKey]?.()
+      if (components) {
+        localCache.set(componentsKey, components)
+        mergeComponents(localOptions, components, userPrefix, originNames, name, `official:${name}:${componentsKey}`)
+      }
     }
-    const completion = await exports[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion, adapterMajor: pkgInfo?.adapterMajor })
-    if (completion) {
-      localCache.set(name, completion)
-      localCompletions ||= {} as PropsConfig
-      Object.assign(localCompletions, completion)
-      registerCompletionScopes(
-        sourceScopes,
-        completion,
-        name,
-        adapterSources.get(name) || [pkgInfo?.pkgName || name],
-      )
+    catch (error) {
+      officialLoadFailed = true
+      logger.error(`official components export [${componentsKey}] failed: ${String(error)}`)
+    }
+    try {
+      const completion = await exports[name]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion, adapterMajor: pkgInfo?.adapterMajor })
+      if (completion) {
+        localCache.set(name, completion)
+        localCompletions ||= {} as PropsConfig
+        Object.assign(localCompletions, completion)
+        registerCompletionScopes(
+          sourceScopes,
+          completion,
+          name,
+          adapterSources.get(name) || [pkgInfo?.pkgName || name],
+        )
+      }
+    }
+    catch (error) {
+      officialLoadFailed = true
+      logger.error(`official props export [${name}] failed: ${String(error)}`)
     }
   }
 

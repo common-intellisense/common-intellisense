@@ -117,15 +117,20 @@ export async function resolveRefMembers(localName: string | undefined, uiDeps: R
   return component ? [...(component.methods || []), ...(component.exposed || [])] : undefined
 }
 
-export function getDocumentAnalysis(document: vscode.TextDocument) {
+export function getDocumentAnalysis(document: vscode.TextDocument, code?: string) {
   const uri = document.uri.toString()
-  const key = `${uri}:${document.version}`
-  let entry = documentAnalysisCache.get(key)
-  if (!entry) {
-    entry = { uri, version: document.version, code: document.getText() }
-    documentAnalysisCache.set(key, entry)
+  let entry = documentAnalysisCache.get(uri)
+  if (!entry || entry.version !== document.version) {
+    entry = { uri, version: document.version, code: code ?? document.getText() }
+    documentAnalysisCache.delete(uri)
+    documentAnalysisCache.set(uri, entry)
     while (documentAnalysisCache.size > maxDocumentAnalysisEntries)
       documentAnalysisCache.delete(documentAnalysisCache.keys().next().value!)
+  }
+  else {
+    // Touch the entry so the cache is an actual URI-level LRU.
+    documentAnalysisCache.delete(uri)
+    documentAnalysisCache.set(uri, entry)
   }
   return {
     get code() {
@@ -143,11 +148,11 @@ export function getDocumentAnalysis(document: vscode.TextDocument) {
 }
 
 export function clearLocalDocumentAnalysis(uri: string | vscode.Uri) {
-  const keyPrefix = `${typeof uri === 'string' ? uri : uri.toString()}:`
-  for (const key of documentAnalysisCache.keys()) {
-    if (key.startsWith(keyPrefix))
-      documentAnalysisCache.delete(key)
-  }
+  documentAnalysisCache.delete(typeof uri === 'string' ? uri : uri.toString())
+}
+
+export function getDocumentAnalysisCacheSize() {
+  return documentAnalysisCache.size
 }
 
 function isExcluded(filePath: string) {
@@ -531,7 +536,8 @@ export async function activate(context: vscode.ExtensionContext) {
     let completionsCallback: SubCompletionItem[] | undefined
     let eventCallback: SubCompletionItem[] | undefined
     const activeText = getEffectWord(preText)
-    const documentCode = document.getText()
+    const completionAnalysis = getDocumentAnalysis(document)
+    const documentCode = completionAnalysis.code
     const result = parser(documentCode, p, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, p, documentCode) })
     if (!result)
       return
@@ -542,9 +548,8 @@ export async function activate(context: vscode.ExtensionContext) {
     const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
     const renderContext = { ...getCompletionRenderContext(document, result), parent: result.parent }
     const isTemplateSyntax = renderContext.syntax !== 'jsx'
-    const analysis = getDocumentAnalysis(document)
-    const deps = isVue ? analysis.getImportDeps() : {}
-    const uiDeps = analysis.getUiDeps()
+    const deps = isVue ? completionAnalysis.getImportDeps() : {}
+    const uiDeps = completionAnalysis.getUiDeps()
     const { character } = position
     const isPreEmpty = lineText[character - 1] === ' '
     const isValue = result.isValue
@@ -819,7 +824,6 @@ export async function activate(context: vscode.ExtensionContext) {
         return
       const optionsComponents = packageContext.optionsComponents
       const componentsPrefix = optionsComponents.prefix
-      const renderContext = getCompletionRenderContext(document)
       const UiCompletions = packageContext.uiCompletions
       const alias = getAlias(packageContext.pkgPath) || {}
       const currentFileUrl = getDocumentPath(document)
@@ -925,6 +929,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const r = (await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)).component
         if (!r)
           return
+        const renderContext = getCompletionRenderContext(document, result)
         const completions = result.isEvent ? r.events[0]?.(renderContext) : r.completions[0]?.(renderContext)
         if (!completions)
           return

@@ -239,6 +239,22 @@ describe('activation registration', () => {
     vi.useRealTimers()
   })
 
+  it('keeps only the latest analysis version per URI and reads each version once', async () => {
+    const { getDocumentAnalysis, getDocumentAnalysisCacheSize } = await import('../src/index')
+    const uri = { fsPath: '/workspace/Latest.vue', toString: () => 'file:///workspace/Latest.vue' }
+    const getText = vi.fn(() => 'version one')
+    const first = { uri, version: 1, getText } as any
+
+    expect(getDocumentAnalysis(first).code).toBe('version one')
+    expect(getDocumentAnalysis(first).code).toBe('version one')
+    expect(getText).toHaveBeenCalledOnce()
+
+    const nextGetText = vi.fn(() => 'version two')
+    expect(getDocumentAnalysis({ uri, version: 2, getText: nextGetText } as any).code).toBe('version two')
+    expect(nextGetText).toHaveBeenCalledOnce()
+    expect(getDocumentAnalysisCacheSize()).toBeLessThanOrEqual(10)
+  })
+
   it('drops local document analysis entries across close and reopen', async () => {
     const { clearLocalDocumentAnalysis, getDocumentAnalysis } = await import('../src/index')
     const uri = { fsPath: '/workspace/Reopen.vue', toString: () => 'file:///workspace/Reopen.vue' }
