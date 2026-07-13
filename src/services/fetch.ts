@@ -142,11 +142,14 @@ export function configureCacheStorage(storageUri: vscode.Uri | string) {
 }
 
 const commonIntellisenseInFlight = new Map<string, Promise<any>>()
-const officialAdapterScriptInFlight = new Map<string, Promise<string>>()
+// Third-party npm helpers do not expose cancellation. Preserve each raw task until
+// it actually settles so caller deadlines and cache resets cannot multiply it.
+const rawLatestVersionTasks = new Map<string, Promise<string>>()
+const rawNpmChannelTasks = new Map<string, Promise<string>>()
 const remoteHttpTasks = new Map<string, Promise<Record<string, any>>>()
 const remoteNpmTasks = new Map<string, Promise<Record<string, any>>>()
 const localTasks = new Map<string, Promise<Record<string, any>>>()
-const perSourceTasks = new Map<string, Promise<CustomSourceResult>>()
+const perSourceTasks = new Map<string, Promise<Omit<CustomSourceResult, 'configurationIndex'>>>()
 let sourceEpoch = 0
 const retry = 3
 const remoteRequestTimeout = 5_000
@@ -156,7 +159,6 @@ const npmDownloadDeadline = 30_000
 const remoteUriCacheTTL = 5 * 60 * 1000
 const latestVersionCacheTTL = 10 * 60 * 1000
 const latestVersionCache = new Map<string, { value: string, at: number }>()
-const latestVersionInFlight = new Map<string, Promise<string>>()
 const remoteExecTimeout = 1200
 const maxRemoteScriptSize = 8 * 1024 * 1024
 const maxAdapterResultSize = 8 * 1024 * 1024
@@ -576,25 +578,48 @@ export async function withDeadline<T>(task: Promise<T>, timeoutMs: number, label
   }
 }
 
+function getRawLatestVersionTask(name: string) {
+  const pending = rawLatestVersionTasks.get(name)
+  if (pending)
+    return pending
+  const epoch = sourceEpoch
+  const task = Promise.resolve(latestVersion(name, { concurrency: 3 })).then((value) => {
+    if (sourceEpoch === epoch)
+      latestVersionCache.set(name, { value, at: Date.now() })
+    return value
+  }).finally(() => {
+    if (rawLatestVersionTasks.get(name) === task)
+      rawLatestVersionTasks.delete(name)
+  })
+  rawLatestVersionTasks.set(name, task)
+  return task
+}
+
 async function getLatestVersion(name: string) {
   const cached = latestVersionCache.get(name)
   if (cached && Date.now() - cached.at < latestVersionCacheTTL)
     return cached.value
-  const pending = latestVersionInFlight.get(name)
+  return withDeadline(getRawLatestVersionTask(name), npmVersionDeadline, `Resolving ${name}`)
+}
+
+function getRawNpmChannelTask(key: string, factory: () => Promise<string>) {
+  const pending = rawNpmChannelTasks.get(key)
   if (pending)
     return pending
-  const epoch = sourceEpoch
-  const task = withDeadline(latestVersion(name, { concurrency: 3 }), npmVersionDeadline, `Resolving ${name}`).then((value) => {
-    if (sourceEpoch !== epoch)
-      throw new Error(`Version request invalidated: ${name}`)
-    latestVersionCache.set(name, { value, at: Date.now() })
-    return value
-  }).finally(() => {
-    if (latestVersionInFlight.get(name) === task)
-      latestVersionInFlight.delete(name)
+  const task = Promise.resolve().then(factory).finally(() => {
+    if (rawNpmChannelTasks.get(key) === task)
+      rawNpmChannelTasks.delete(key)
   })
-  latestVersionInFlight.set(name, task)
+  rawNpmChannelTasks.set(key, task)
   return task
+}
+
+function getRawNpmDownloadTask(key: string, name: string, version: string, resource: string) {
+  const extract = getRawNpmChannelTask(`${key}:extract`, () => fetchAndExtractPackage({ name, dist: resource, retry, logger }))
+  const legacy = resource === 'index.cjs'
+    ? getRawNpmChannelTask(`${key}:cjs`, () => fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>)
+    : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`))
+  return Promise.any([extract, legacy])
 }
 
 function getOfficialAdapterScript(scriptKey: string, name: string, version: string, epoch: number) {
@@ -603,25 +628,14 @@ function getOfficialAdapterScript(scriptKey: string, name: string, version: stri
     logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
     return Promise.resolve(cached)
   }
-  const pending = officialAdapterScriptInFlight.get(scriptKey)
-  if (pending)
-    return pending
   logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
-  const task = withDeadline(Promise.any([
-    fetchAndExtractPackage({ name, dist: 'index.cjs', retry, logger }),
-    fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
-  ]), npmDownloadDeadline, `Downloading ${name}`).then((scriptContent) => {
+  return withDeadline(getRawNpmDownloadTask(`official:${scriptKey}`, name, version, 'index.cjs'), npmDownloadDeadline, `Downloading ${name}`).then((scriptContent) => {
     if (sourceEpoch !== epoch)
       throw new Error(`Adapter source invalidated before caching: ${scriptKey}`)
     if (scriptContent)
       setFetchCacheEntry(scriptKey, scriptContent)
     return scriptContent
-  }).finally(() => {
-    if (officialAdapterScriptInFlight.get(scriptKey) === task)
-      officialAdapterScriptInFlight.delete(scriptKey)
   })
-  officialAdapterScriptInFlight.set(scriptKey, task)
-  return task
 }
 
 // todo: add result type replace any
@@ -981,6 +995,8 @@ export interface CustomSourceResult {
   signature?: string
   value?: Record<string, any>
   error?: unknown
+  /** Position in the corresponding local/HTTP/npm configuration array. */
+  configurationIndex?: number
 }
 
 interface CustomSourceLoadValue {
@@ -988,7 +1004,7 @@ interface CustomSourceLoadValue {
   signature: string
 }
 
-function getOrCreateSourceTask(key: string, id: string, load: () => Promise<CustomSourceLoadValue>): Promise<CustomSourceResult> {
+function getOrCreateSourceTask(key: string, id: string, load: () => Promise<CustomSourceLoadValue>): Promise<Omit<CustomSourceResult, 'configurationIndex'>> {
   const existing = perSourceTasks.get(key)
   if (existing)
     return existing
@@ -1005,7 +1021,10 @@ function getOrCreateSourceTask(key: string, id: string, load: () => Promise<Cust
 }
 
 async function settleCustomSources(items: Array<{ id: string, taskKey: string, load: () => Promise<CustomSourceLoadValue> }>): Promise<CustomSourceResult[]> {
-  return Promise.all(items.map(({ id, taskKey, load }) => getOrCreateSourceTask(taskKey, id, load)))
+  return Promise.all(items.map(async ({ id, taskKey, load }, configurationIndex) => ({
+    ...await getOrCreateSourceTask(taskKey, id, load),
+    configurationIndex,
+  })))
 }
 
 async function evaluateCustomAdapterForEpoch(content: string, sourceId: string, displayName: string, epoch: number) {
@@ -1129,12 +1148,7 @@ async function loadRemoteNpmSource(item: { name: string, resource?: string } | s
   const cached = getFetchCacheEntry(key)
   const scriptContent = cached !== undefined
     ? cached
-    : await withDeadline(Promise.any([
-        fetchAndExtractPackage({ name, dist: resource, logger }),
-        resource === 'index.cjs'
-          ? fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>
-          : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
-      ]), npmDownloadDeadline, `Downloading ${name}/${resource}`)
+    : await withDeadline(getRawNpmDownloadTask(`remote:${key}`, name, version, resource), npmDownloadDeadline, `Downloading ${name}/${resource}`)
   const reduced: Record<string, any> = {}
   appendReducedExports(reduced, await evaluateCustomAdapterForEpoch(scriptContent || '', `npm:${name}::${resource}`, key, epoch), key)
   if (sourceEpoch !== epoch)
@@ -1294,9 +1308,9 @@ export function clearFetchCaches() {
   cacheWriteEpoch++
   cacheFetch.clear()
   commonIntellisenseInFlight.clear()
-  officialAdapterScriptInFlight.clear()
   latestVersionCache.clear()
-  latestVersionInFlight.clear()
+  // Intentionally keep unresolved raw npm tasks: the helpers expose no abort
+  // interface, and dropping these entries would allow retries to multiply them.
   remoteUriFetchedAt.clear()
   remoteUriRetry.clear()
   perSourceTasks.clear()

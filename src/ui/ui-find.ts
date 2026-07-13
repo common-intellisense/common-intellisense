@@ -28,6 +28,7 @@ interface ContextModel {
 interface CustomSourceSnapshot {
   exports: Record<string, any>
   signature: string
+  configurationIndex: number
   /** Fully reduced in isolation; publication only composes validated projections. */
   model: ContextModel
 }
@@ -686,7 +687,7 @@ function startTrackedContextEnhancements(context: PackageContext, expectedEpoch:
   startContextEnhancements(context, expectedEpoch, () => sourceRefreshes.delete(refreshKey))
 }
 
-async function prepareCustomSnapshot(context: PackageContext, sourceId: string, exports: Record<string, any>, signature: string): Promise<CustomSourceSnapshot> {
+async function prepareCustomSnapshot(context: PackageContext, sourceId: string, exports: Record<string, any>, signature: string, configurationIndex = Number.MAX_SAFE_INTEGER): Promise<CustomSourceSnapshot> {
   const model: ContextModel = { optionsComponents: emptyOptions(), uiCompletions: null, cacheMap: new Map(), sourceScopes: new Map(), sourceSignatures: new Map([[sourceId, signature]]) }
   for (const key of Object.keys(exports)) {
     const scopedKey = `custom:${sourceId}:${key}`
@@ -715,7 +716,7 @@ async function prepareCustomSnapshot(context: PackageContext, sourceId: string, 
       key,
     )
   }
-  return { exports, signature, model }
+  return { exports, signature, configurationIndex, model }
 }
 
 function startContextEnhancements(context: PackageContext, expectedEpoch: number, onSettled?: () => void) {
@@ -757,11 +758,12 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
         if (result.status === 'success') {
           const signature = result.signature || `volatile:${++volatileSnapshotSequence}`
           if (old && result.signature && old.signature === result.signature) {
-            preparedPrefix.set(result.id, old)
+            const configurationIndex = result.configurationIndex ?? Number.MAX_SAFE_INTEGER
+            preparedPrefix.set(result.id, old.configurationIndex === configurationIndex ? old : { ...old, configurationIndex })
           }
           else {
             try {
-              preparedPrefix.set(result.id, await prepareCustomSnapshot(context, result.id, result.value || {}, signature))
+              preparedPrefix.set(result.id, await prepareCustomSnapshot(context, result.id, result.value || {}, signature, result.configurationIndex))
             }
             catch (error) {
               loaderFailed = true
@@ -839,7 +841,9 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
   }
 
   const sourceOrder = (id: string) => id.startsWith('local:') ? 0 : id.startsWith('http:') ? 1 : 2
-  const orderedSnapshots = [...snapshotCopy.entries()].sort(([a], [b]) => sourceOrder(a) - sourceOrder(b) || a.localeCompare(b))
+  const orderedSnapshots = [...snapshotCopy.entries()].sort(([a, left], [b, right]) => sourceOrder(a) - sourceOrder(b)
+    || left.configurationIndex - right.configurationIndex
+    || a.localeCompare(b))
   for (const [, snapshot] of orderedSnapshots) {
     const model = snapshot.model
     for (const [key, value] of model.cacheMap)
@@ -956,9 +960,14 @@ function extractMajor(value: unknown) {
   return value.match(/(?:^|\D)(\d+)(?:\.\d+|\.x|\b)/)?.[1]
 }
 
-function parseAlias(value: string) {
-  const match = value?.match(/^(.*\D)(\d+)$/)
-  return { name: match?.[1], major: match?.[2] }
+export function parseAlias(value: string) {
+  const trimmed = value?.trim() || ''
+  const major = trimmed.match(/\d+$/)?.[0]
+  if (!major)
+    return { name: undefined, major: undefined }
+  const prefix = trimmed.slice(0, -major.length)
+  const name = (prefix.endsWith('^') ? prefix.slice(0, -1) : prefix).trim()
+  return { name: name || undefined, major: name ? major : undefined }
 }
 
 export function collectDependencyScopes(manifest: any, rootPkg: any) {

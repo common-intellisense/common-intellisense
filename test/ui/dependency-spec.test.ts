@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { collectDependencyScopes, getDependencyResolveFrom, parseDeclaredDependency, selectDependencyVersion } from '../../src/ui/ui-find'
+import { collectDependencyScopes, getDependencyResolveFrom, parseAlias, parseDeclaredDependency, selectDependencyVersion } from '../../src/ui/ui-find'
 
 describe('dependency spec parsing', () => {
+  it.each([
+    ['antd5', 'antd', '5'],
+    ['antd^5', 'antd', '5'],
+    ['foo10', 'foo', '10'],
+    ['@scope/ui^12', '@scope/ui', '12'],
+  ])('parses adapter alias %s', (value, name, major) => {
+    expect(parseAlias(value)).toEqual({ name, major })
+  })
+
+  it.each(['', 'foo', '5'])('does not throw for invalid adapter alias %s', (value) => {
+    expect(parseAlias(value)).toEqual({ name: undefined, major: undefined })
+  })
+
   it.each([
     ['^2.3.0', '2'],
     ['>=10 <12', '10'],

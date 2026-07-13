@@ -175,6 +175,22 @@ export default {}
     }
   })
 
+  it('resolves project-scoped TypeScript, Vite, and Nuxt aliases', async () => {
+    const project = path.join(fixturesDir, 'packages', 'a')
+    const wrapped = path.join(project, 'src', 'components', 'Wrapped.vue')
+    await fsp.mkdir(path.dirname(wrapped), { recursive: true })
+    await fsp.writeFile(path.join(project, 'package.json'), '{}')
+    await fsp.writeFile(path.join(project, 'tsconfig.json'), JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'], '@components/*': ['src/components/*'] } } }))
+    await fsp.writeFile(wrapped, '<template><ElButton /></template>')
+    const current = path.join(project, 'src', 'App.vue')
+    for (const source of ['@/components/Wrapped.vue', '@components/Wrapped.vue', '/src/components/Wrapped.vue', '~/src/components/Wrapped.vue']) {
+      await expect(findDynamicComponent('Wrapped', { Wrapped: source }, { ElButton: { marker: 'resolved' } } as any, [], undefined, current, true, fixturesDir))
+        .resolves
+        .toMatchObject({ marker: 'resolved' })
+    }
+    await fsp.rm(path.join(fixturesDir, 'packages'), { recursive: true })
+  })
+
   it('preserves wrapper imported names and authoritative package sources', async () => {
     const wrong = { lib: 'other-ui', marker: 'wrong' }
     const vendor = { lib: '@vendor/ui', marker: 'vendor' }

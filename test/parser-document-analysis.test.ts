@@ -142,6 +142,18 @@ describe('per-document slot analysis', () => {
     expect(getDocumentSlotAnalysis('file:///workspace/20.vue')).toBeDefined()
   })
 
+  it('does not cancel an in-flight replacement when its old committed entry is evicted', () => {
+    const uri = 'file:///workspace/a.vue'
+    commit(uri, 1, [{ id: 'old' }])
+    const replacement = beginDocumentSlotAnalysis(uri, 2, identity)
+    for (let i = 0; i < 20; i++)
+      commit(`file:///workspace/other-${i}.vue`, 1, [])
+
+    expect(getDocumentSlotAnalysis(uri)).toBeUndefined()
+    expect(commitDocumentSlotAnalysis(replacement, [{ id: 'new' }])).toBe(true)
+    expect(getDocumentSlotAnalysis(uri)?.children).toEqual([{ id: 'new' }])
+  })
+
   it('clears analyses only for affected packages', () => {
     const a = { ...identity, packagePath: '/workspace/a/package.json' }
     const b = { ...identity, packagePath: '/workspace/b/package.json' }

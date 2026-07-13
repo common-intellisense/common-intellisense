@@ -20,7 +20,10 @@ vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchMock,
   fetchLocalSourceResults: async (root?: string) => [{ id: 'local:test', status: 'success', value: await localFetchMock(root) }],
   fetchRemoteNpmSourceResults: async () => [{ id: 'npm:test', status: 'success', value: await npmFetchMock() }],
-  fetchRemoteUrlSourceResults: async () => [{ id: 'http:test', status: 'success', value: await remoteFetchMock() }],
+  fetchRemoteUrlSourceResults: async () => {
+    const value = await remoteFetchMock()
+    return Array.isArray(value) ? value : [{ id: 'http:test', status: 'success', value, configurationIndex: 0 }]
+  },
   getLocalCache: Promise.resolve('done'),
   writeLocalCache: vi.fn(async () => {}),
 }))
@@ -207,6 +210,20 @@ describe('package context generations', () => {
 
     const context = mod.getContextForDocumentPath(documentPath)!
     expect(mod.getSourceScope(context, '@vendor/ui/button')).toMatchObject({ key: 'custom:local:test:VendorProps', exactLib: '@vendor/ui' })
+  })
+
+  it('merges same-class custom sources in configuration order instead of source-id order', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    remoteFetchMock.mockResolvedValue([
+      { id: 'http:zzz', status: 'success', configurationIndex: 0, value: { privateUi: () => ({ Button: { marker: 'first' } }) } },
+      { id: 'http:aaa', status: 'success', configurationIndex: 1, value: { privateUi: () => ({ Button: { marker: 'second' } }) } },
+    ])
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toMatchObject({ marker: 'second' }))
   })
 
   it('keeps source-scoped caches when custom sources reuse an export key', async () => {

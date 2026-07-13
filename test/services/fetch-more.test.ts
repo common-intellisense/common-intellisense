@@ -178,28 +178,23 @@ describe('fetch service additional tests (mocked)', () => {
     expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledTimes(1)
   })
 
-  it('does not let a stale latest-version request delete or overwrite a newer request', async () => {
+  it('does not duplicate an unresolved raw latest-version request after cache invalidation', async () => {
     const latest = await import('@simon_he/latest-version')
-    let resolveOld!: (value: string) => void
-    let resolveNew!: (value: string) => void
+    let resolveRaw!: (value: string) => void
     vi.mocked(latest.latestVersion)
-      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveOld = resolve }))
-      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveNew = resolve }))
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveRaw = resolve }))
     const mod = await import('../../src/services/fetch')
     mod.clearFetchCaches()
 
     const oldTask = mod.fetchFromCommonIntellisense('button')
     await Promise.resolve()
     mod.clearFetchCaches()
-    const newTask = mod.fetchFromCommonIntellisense('button')
+    const retriedTask = mod.fetchFromCommonIntellisense('button')
     await Promise.resolve()
-    resolveNew('3.0.0')
-    await newTask
-    resolveOld('1.0.0')
-    await oldTask
+    expect(vi.mocked(latest.latestVersion)).toHaveBeenCalledTimes(1)
 
-    await mod.fetchFromCommonIntellisense('button')
-    expect(vi.mocked(latest.latestVersion)).toHaveBeenCalledTimes(2)
+    resolveRaw('3.0.0')
+    await Promise.all([oldTask, retriedTask])
     expect(mod.cacheFetch.has('@common-intellisense/button@3.0.0')).toBe(true)
   })
 

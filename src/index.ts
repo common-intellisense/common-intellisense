@@ -411,8 +411,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(addEventListener('config-change', (e) => {
     const affects = (key: string) => e.affectsConfiguration(`common-intellisense.${key}`)
-    if (affects('exclude'))
+    const excludeChanged = affects('exclude')
+    if (excludeChanged) {
       refreshExcludeFilter()
+      clearDocumentAnalysis()
+      documentAnalysisCache.clear()
+      void rebuildVisibleDocumentContexts(true).catch(error => logger.error(`Failed to refresh after exclude change: ${String(error)}`))
+    }
 
     if (affects('showSlots')) {
       clearDocumentAnalysis()

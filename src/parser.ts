@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as babelParse } from '@babel/parser'
 import traverse from '@babel/traverse'
+import ts from 'typescript'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
 import { createRange, getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getPosition, getRootPath, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 // @ts-expect-error no problem
@@ -960,8 +961,11 @@ export function commitDocumentSlotAnalysis(request: SlotAnalysisRequest, childre
   documentSlotAnalyses.set(request.uri, analysis)
   while (documentSlotAnalyses.size > MAX_DOCUMENT_SLOT_ANALYSES) {
     const oldest = documentSlotAnalyses.keys().next().value!
+    const evicted = documentSlotAnalyses.get(oldest)
     documentSlotAnalyses.delete(oldest)
-    latestSlotRequests.delete(oldest)
+    const latestRequest = latestSlotRequests.get(oldest)
+    if (latestRequest?.requestId === evicted?.requestId)
+      latestSlotRequests.delete(oldest)
   }
   refreshCodeLenses()
   return true
@@ -1406,14 +1410,81 @@ export function clearLocalComponentCache() {
   localComponentTagCache.clear()
 }
 
+async function findProjectResolutionContext(currentFile: string, workspaceRoot: string) {
+  const root = path.resolve(workspaceRoot)
+  let directory = path.dirname(path.resolve(currentFile))
+  let projectRoot: string | undefined
+  while (isSameOrWithinPath(directory, root)) {
+    for (const configName of ['tsconfig.json', 'jsconfig.json']) {
+      const configPath = path.join(directory, configName)
+      try {
+        if ((await fsp.stat(configPath)).isFile())
+          return { projectRoot: projectRoot || directory, configPath }
+      }
+      catch {}
+    }
+    if (!projectRoot) {
+      try {
+        if ((await fsp.stat(path.join(directory, 'package.json'))).isFile())
+          projectRoot = directory
+      }
+      catch {}
+    }
+    if (directory === root)
+      break
+    const parent = path.dirname(directory)
+    if (parent === directory)
+      break
+    directory = parent
+  }
+  return { projectRoot: projectRoot || root, configPath: undefined }
+}
+
+async function resolveProjectAliasBase(source: string, currentFile: string, workspaceRoot: string) {
+  const { projectRoot, configPath } = await findProjectResolutionContext(currentFile, workspaceRoot)
+  if (configPath) {
+    const read = ts.readConfigFile(configPath, ts.sys.readFile)
+    if (!read.error) {
+      const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(configPath))
+      const resolved = ts.resolveModuleName(source, currentFile, parsed.options, ts.sys).resolvedModule?.resolvedFileName
+      if (resolved && isSameOrWithinPath(path.resolve(resolved), path.resolve(workspaceRoot)))
+        return resolved.replace(/\.d\.[cm]?ts$/, '')
+      const paths = parsed.options.paths || {}
+      const baseUrl = parsed.options.baseUrl || path.dirname(configPath)
+      for (const [pattern, replacements] of Object.entries(paths)) {
+        const star = pattern.indexOf('*')
+        const matches = star < 0
+          ? pattern === source ? [''] : undefined
+          : source.startsWith(pattern.slice(0, star)) && source.endsWith(pattern.slice(star + 1))
+            ? [source.slice(star, source.length - (pattern.length - star - 1))]
+            : undefined
+        if (!matches)
+          continue
+        for (const replacement of replacements) {
+          const candidate = path.resolve(baseUrl, replacement.replace('*', matches[0]))
+          if (isSameOrWithinPath(candidate, path.resolve(workspaceRoot)))
+            return candidate
+        }
+      }
+    }
+  }
+  if (source.startsWith('~/'))
+    return path.resolve(projectRoot, source.slice(2))
+  if (source.startsWith('/src/'))
+    return path.resolve(projectRoot, source.slice(1))
+}
+
 export async function resolveLocalComponentModule(url: string, currentFileUrl?: string, workspaceRoot?: string) {
   // Provider paths always pass workspaceRoot. Legacy calls are limited to the
   // current document directory rather than being allowed to read arbitrary files.
   const effectiveCurrentFile = currentFileUrl || getCurrentFileUrl()
   const allowedRoot = workspaceRoot || (effectiveCurrentFile ? path.dirname(effectiveCurrentFile) : undefined)
-  if (!allowedRoot)
+  if (!allowedRoot || !effectiveCurrentFile)
     return
-  const base = getAbsoluteUrl(url, effectiveCurrentFile, workspaceRoot)
+  const clean = url.replace(/[?#].*$/, '')
+  let base = workspaceRoot ? await resolveProjectAliasBase(clean, effectiveCurrentFile, workspaceRoot) : undefined
+  if (!base)
+    base = getAbsoluteUrl(clean, effectiveCurrentFile, workspaceRoot)
   if (!base)
     return
   const lexicalRoot = path.resolve(allowedRoot)
