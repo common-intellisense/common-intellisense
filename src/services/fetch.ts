@@ -124,6 +124,10 @@ export function getFetchCacheEntry(key: string) {
   return value
 }
 
+export function deleteFetchCacheEntry(key: string) {
+  return cacheFetch.delete(key)
+}
+
 export function getFetchCacheStats() {
   return { entries: cacheFetch.size, bytes: getCacheByteSize() }
 }
@@ -622,19 +626,19 @@ function getRawNpmDownloadTask(key: string, name: string, version: string, resou
   return Promise.any([extract, legacy])
 }
 
-function getOfficialAdapterScript(scriptKey: string, name: string, version: string, epoch: number) {
-  const cached = getFetchCacheEntry(scriptKey)
-  if (cached !== undefined) {
-    logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
-    return Promise.resolve(cached)
+function getOfficialAdapterScript(scriptKey: string, name: string, version: string, epoch: number, forceNetwork = false) {
+  if (!forceNetwork) {
+    const cached = getFetchCacheEntry(scriptKey)
+    if (cached !== undefined) {
+      logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
+      return Promise.resolve({ content: cached, fromCache: true })
+    }
   }
   logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
-  return withDeadline(getRawNpmDownloadTask(`official:${scriptKey}`, name, version, 'index.cjs'), npmDownloadDeadline, `Downloading ${name}`).then((scriptContent) => {
+  return withDeadline(getRawNpmDownloadTask(`official:${scriptKey}`, name, version, 'index.cjs'), npmDownloadDeadline, `Downloading ${name}`).then((content) => {
     if (sourceEpoch !== epoch)
-      throw new Error(`Adapter source invalidated before caching: ${scriptKey}`)
-    if (scriptContent)
-      setFetchCacheEntry(scriptKey, scriptContent)
-    return scriptContent
+      throw new Error(`Adapter source invalidated before validation: ${scriptKey}`)
+    return { content, fromCache: false }
   })
 }
 
@@ -697,43 +701,47 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     }
 
     try {
-      const scriptContent = await getOfficialAdapterScript(scriptKey, name, version, epoch)
-      // Official @common-intellisense packages remain a trusted compatibility source.
-      // Custom executable adapters are opt-in and should migrate to data-only manifests.
-      const exportsData = await evaluateAdapterForEpoch(scriptContent, scriptKey, !!isZh, true, epoch)
-      const result: any = {}
-      let fallbackRaw: any[] | undefined
-      if (options?.pkgName && options?.resolveFrom) {
-        try {
-          const fallback = await fetchFromTypes({ pkgName: options.pkgName, uiName, resolveFrom: options.resolveFrom })
-          const rawKey = `${uiName}Raw`
-          fallbackRaw = fallback?.[rawKey]?.()
-        }
-        catch {}
-      }
-      for (const key in exportsData) {
-        if (blockedExportKeys.has(key)) {
-          logger.error(isZh ? `已跳过不安全导出 key: ${key} (${name})` : `Skipped unsafe export key: ${key} (${name})`)
-          continue
-        }
-        const data = exportsData[key]
-        if (key.endsWith('Components')) {
-          const lib = key.slice(0, -'Components'.length)
-          const userPrefix = getPrefix?.() as Record<string, string> | undefined
-          let components = componentsReducer(data as any)
-
-          if (userPrefix && userPrefix[lib]) {
-            const customPrefix = userPrefix[lib]
-            components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
+      const reduceOfficialAdapter = async (scriptContent: string) => {
+        // Official @common-intellisense packages remain a trusted compatibility source.
+        // Custom executable adapters are opt-in and should migrate to data-only manifests.
+        const exportsData = await evaluateAdapterForEpoch(scriptContent, scriptKey, !!isZh, true, epoch)
+        const adapterName = tag.replace(/-(\w)/g, (_, value) => value.toUpperCase())
+        const expectedBases = new Set([adapterName, uiName].map(value => value.toLowerCase()))
+        const hasExpectedExport = Object.keys(exportsData).some(key => expectedBases.has(key.replace(/Components$|Props$/, '').toLowerCase()))
+        if (!hasExpectedExport)
+          throw new Error(`Missing expected adapter exports: ${uiName}`)
+        const result: any = {}
+        let fallbackRaw: any[] | undefined
+        if (options?.pkgName && options?.resolveFrom) {
+          try {
+            const fallback = await fetchFromTypes({ pkgName: options.pkgName, uiName, resolveFrom: options.resolveFrom })
+            const rawKey = `${uiName}Raw`
+            fallbackRaw = fallback?.[rawKey]?.()
           }
-          result[key] = () => components
+          catch {}
         }
-        else {
-          result[key] = () => {
+        for (const key in exportsData) {
+          if (blockedExportKeys.has(key)) {
+            logger.error(isZh ? `已跳过不安全导出 key: ${key} (${name})` : `Skipped unsafe export key: ${key} (${name})`)
+            continue
+          }
+          const data = exportsData[key]
+          if (key.endsWith('Components')) {
+            const lib = key.slice(0, -'Components'.length)
+            const userPrefix = getPrefix?.() as Record<string, string> | undefined
+            let components = componentsReducer(data as any)
+
+            if (userPrefix && userPrefix[lib]) {
+              const customPrefix = userPrefix[lib]
+              components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
+            }
+            result[key] = () => components
+          }
+          else {
             let propsData = data
             if (Array.isArray(fallbackRaw) && fallbackRaw.length)
               propsData = mergeComponentsWithTypeFallback(propsData as any[], fallbackRaw)
-            return Array.isArray(propsData)
+            const reducedProps = Array.isArray(propsData)
               ? propsReducer({
                   uiName,
                   lib: options?.pkgName || name,
@@ -748,11 +756,30 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
                   installedVersion: options?.installedVersion,
                   adapterMajor: options?.adapterMajor,
                 })
+            result[key] = () => reducedProps
           }
         }
+        return result
       }
+
+      let loaded = await getOfficialAdapterScript(scriptKey, name, version, epoch)
+      let result: any
+      try {
+        result = await reduceOfficialAdapter(loaded.content)
+      }
+      catch (error) {
+        if (!loaded.fromCache)
+          throw error
+        deleteFetchCacheEntry(scriptKey)
+        loaded = await getOfficialAdapterScript(scriptKey, name, version, epoch, true)
+        result = await reduceOfficialAdapter(loaded.content)
+      }
+      if (sourceEpoch !== epoch)
+        return undefined
+      if (!loaded.fromCache)
+        setFetchCacheEntry(scriptKey, loaded.content)
       resolver()
-      return sourceEpoch === epoch ? result : undefined
+      return result
     }
     catch (error) {
       rejecter(String(error))

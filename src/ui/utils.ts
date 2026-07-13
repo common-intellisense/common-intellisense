@@ -71,6 +71,10 @@ export function renderComponentTag(componentName: string, framework: CompletionF
   return usesVueTemplateSyntax && isSeparatedByHyphen ? hyphenate(componentName) : componentName
 }
 
+function getRenderedTagFromSnippet(snippet: string) {
+  return snippet.trimStart().match(/^<([^\s/>$]+)/)?.[1]
+}
+
 export function renderSvelteEventPropName(event: { name: string, kind?: 'dom' | 'component' }) {
   if (event.kind !== 'dom')
     return event.name
@@ -153,6 +157,7 @@ export interface FixParams {
   prefix: string
   dynamicLib: string
   importWay: string
+  renderedTag?: string
   document?: DocumentEditIdentity
 }
 
@@ -795,6 +800,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib: itemDynamicLib || '',
             importWay: itemImportWay || 'specifier',
             registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
+            renderedTag: getRenderedTagFromSnippet(snippet),
             document: getCompletionDocumentIdentity(context),
           }
           return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -847,6 +853,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib: itemDynamicLib,
             importWay: itemImportWay,
             registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
+            renderedTag: getRenderedTagFromSnippet(snippet),
             document: getCompletionDocumentIdentity(context),
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]

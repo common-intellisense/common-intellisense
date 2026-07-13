@@ -69,6 +69,27 @@ const button = <ElButton ref={buttonRef} size="small" />
     expect(groups.some((group: any) => group.children.some((entry: any) => entry.child.openingElement))).toBe(false)
   })
 
+  it.each([
+    ['tsx', 'script'],
+    ['jsx', 'script setup'],
+  ])('analyzes slots in render-only Vue %s blocks', async (lang, block) => {
+    clearDocumentAnalysis()
+    const code = `<${block} lang="${lang}">const view = <MyComponent /></${block}>`
+    const document = {
+      languageId: 'vue',
+      version: 1,
+      uri: { toString: () => `file:///Render-${lang}.vue` },
+      getText: () => code,
+    } as any
+    await detectSlots(document, { MyComponent: { rawSlots: [{ name: 'default' }] } }, {}, [], {
+      packagePath: '/workspace/package.json',
+      contextGeneration: 1,
+      contextRevision: 1,
+    })
+    const groups = getDocumentSlotAnalysis(document.uri)?.children || []
+    expect(groups.some((group: any) => group.offset > 0 && group.children.some((entry: any) => entry.child.openingElement?.name?.name === 'MyComponent'))).toBe(true)
+  })
+
   it('parses local imports per block and lets setup bindings win in template scope', () => {
     const code = `<script lang="ts">
 const state = createModuleState()

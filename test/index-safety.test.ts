@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDependencyScopeOffset, getRefMembers, getRefVariableNames, hasComponentTag, selectScopedCompletions, supportsSlotAnalysis } from '../src/index'
+import { getDependencyScopeOffset, getRefMembers, getRefVariableNames, hasComponentTag, hasRenderedComponentTag, selectScopedCompletions, supportsSlotAnalysis } from '../src/index'
 
 describe('provider safety helpers', () => {
   it('limits slot analysis to Vue and Vine documents', () => {
@@ -45,6 +45,13 @@ describe('provider safety helpers', () => {
     expect(hasComponentTag('<button />', 'Button')).toBe(false)
     expect(hasComponentTag('<Button />', 'Button')).toBe(true)
     expect(hasComponentTag('<el-button />', 'Button', 'el')).toBe(true)
+    expect(hasComponentTag('<el-button />', 'Button', 'El')).toBe(false)
+    expect(hasRenderedComponentTag('<el-button />', 'el-button')).toBe(true)
+    expect(hasRenderedComponentTag(`const example = '<el-button />'`, 'el-button')).toBe(false)
+    expect(hasRenderedComponentTag('<!-- <el-button /> -->', 'el-button')).toBe(false)
+    expect(hasRenderedComponentTag(`<template><p>Don't submit twice</p><el-button /></template>`, 'el-button', 'vue')).toBe(true)
+    expect(hasRenderedComponentTag(`<template><p>One " quote</p><el-button /></template>`, 'el-button', 'vue')).toBe(true)
+    expect(hasRenderedComponentTag(`<script>const example = '<el-button />'</script>`, 'el-button', 'vue')).toBe(false)
   })
 
   it('returns no members for unsupported Vue or React refs', () => {

@@ -65,6 +65,24 @@ function getJsxAst(code: string) {
   return getCached(jsxAstCache, code, () => tsParser(code, { jsx: true, loc: true, range: true }))
 }
 
+function collectJsxElements(node: any, result: any[]) {
+  if (!node || typeof node !== 'object')
+    return
+  if (node.type === 'JSXElement')
+    result.push(node)
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'parent' || key === 'loc' || key === 'range')
+      continue
+    if (Array.isArray(value)) {
+      for (const child of value)
+        collectJsxElements(child, result)
+    }
+    else {
+      collectJsxElements(value, result)
+    }
+  }
+}
+
 function getSvelteHtml(code: string) {
   return getCached(svelteHtmlCache, code, () => {
     try {
@@ -1099,7 +1117,7 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
 
   if (isVueDocument) {
     const {
-      descriptor: { template },
+      descriptor: { template, script, scriptSetup },
     } = getVueSfcParseResult(code)
     const analyses: Array<{ children: any, offset: number }> = []
     if (template) {
@@ -1107,6 +1125,19 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
         children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
         offset: 0,
       })
+    }
+    else {
+      for (const block of [script, scriptSetup]) {
+        const lang = block?.lang?.toLowerCase()
+        if (!block || (lang !== 'tsx' && lang !== 'jsx'))
+          continue
+        const jsxElements: any[] = []
+        collectJsxElements(getJsxAst(block.content), jsxElements)
+        analyses.push({
+          children: await findUiTag(jsxElements, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
+          offset: block.loc.start.offset,
+        })
+      }
     }
     return analyses
   }

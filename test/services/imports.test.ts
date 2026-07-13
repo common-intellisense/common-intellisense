@@ -246,6 +246,19 @@ const Button = {}
     expect(createImportEdits(dynamic, 'ui', ['Button'], 'specifier', true)).toEqual([])
   })
 
+  it('recognizes static string and computed component registration keys', () => {
+    for (const existing of [`'Button': Button`, `['Button']: Button`]) {
+      const vue = `<script>export default { components: { ${existing} } }</script>`
+      const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
+      expect(output.match(/Button/g)?.length).toBe(3)
+      expect(output).not.toMatch(/Button[^}]*,\s*Button/)
+    }
+
+    const aliased = `<script>export default { components: { AppButton: Button } }</script>`
+    const output = applyEdits(aliased, createImportEdits(aliased, 'ui', ['Button'], 'specifier', true))
+    expect(output).toMatch(/AppButton: Button\s*, Button/)
+  })
+
   it('uses stable Vue block identity after offsets move', () => {
     const original = `<script lang="tsx">\nconst node = <Button />\n</script>\n<script setup lang="ts">\nconst count = ref(0)\n</script>`
     const shifted = `<!-- formatter inserted this -->\n${original}`

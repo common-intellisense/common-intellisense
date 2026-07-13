@@ -444,9 +444,8 @@ function getVueRegistrationEdits(sourceFile: ts.SourceFile, script: ScriptRegion
   const existing = new Set(components.initializer.properties.flatMap((property) => {
     if (ts.isShorthandPropertyAssignment(property))
       return [property.name.text]
-    if (property.name && ts.isIdentifier(property.name))
-      return [property.name.text]
-    return []
+    const name = getStaticPropertyName(property.name)
+    return name ? [name] : []
   }))
   const missing = names.filter(name => !existing.has(name))
   if (!missing.length)

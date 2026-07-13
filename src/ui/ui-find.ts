@@ -49,6 +49,8 @@ export interface PackageContext {
   customFailureCount: number
   officialNextRetryAt: number
   customNextRetryAt: number
+  customSourceEpoch: number
+  customRefreshPending: boolean
   uiNames: string[]
   currentPkgUiNames: string[]
   userPrefix: Record<string, string>
@@ -337,10 +339,7 @@ function maybeStartCustomRefresh(context: PackageContext, expectedEpoch: number,
   const refreshKey = getSourceRefreshKey('custom', latest)
   if (sourceRefreshes.has(refreshKey))
     return false
-  latest.customLastAttemptAt = now
-  latest.customNextRetryAt = now + sourceRetryDelays[0]
-  sourceRefreshes.add(refreshKey)
-  startContextEnhancements(latest, expectedEpoch, () => sourceRefreshes.delete(refreshKey))
+  startTrackedContextEnhancements(latest, expectedEpoch)
   return true
 }
 
@@ -583,6 +582,8 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     customFailureCount: 0,
     officialNextRetryAt: officialLoadFailed ? checkedAt + getRetryDelay(1) : 0,
     customNextRetryAt: 0,
+    customSourceEpoch: 0,
+    customRefreshPending: false,
     uiNames,
     currentPkgUiNames: availableNames,
     userPrefix,
@@ -613,6 +614,8 @@ export async function resetCustomSourcesForApprovalChange() {
       customLastAttemptAt: 0,
       customFailureCount: 0,
       customNextRetryAt: 0,
+      customSourceEpoch: current.customSourceEpoch + 1,
+      customRefreshPending: false,
       customSourceSnapshots: new Map(),
     }
     contexts.set(contextKey, reset)
@@ -635,10 +638,16 @@ export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath
       continue
     context.customSourcesCheckedAt = 0
     context.customNextRetryAt = 0
+    context.customSourceEpoch++
+    const customKey = getSourceRefreshKey('custom', context)
+    const customRefreshRunning = sourceRefreshes.has(customKey)
+    context.customRefreshPending = customRefreshRunning
     if (!exists && context.customSourceSnapshots.has(sourceId)) {
       const snapshots = new Map(context.customSourceSnapshots)
       snapshots.delete(sourceId)
-      await publishContextEnhancement(context, registryEpoch, snapshots)
+      await publishContextEnhancement(context, registryEpoch, snapshots, context.customSourceEpoch)
+      if (!customRefreshRunning)
+        context.customRefreshPending = false
       continue
     }
     const officialKey = getSourceRefreshKey('official', context)
@@ -683,8 +692,19 @@ function startTrackedContextEnhancements(context: PackageContext, expectedEpoch:
     return
   context.customLastAttemptAt = Date.now()
   context.customNextRetryAt = context.customLastAttemptAt + sourceRetryDelays[0]
+  context.customRefreshPending = false
+  const expectedSourceEpoch = context.customSourceEpoch
   sourceRefreshes.add(refreshKey)
-  startContextEnhancements(context, expectedEpoch, () => sourceRefreshes.delete(refreshKey))
+  startContextEnhancements(context, expectedEpoch, expectedSourceEpoch, () => {
+    sourceRefreshes.delete(refreshKey)
+    const latest = contexts.get(context.pkgPath || context.cwd)
+    if (latest?.generation === context.generation
+      && latest.customSourceEpoch !== expectedSourceEpoch
+      && latest.customRefreshPending) {
+      latest.customRefreshPending = false
+      startTrackedContextEnhancements(latest, registryEpoch)
+    }
+  })
 }
 
 async function prepareCustomSnapshot(context: PackageContext, sourceId: string, exports: Record<string, any>, signature: string, configurationIndex = Number.MAX_SAFE_INTEGER): Promise<CustomSourceSnapshot> {
@@ -719,7 +739,7 @@ async function prepareCustomSnapshot(context: PackageContext, sourceId: string, 
   return { exports, signature, configurationIndex, model }
 }
 
-function startContextEnhancements(context: PackageContext, expectedEpoch: number, onSettled?: () => void) {
+function startContextEnhancements(context: PackageContext, expectedEpoch: number, expectedSourceEpoch: number, onSettled?: () => void) {
   const loaders = [
     { prefix: 'local:', load: () => fetchLocalSourceResults(context.workspaceRoot) },
     { prefix: 'http:', load: fetchRemoteUrlSourceResults },
@@ -793,7 +813,7 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
           next.set(id, snapshot)
         committedSnapshots = next
         try {
-          const published = await publishContextEnhancement(context, expectedEpoch, new Map(next))
+          const published = await publishContextEnhancement(context, expectedEpoch, new Map(next), expectedSourceEpoch)
           publishedAny ||= !!published
         }
         catch (error) {
@@ -817,6 +837,7 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
         && !publicationFailed
         && registryEpoch === expectedEpoch
         && current?.generation === context.generation
+        && current.customSourceEpoch === expectedSourceEpoch
         && current.officialCheckedAt === context.officialCheckedAt) {
         current.customSourcesCheckedAt = Date.now()
         current.customFailureCount = 0
@@ -824,6 +845,7 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
       }
       else if (registryEpoch === expectedEpoch
         && current?.generation === context.generation
+        && current.customSourceEpoch === expectedSourceEpoch
         && current.officialCheckedAt === context.officialCheckedAt) {
         current.customFailureCount++
         current.customNextRetryAt = Date.now() + getRetryDelay(current.customFailureCount)
@@ -866,19 +888,19 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
   return composed
 }
 
-async function publishContextEnhancement(context: PackageContext, expectedEpoch: number, sourceResults: CustomSourceSnapshots) {
+async function publishContextEnhancement(context: PackageContext, expectedEpoch: number, sourceResults: CustomSourceSnapshots, expectedSourceEpoch = context.customSourceEpoch) {
   if (registryEpoch !== expectedEpoch)
     return
   const contextKey = context.pkgPath || context.cwd
   const current = contexts.get(contextKey)
   const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
-  if (!current || current.generation !== context.generation || current.officialCheckedAt !== context.officialCheckedAt || latestGeneration !== context.generation)
+  if (!current || current.generation !== context.generation || current.customSourceEpoch !== expectedSourceEpoch || current.officialCheckedAt !== context.officialCheckedAt || latestGeneration !== context.generation)
     return
 
   const enhanced = await composeContextFromSnapshots(context, sourceResults)
   const registered = contexts.get(contextKey)
   const generation = generations.get(contextKey) ?? generations.get(context.cwd)
-  if (registryEpoch !== expectedEpoch || registered !== current || registered.generation !== context.generation || registered.officialCheckedAt !== context.officialCheckedAt || generation !== context.generation)
+  if (registryEpoch !== expectedEpoch || registered !== current || registered.generation !== context.generation || registered.customSourceEpoch !== expectedSourceEpoch || registered.officialCheckedAt !== context.officialCheckedAt || generation !== context.generation)
     return
   enhanced.revision = registered.revision + 1
   enhanced.customSourcesCheckedAt = registered.customSourcesCheckedAt

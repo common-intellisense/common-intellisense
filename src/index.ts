@@ -76,6 +76,54 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, match => `\\${match}`)
 }
 
+export function hasRenderedComponentTag(code: string, renderedTag: string, languageId?: string) {
+  if (!renderedTag)
+    return false
+  const pattern = new RegExp(`^<\\s*${escapeRegExp(renderedTag)}(?=[\\s/>.])`)
+  const scanScript = (script: string) => {
+    let quote = ''
+    for (let index = 0; index < script.length; index++) {
+      if (!quote && script.startsWith('/*', index)) {
+        index = Math.max(index, script.indexOf('*/', index + 2)) + 1
+        continue
+      }
+      if (!quote && script.startsWith('//', index)) {
+        const end = script.indexOf('\n', index + 2)
+        index = end < 0 ? script.length : end
+        continue
+      }
+      const char = script[index]
+      if (quote) {
+        if (char === '\\')
+          index++
+        else if (char === quote)
+          quote = ''
+        continue
+      }
+      if (char === '"' || char.charCodeAt(0) === 39 || char === '`') {
+        quote = char
+        continue
+      }
+      if (char === '<' && pattern.test(script.slice(index)))
+        return true
+    }
+    return false
+  }
+
+  if (languageId === 'vue' || languageId === 'svelte') {
+    const scripts = [...code.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(match => match[1] || '')
+    const markup = code
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+    if (new RegExp(`<\\s*${escapeRegExp(renderedTag)}(?=[\\s/>.])`).test(markup))
+      return true
+    return scripts.some(scanScript)
+  }
+
+  return scanScript(code.replace(/<!--[\s\S]*?-->/g, ''))
+}
+
 export function hasComponentTag(code: string, name: string, prefix = '') {
   const rootName = name.split('.')[0]
   const candidates = new Set([name, rootName])
@@ -472,8 +520,11 @@ export async function activate(context: vscode.ExtensionContext) {
     if (typeof data?.name !== 'string' || !data.name.trim())
       return
     const code = document.getText()
-    if (!hasComponentTag(code, data.name, prefix))
+    if (params.renderedTag
+      ? !hasRenderedComponentTag(code, params.renderedTag, document.languageId)
+      : !hasComponentTag(code, data.name, prefix)) {
       return
+    }
     const name = data.name.split('.')[0]
     const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
     const deps = [...getSuggestedImportNames(data.suggestions, prefix, importWay), name]
