@@ -109,6 +109,31 @@ describe('multi-root package contexts', () => {
     expect(second?.uis).toEqual([['antd', '5.0.0']])
   })
 
+  it('drops stale root dependencies when the root manifest disappears or is invalid', async () => {
+    const fs = await import('node:fs/promises')
+    let state: 'valid' | 'missing' | 'invalid' = 'valid'
+    vi.mocked(fs.default.readFile).mockImplementation(async (file: any) => {
+      if (file === '/workspace-a/package.json') {
+        if (state === 'missing')
+          throw new Error('ENOENT')
+        if (state === 'invalid')
+          return '{'
+        return JSON.stringify({ workspaces: ['packages/*'], dependencies: { antd: '^5.0.0' } })
+      }
+      return JSON.stringify({ dependencies: {} })
+    })
+    vi.mocked(fs.default.access).mockRejectedValue(new Error('no workspace file'))
+    const mod = await import('../../src/ui/ui-find')
+
+    expect((await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a'))?.uis).toEqual([['antd', '5.0.0']])
+    state = 'missing'
+    expect((await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a'))?.uis).toEqual([])
+    state = 'invalid'
+    expect((await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a'))?.uis).toEqual([])
+    state = 'valid'
+    expect((await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a'))?.uis).toEqual([['antd', '5.0.0']])
+  })
+
   it('does not inherit workspace-root dependencies without monorepo metadata', async () => {
     const fs = await import('node:fs/promises')
     vi.mocked(fs.default.readFile).mockImplementation(async (file: any) => {

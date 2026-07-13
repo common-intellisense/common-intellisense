@@ -10,6 +10,7 @@ import { findComponentSourceScope, isLocalModuleSource, resolveImportedTag, sour
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { getNodeOffsetRange } from './services/node-range'
 import { isNativeTag } from './services/native-tags'
+import { invalidateRootPackageCacheForManifest } from './services/ui-cache'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
 import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resolvePackagePathForDocument } from './ui/ui-find'
@@ -17,6 +18,11 @@ import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getU
 import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn, resolveLocalWrappedComponent } from './parser'
 
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
+
+export function supportsSlotAnalysis(document: Pick<vscode.TextDocument, 'languageId' | 'uri'>) {
+  return document.languageId === 'vue' || document.uri.fsPath?.endsWith('.vine.ts') === true
+}
+
 interface DocumentAnalysisCacheEntry {
   uri: string
   version: number
@@ -197,6 +203,14 @@ function getDocumentOffset(document: vscode.TextDocument, position: vscode.Posit
   return lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.character
 }
 
+export function getDependencyScopeOffset(languageId: string, result?: any) {
+  if (languageId !== 'vue' || result?.isInTemplate)
+    return
+  if (result?.type !== 'script' && result?.syntax !== 'jsx')
+    return
+  return typeof result?.loc?.start?.offset === 'number' ? result.loc.start.offset : undefined
+}
+
 function getCompletionRenderContext(document: vscode.TextDocument, result?: any): CompletionRenderContext {
   const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
   const hostFramework = isVineDocument ? 'vine' : result?.hostFramework || (document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'react')
@@ -226,6 +240,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const packageManifestWatcher = vscode.workspace.createFileSystemWatcher?.('**/package.json')
   if (packageManifestWatcher) {
     const invalidateManifest = (uri: vscode.Uri) => {
+      invalidateRootPackageCacheForManifest(uri.fsPath)
       invalidateDocumentPackageMappingsForManifest(uri.fsPath)
       invalidatePackageContext(uri.fsPath)
     }
@@ -243,7 +258,7 @@ export async function activate(context: vscode.ExtensionContext) {
     getDocumentWorkspaceRoot(document),
   )
   const analyzeDocumentSlots = async (document: vscode.TextDocument, packageContext: Awaited<ReturnType<typeof ensureContextForPath>>) => {
-    if (document.isClosed || !getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
+    if (!supportsSlotAnalysis(document) || document.isClosed || !getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
       return
     const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }
     const cached = getDocumentSlotAnalysis(document.uri)
@@ -263,7 +278,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }
   const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
     await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
-      if (isSkip(document))
+      if (!supportsSlotAnalysis(document) || isSkip(document))
         return
       const packageContext = existingOnly
         ? getContextForDocumentPath(getDocumentPath(document))
@@ -277,6 +292,8 @@ export async function activate(context: vscode.ExtensionContext) {
     : clearDocumentAnalysis()))
   context.subscriptions.push(onPackageContextUpdated((packageContext) => {
     for (const editor of vscode.window.visibleTextEditors) {
+      if (!supportsSlotAnalysis(editor.document))
+        continue
       const documentPath = getDocumentPath(editor.document)
       void resolvePackagePathForDocument(documentPath).then((nearestPackagePath) => {
         if (editor.document.isClosed || !vscode.window.visibleTextEditors.includes(editor))
@@ -307,7 +324,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!editor || editor.document.languageId === 'Log')
       return
 
-    if (isSkip(editor.document))
+    if (!supportsSlotAnalysis(editor.document) || isSkip(editor.document))
       return
     // 找到当前活动的编辑器
     const visibleEditors = vscode.window.visibleTextEditors
@@ -522,13 +539,14 @@ export async function activate(context: vscode.ExtensionContext) {
     slotTimers.clear()
   } })
   context.subscriptions.push(addEventListener('text-change', ({ contentChanges, document }) => {
-    if (!getIsShowSlots() || contentChanges.length === 0 || document.languageId === 'Log' || isSkip(document))
-      return
     const key = document.uri.toString()
-    clearDocumentAnalysis(document.uri)
     const previous = slotTimers.get(key)
     if (previous)
       clearTimeout(previous)
+    slotTimers.delete(key)
+    if (!supportsSlotAnalysis(document) || !getIsShowSlots() || contentChanges.length === 0 || document.languageId === 'Log' || isSkip(document))
+      return
+    clearDocumentAnalysis(document.uri)
     slotTimers.set(key, setTimeout(() => {
       slotTimers.delete(key)
       const analyze = async () => {
@@ -575,9 +593,9 @@ export async function activate(context: vscode.ExtensionContext) {
     const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
     const renderContext = { ...getCompletionRenderContext(document, result), parent: result.parent }
     const isTemplateSyntax = renderContext.syntax !== 'jsx'
-    const activeScriptOffset = document.languageId === 'vue' && result.loc ? result.loc.start.offset : undefined
-    const deps = isVue ? completionAnalysis.getImportDeps(activeScriptOffset) : {}
-    const uiDeps = completionAnalysis.getUiDeps(document.languageId === 'vue' && result.loc ? result.loc.start.offset : undefined)
+    const dependencyScopeOffset = getDependencyScopeOffset(document.languageId, result)
+    const deps = isVue ? completionAnalysis.getImportDeps(dependencyScopeOffset) : {}
+    const uiDeps = completionAnalysis.getUiDeps(dependencyScopeOffset)
     const { character } = position
     const isPreEmpty = lineText[character - 1] === ' '
     const isValue = result.isValue
@@ -873,11 +891,9 @@ export async function activate(context: vscode.ExtensionContext) {
       const analysis = getDocumentAnalysis(document)
       const code = analysis.code
       const parsedResult: any = parser(code, position as any, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, position as any, code) })
-      const activeScriptOffset = document.languageId === 'vue' && typeof parsedResult?.loc?.start?.offset === 'number'
-        ? parsedResult.loc.start.offset
-        : undefined
-      const uiDeps = analysis.getUiDeps(activeScriptOffset)
-      const deps = analysis.getImportDeps(activeScriptOffset)
+      const dependencyScopeOffset = getDependencyScopeOffset(document.languageId, parsedResult)
+      const uiDeps = analysis.getUiDeps(dependencyScopeOffset)
+      const deps = analysis.getImportDeps(dependencyScopeOffset)
       const getParsedResult = () => parsedResult
       // word 修正
       if (lineText[range.end.character] === '.' || lineText[range.end.character] === '-') {
@@ -1107,7 +1123,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   void Promise.resolve(getLocalCache).then(async () => {
-    if (!initialEditor || isSkip(initialEditor.document))
+    if (!initialEditor || !supportsSlotAnalysis(initialEditor.document) || isSkip(initialEditor.document))
       return
     const packageContext = await ensureDocumentContext(initialEditor.document)
     await analyzeDocumentSlots(initialEditor.document, packageContext)

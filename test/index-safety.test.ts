@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { getRefMembers, getRefVariableNames, hasComponentTag, selectScopedCompletions } from '../src/index'
+import { getDependencyScopeOffset, getRefMembers, getRefVariableNames, hasComponentTag, selectScopedCompletions, supportsSlotAnalysis } from '../src/index'
 
 describe('provider safety helpers', () => {
+  it('limits slot analysis to Vue and Vine documents', () => {
+    const document = (languageId: string, fsPath: string) => ({ languageId, uri: { fsPath } }) as any
+    expect(supportsSlotAnalysis(document('vue', '/App.vue'))).toBe(true)
+    expect(supportsSlotAnalysis(document('typescript', '/App.vine.ts'))).toBe(true)
+    expect(supportsSlotAnalysis(document('typescriptreact', '/App.tsx'))).toBe(false)
+    expect(supportsSlotAnalysis(document('svelte', '/App.svelte'))).toBe(false)
+  })
+
+  it('merges Vue script dependencies for template results and scopes script results', () => {
+    const loc = { start: { offset: 42 } }
+    expect(getDependencyScopeOffset('vue', { type: 'tag', isInTemplate: true, loc })).toBeUndefined()
+    expect(getDependencyScopeOffset('vue', { type: 'props', isInTemplate: true, loc })).toBeUndefined()
+    expect(getDependencyScopeOffset('vue', { type: 'script', loc })).toBe(42)
+    expect(getDependencyScopeOffset('vue', { type: 'tag', syntax: 'jsx', loc })).toBe(42)
+  })
+
   it('keeps current completions when a multi-UI source has no cache match', () => {
     const current = { Button: { methods: [], exposed: [] } } as any
     const cache = new Map<string, any>([

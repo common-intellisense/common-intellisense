@@ -896,17 +896,23 @@ export async function fetchRemoteText(
 export interface CustomSourceResult {
   id: string
   status: 'success' | 'failed'
+  signature?: string
   value?: Record<string, any>
   error?: unknown
 }
 
-function getOrCreateSourceTask(key: string, id: string, load: () => Promise<Record<string, any> | undefined>): Promise<CustomSourceResult> {
+interface CustomSourceLoadValue {
+  value?: Record<string, any>
+  signature: string
+}
+
+function getOrCreateSourceTask(key: string, id: string, load: () => Promise<CustomSourceLoadValue>): Promise<CustomSourceResult> {
   const existing = perSourceTasks.get(key)
   if (existing)
     return existing
   const task = Promise.resolve()
     .then(load)
-    .then(value => ({ id, status: 'success' as const, value: value || {} }))
+    .then(result => ({ id, status: 'success' as const, value: result.value || {}, signature: result.signature }))
     .catch(error => ({ id, status: 'failed' as const, error }))
     .finally(() => {
       if (perSourceTasks.get(key) === task)
@@ -916,7 +922,7 @@ function getOrCreateSourceTask(key: string, id: string, load: () => Promise<Reco
   return task
 }
 
-async function settleCustomSources(items: Array<{ id: string, taskKey: string, load: () => Promise<Record<string, any> | undefined> }>): Promise<CustomSourceResult[]> {
+async function settleCustomSources(items: Array<{ id: string, taskKey: string, load: () => Promise<CustomSourceLoadValue> }>): Promise<CustomSourceResult[]> {
   return Promise.all(items.map(({ id, taskKey, load }) => getOrCreateSourceTask(taskKey, id, load)))
 }
 
@@ -929,7 +935,11 @@ export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
     return {
       id: identity.id,
       taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`,
-      load: () => fetchFromRemoteUrlsInternal([uri], epoch),
+      load: async () => {
+        const value = await fetchFromRemoteUrlsInternal([uri], epoch)
+        const content = getFetchCacheEntry(identity.cacheKey) || ''
+        return { value, signature: createHash('sha256').update(content).digest('hex') }
+      },
     }
   }))
 }
@@ -1049,10 +1059,13 @@ export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
     return {
       id,
       taskKey: `${epoch}\0${id}\0legacy:${isLegacyAdapterEnabled()}`,
-      load: () => {
+      load: async () => {
         const resource = normalizeNpmResource(rawResource)
         const normalizedItem = typeof item === 'string' ? item : { ...item, resource }
-        return fetchFromRemoteNpmUrlsInternal([normalizedItem], epoch)
+        const value = await fetchFromRemoteNpmUrlsInternal([normalizedItem], epoch)
+        const cacheEntry = [...cacheFetch.entries()].reverse().find(([key]) => key.startsWith(`${name}@`) && key.endsWith(`::${resource}`))
+        const content = cacheEntry?.[1] || `${name}::${resource}`
+        return { value, signature: createHash('sha256').update(content).digest('hex') }
       },
     }
   }))
@@ -1159,7 +1172,19 @@ export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomS
     return {
       id,
       taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${isLegacyAdapterEnabled()}`,
-      load: () => fetchFromLocalUrisInternal([configuredUri], epoch, workspaceRoot),
+      load: async () => {
+        const value = await fetchFromLocalUrisInternal([configuredUri], epoch, workspaceRoot)
+        const resolved = resolveLocalAdapterPath(root, configuredUri)
+        let signature = `missing:${configuredUri}`
+        if (resolved) {
+          try {
+            const content = await fsp.readFile(await fsp.realpath(resolved))
+            signature = createHash('sha256').update(content).digest('hex')
+          }
+          catch {}
+        }
+        return { value, signature }
+      },
     }
   }))
 }

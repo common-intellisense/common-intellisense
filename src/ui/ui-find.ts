@@ -24,7 +24,12 @@ interface ContextModel {
   sourceScopes: Map<string, ComponentSourceScope>
 }
 
-type CustomSourceSnapshots = Map<string, Record<string, any>>
+interface CustomSourceSnapshot {
+  exports: Record<string, any>
+  signature: string
+}
+
+type CustomSourceSnapshots = Map<string, CustomSourceSnapshot>
 
 export interface PackageContext {
   cwd: string
@@ -111,6 +116,7 @@ function getSourceRefreshKey(kind: 'custom' | 'official', context: PackageContex
 }
 
 let registryEpoch = 0
+let volatileSnapshotSequence = 0
 let activeContext: PackageContext | undefined
 const contextInvalidationListeners = new Set<(packagePaths?: string[]) => void>()
 const contextUpdateListeners = new Set<(context: PackageContext) => void>()
@@ -586,10 +592,15 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
           sourceResults.delete(id)
       }
       for (const result of results) {
-        if (result.status === 'success')
-          sourceResults.set(result.id, result.value || {})
-        else if (previous.has(result.id))
+        if (result.status === 'success') {
+          const old = previous.get(result.id)
+          sourceResults.set(result.id, old && result.signature && old.signature === result.signature
+            ? old
+            : { exports: result.value || {}, signature: result.signature || `volatile:${++volatileSnapshotSequence}` })
+        }
+        else if (previous.has(result.id)) {
           sourceResults.set(result.id, previous.get(result.id)!)
+        }
         if (result.status === 'failed') {
           loaderFailed = true
           logger.error(`custom source failed [${result.id}]: ${String(result.error)}`)
@@ -652,7 +663,8 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
 
   const sourceOrder = (id: string) => id.startsWith('local:') ? 0 : id.startsWith('http:') ? 1 : 2
   const orderedSnapshots = [...snapshotCopy.entries()].sort(([a], [b]) => sourceOrder(a) - sourceOrder(b) || a.localeCompare(b))
-  for (const [sourceId, exports] of orderedSnapshots) {
+  for (const [sourceId, snapshot] of orderedSnapshots) {
+    const exports = snapshot?.exports
     if (!exports)
       continue
     for (const key of Object.keys(exports)) {
@@ -855,7 +867,12 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
           cached.rootPkg = rootPkg
           cached.isMonorepo = isMonorepo
         }
-        catch {}
+        catch {
+          rootPkg = null
+          isMonorepo = await computeMonorepoState(rootPath, null)
+          cached.rootPkg = null
+          cached.isMonorepo = isMonorepo
+        }
       }
     }
     else {

@@ -6,6 +6,18 @@ export const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, compon
 export const urlCache = new Map<string, { uis: Uis, pkg: string }>()
 export const rootPkgCache: Map<string, { rootPkgPath: string, rootPkg: any, isMonorepo: boolean, stopRoot?: () => void, stopWorkspace?: () => void }> = new Map()
 
+export function invalidateRootPackageCacheForManifest(manifestPath: string) {
+  for (const [rootPath, value] of rootPkgCache) {
+    if (value.rootPkgPath !== manifestPath)
+      continue
+    try { value.stopRoot?.() }
+    catch {}
+    try { value.stopWorkspace?.() }
+    catch {}
+    rootPkgCache.delete(rootPath)
+  }
+}
+
 export function disposeRootWatchers() {
   for (const value of rootPkgCache.values()) {
     try { value.stopRoot?.() }
