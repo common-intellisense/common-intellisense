@@ -53,6 +53,7 @@ describe('data-only adapter manifest validation', () => {
     { lib: 'demo', directives: {}, map: [['Demo', 'Demo']] },
     { lib: 'demo', directives: [{ name: 'loading', params: [{ name: 'delay' }] }], map: [['Demo', 'Demo']] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { ':': { type: 'string' } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'click', kind: 'invalid' }] }] },
   ])('rejects malformed props before reducers are created', (value) => {
     expect(() => normalizeAdapterManifestExports({ demo: value }, 'fixture')).toThrow(/Invalid adapter manifest field/)
   })

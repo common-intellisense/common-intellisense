@@ -545,6 +545,17 @@ describe('fetch service additional tests (mocked)', () => {
     ))).toBe(false)
   })
 
+  it('settles extension-owned deadlines even when a dependency never resolves', async () => {
+    vi.useFakeTimers()
+    const mod = await import('../../src/services/fetch')
+    const result = expect(mod.withDeadline(new Promise<string>(() => {}), 15_000, 'Resolving adapter'))
+      .rejects
+      .toThrow('Resolving adapter timed out after 15000ms')
+    await vi.advanceTimersByTimeAsync(15_000)
+    await result
+    vi.useRealTimers()
+  })
+
   it('fetchFromRemoteUrls skips untrusted http hosts by default', async () => {
     remoteUris = ['http://example.com/unsafe.js']
     const ofetchMod = await import('ofetch')

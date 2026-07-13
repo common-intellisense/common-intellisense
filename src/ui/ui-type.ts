@@ -18,6 +18,8 @@ export interface EventItem {
   params?: string | any[]
   value?: string
   version?: string
+  /** DOM events use Svelte's `on*` prop; component callbacks keep their declared name. */
+  kind?: 'dom' | 'component'
 }
 export type Events = EventItem[]
 

@@ -8,7 +8,6 @@ import os from 'node:os'
 import process from 'node:process'
 import path from 'node:path'
 import { isIP } from 'node:net'
-import vm from 'node:vm'
 import * as vscode from 'vscode'
 import { fetchAndExtractPackage } from '@simon_he/fetch-npm'
 import { latestVersion } from '@simon_he/latest-version'
@@ -19,7 +18,7 @@ import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
 import { getPrefix } from '../ui/ui-utils'
 import { fetchFromTypes } from '../type-extract'
 import { normalizeAdapterManifestExports } from './adapter-manifest'
-import { createAdapterVmContext, runAdapterExports } from './adapter-vm'
+import { runLegacyAdapterInWorker } from './legacy-adapter-worker'
 
 const prefix = '@common-intellisense/'
 
@@ -150,6 +149,8 @@ let sourceEpoch = 0
 const retry = 3
 const remoteRequestTimeout = 5_000
 const remoteTotalTimeout = 30_000
+const npmVersionDeadline = 15_000
+const npmDownloadDeadline = 30_000
 const remoteUriCacheTTL = 5 * 60 * 1000
 const latestVersionCacheTTL = 10 * 60 * 1000
 const latestVersionCache = new Map<string, { value: string, at: number }>()
@@ -398,7 +399,7 @@ export function validateLegacyAdapterLimits(keys: string[], resultSizes: number[
   return totalResultSize
 }
 
-function evaluateAdapter(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean) {
+async function evaluateAdapter(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean) {
   if (typeof scriptContent !== 'string')
     throw new Error(`Adapter is empty: ${source}`)
   if (scriptContent.length > maxRemoteScriptSize)
@@ -430,22 +431,10 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
     throw new Error(`Executable adapter blocked; enable common-intellisense.allowLegacyAdapters to trust this source: ${source}`)
   }
 
-  // Legacy executable adapter. node:vm limits responsiveness but is not a security sandbox.
-  const sandbox: Record<string, any> = {
-    module: { exports: {} },
-    exports: {},
-    require: undefined,
-    process: undefined,
-    global: undefined,
-    Function: undefined,
-    eval: undefined,
-    __localeZh: localeZh,
-    __result: undefined,
-  }
-  sandbox.exports = sandbox.module.exports
-  const context = createAdapterVmContext(sandbox)
-  new vm.Script(normalizedContent, { filename: source }).runInContext(context, { timeout: remoteExecTimeout })
-  const serializedJson = runAdapterExports(context, remoteExecTimeout)
+  // Execute compatibility code in a terminable Worker. This is not a security
+  // sandbox, but the parent-owned wall-clock deadline protects Extension Host
+  // responsiveness even if code escapes node:vm into nextTick/timer queues.
+  const serializedJson = await runLegacyAdapterInWorker(normalizedContent, source, localeZh, remoteExecTimeout)
   if (typeof serializedJson !== 'string' || Buffer.byteLength(serializedJson) > maxAdapterEnvelopeSize)
     throw new Error(`Adapter result is invalid or too large: ${source}`)
   const serialized = JSON.parse(serializedJson) as unknown
@@ -474,10 +463,13 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
   return result
 }
 
-function evaluateAdapterForEpoch(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean, expectedEpoch: number) {
+async function evaluateAdapterForEpoch(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean, expectedEpoch: number) {
   if (sourceEpoch !== expectedEpoch)
     throw new Error(`Adapter source invalidated before evaluation: ${source}`)
-  return evaluateAdapter(scriptContent, source, localeZh, allowLegacyCode)
+  const result = await evaluateAdapter(scriptContent, source, localeZh, allowLegacyCode)
+  if (sourceEpoch !== expectedEpoch)
+    throw new Error(`Adapter source invalidated during evaluation: ${source}`)
+  return result
 }
 
 function appendReducedExports(target: Record<string, any>, exportsData: Record<string, unknown>, source: string) {
@@ -565,6 +557,23 @@ export function writeLocalCache() {
   return cacheWriteTask
 }
 
+export async function withDeadline<T>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+        timer.unref?.()
+      }),
+    ])
+  }
+  finally {
+    if (timer)
+      clearTimeout(timer)
+  }
+}
+
 async function getLatestVersion(name: string) {
   const cached = latestVersionCache.get(name)
   if (cached && Date.now() - cached.at < latestVersionCacheTTL)
@@ -573,7 +582,7 @@ async function getLatestVersion(name: string) {
   if (pending)
     return pending
   const epoch = sourceEpoch
-  const task = latestVersion(name, { concurrency: 3 }).then((value) => {
+  const task = withDeadline(latestVersion(name, { concurrency: 3 }), npmVersionDeadline, `Resolving ${name}`).then((value) => {
     if (sourceEpoch !== epoch)
       throw new Error(`Version request invalidated: ${name}`)
     latestVersionCache.set(name, { value, at: Date.now() })
@@ -596,10 +605,10 @@ function getOfficialAdapterScript(scriptKey: string, name: string, version: stri
   if (pending)
     return pending
   logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
-  const task = Promise.any([
+  const task = withDeadline(Promise.any([
     fetchAndExtractPackage({ name, dist: 'index.cjs', retry, logger }),
     fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
-  ]).then((scriptContent) => {
+  ]), npmDownloadDeadline, `Downloading ${name}`).then((scriptContent) => {
     if (sourceEpoch !== epoch)
       throw new Error(`Adapter source invalidated before caching: ${scriptKey}`)
     if (scriptContent)
@@ -675,7 +684,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
       const scriptContent = await getOfficialAdapterScript(scriptKey, name, version, epoch)
       // Official @common-intellisense packages remain a trusted compatibility source.
       // Custom executable adapters are opt-in and should migrate to data-only manifests.
-      const exportsData = evaluateAdapterForEpoch(scriptContent, scriptKey, !!isZh, true, epoch)
+      const exportsData = await evaluateAdapterForEpoch(scriptContent, scriptKey, !!isZh, true, epoch)
       const result: any = {}
       let fallbackRaw: any[] | undefined
       if (options?.pkgName && options?.resolveFrom) {
@@ -1007,9 +1016,9 @@ async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSo
   const retryState = remoteUriRetry.get(cacheKey)
   const retryDeferred = !!cached && !!retryState && now < retryState.nextRetryAt
   const needsRefresh = !cached || (!retryDeferred && now - (remoteUriFetchedAt.get(cacheKey) || 0) >= remoteUriCacheTTL)
-  const evaluate = (scriptContent: string) => {
+  const evaluate = async (scriptContent: string) => {
     const reduced: Record<string, any> = {}
-    appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent, displayName, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), displayName)
+    appendReducedExports(reduced, await evaluateAdapterForEpoch(scriptContent, displayName, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), displayName)
     return reduced
   }
   let scriptContent = cached
@@ -1021,7 +1030,7 @@ async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSo
       if (sourceEpoch !== epoch)
         throw new Error(`Remote adapter configuration changed while loading: ${displayName}`)
       // Evaluate the exact bytes before they become the last-known-good cache.
-      const value = evaluate(fetched)
+      const value = await evaluate(fetched)
       setFetchCacheEntry(cacheKey, fetched)
       remoteUriFetchedAt.set(cacheKey, Date.now())
       remoteUriRetry.delete(cacheKey)
@@ -1037,7 +1046,7 @@ async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSo
       scriptContent = cached
     }
   }
-  return { value: evaluate(scriptContent), signature: createHash('sha256').update(scriptContent).digest('hex') }
+  return { value: await evaluate(scriptContent), signature: createHash('sha256').update(scriptContent).digest('hex') }
 }
 
 export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
@@ -1106,14 +1115,14 @@ async function loadRemoteNpmSource(item: { name: string, resource?: string } | s
   const cached = getFetchCacheEntry(key)
   const scriptContent = cached !== undefined
     ? cached
-    : await Promise.any([
+    : await withDeadline(Promise.any([
         fetchAndExtractPackage({ name, dist: resource, logger }),
         resource === 'index.cjs'
           ? fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>
           : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
-      ])
+      ]), npmDownloadDeadline, `Downloading ${name}/${resource}`)
   const reduced: Record<string, any> = {}
-  appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), key)
+  appendReducedExports(reduced, await evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), key)
   if (sourceEpoch !== epoch)
     throw new Error('Remote npm adapter configuration changed')
   if (cached === undefined && scriptContent)
@@ -1189,7 +1198,7 @@ async function loadLocalSource(configuredUri: string, epoch: number, workspaceRo
   const cachedExports = getFetchCacheEntry(uri) === scriptContent ? localUrisMap.get(uri) : undefined
   if (cachedExports)
     return { value: cachedExports, signature }
-  const exportsData = evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
+  const exportsData = await evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
   const reduced: Record<string, any> = {}
   appendReducedExports(reduced, exportsData, uri)
   if (sourceEpoch !== epoch)

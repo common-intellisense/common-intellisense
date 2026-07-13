@@ -43,6 +43,13 @@ function getSyntaxFramework(context: CompletionRenderContext | undefined, fallba
   return context?.framework || fallback
 }
 
+export function renderSvelteEventPropName(event: { name: string, kind?: 'dom' | 'component' }) {
+  if (event.kind !== 'dom')
+    return event.name
+  const normalized = event.name.toLowerCase()
+  return normalized.startsWith('on') ? normalized : `on${normalized}`
+}
+
 function normalizeSuggestionName(suggestion: string | SuggestionItem | undefined): string | undefined {
   const name = typeof suggestion === 'string' ? suggestion : suggestion?.name
   return typeof name === 'string' && name.trim() ? name.trim() : undefined
@@ -379,11 +386,8 @@ export function propsReducer(options: PropsOptions) {
       const isSvelte = syntaxFramework === 'svelte'
       const originEvent = [
         {
-          name: isVue
-            ? 'click'
-            : isSvelte
-              ? 'onclick'
-              : 'onClick',
+          name: isVue ? 'click' : isSvelte ? 'click' : 'onClick',
+          ...(isSvelte ? { kind: 'dom' as const } : {}),
           description: 'click event',
           description_zh: '点击事件',
           params: [],
@@ -431,8 +435,10 @@ export function propsReducer(options: PropsOptions) {
           content = `@${name}="on${_name}"`
         }
         else if (isSvelte) {
-          snippet = `${name}={\${1:${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}}`
-          content = `${name}={${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}`
+          const eventPropName = renderSvelteEventPropName(events)
+          const handlerName = eventPropName.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())
+          snippet = `${eventPropName}={\${1:${handlerName}}}`
+          content = `${eventPropName}={${handlerName}}`
         }
         else {
           const [snippetEventNameOptions, _name] = generateScriptNames(name)
@@ -703,6 +709,10 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
     detail,
     demo,
   ] as [Component, string, string?])
+  // Suggestions are resolved while rendering every component completion. Build the
+  // immutable lookup once so a manifest with N suggestions does not scan N rows
+  // for every rendered item.
+  const componentByName = createComponentSuggestionIndex(map, prefix)
   const isZh = getLocale().includes('zh')
 
   if (!isReact && prefix) {
@@ -723,7 +733,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             itemImportWay = content.importWay || importWay
 
             const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
-            snippet = await getTemplateStr(map, content, 0, framework, isSeperatorByHyphen, parent)
+            snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
@@ -776,7 +786,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           if (typeof content === 'object') {
             itemDynamicLib = content.dynamicLib || dynamicLib
             itemImportWay = content.importWay || importWay
-            snippet = await getTemplateStr(map, content, 0, framework, isSeperatorByHyphen, parent)
+            snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
             const tag = content.name.slice(prefix.length)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
@@ -830,7 +840,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       if (typeof content === 'object') {
         itemDynamicLib = content.dynamicLib || dynamicLib
         itemImportWay = content.importWay || importWay
-        snippet = await getTemplateStr(map, content, 0, framework, isSeperatorByHyphen, parent)
+        snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
         const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
@@ -1091,23 +1101,41 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
     const [snippetEventNameOptions] = generateScriptNames(e.name)
     const snippetVue = `@${e.name}="\${${index}|${snippetEventNameOptions.join(',')}|}"`
     const snippetJsx = `${e.name}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
-    const snippetSvelte = `on${e.name}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
+    const svelteName = renderSvelteEventPropName(e)
+    const snippetSvelte = `${svelteName}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
     requiredProps.push(isVue ? snippetVue : framework === 'svelte' ? snippetSvelte : snippetJsx)
   }
 
   return [requiredProps, index]
 }
 
-function findTargetMap(maps: any, suggestionTag: string) {
-  const label = toCamel(`-${suggestionTag}`)
+function normalizeSuggestionLookupName(name: string) {
+  return toCamel(`-${name}`)
+}
+
+export function createComponentSuggestionIndex(maps: [Component, string, string?][], prefix = '') {
+  const index = new Map<string, Component>()
+  for (const [component] of maps) {
+    const name = component?.name
+    if (typeof name !== 'string' || !name)
+      continue
+    index.set(normalizeSuggestionLookupName(name), component)
+    index.set(normalizeSuggestionLookupName(hyphenate(name)), component)
+    if (prefix && name.startsWith(prefix) && name.length > prefix.length) {
+      const unprefixed = name.slice(prefix.length)
+      index.set(normalizeSuggestionLookupName(unprefixed), component)
+      index.set(normalizeSuggestionLookupName(hyphenate(unprefixed)), component)
+    }
+  }
+  return index
+}
+
+export function findTargetMap(maps: any, suggestionTag: string) {
+  const label = normalizeSuggestionLookupName(suggestionTag)
   for (const map of maps) {
-    if (typeof map[0] === 'object') {
-      if (toCamel(`-${map[0].name}`) === label)
-        return map[0]
-    }
-    else if (toCamel(`-${map[0].name}`) === label) {
-      return map
-    }
+    const component = Array.isArray(map) ? map[0] : undefined
+    if (component && typeof component === 'object' && normalizeSuggestionLookupName(component.name) === label)
+      return component
   }
 }
 
@@ -1202,7 +1230,7 @@ export function generateScriptNames(name: string): [string[], string] {
 }
 
 // 防止递归出现重复tag
-async function getTemplateStr(map: any, content: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
+async function getTemplateStr(componentByName: Map<string, Component>, content: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
   const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
   if (tags.has(tag))
     return `$${++index}`
@@ -1211,22 +1239,22 @@ async function getTemplateStr(map: any, content: any, index: number, framework: 
   tags.add(tag)
 
   const isFirst = tags.size > 1
-  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, map, __index, framework, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
+  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, componentByName, __index, framework, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
 }
 
-async function getSuggestionsTemplateStr(content: any, map: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
+async function getSuggestionsTemplateStr(content: any, componentByName: Map<string, Component>, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
   if (content.suggestions?.length) {
     const suggestionName = normalizeSuggestionName(content.suggestions[0])
     if (!suggestionName)
       return `$${++index}`
-    const suggestion = findTargetMap(map, suggestionName)
+    const suggestion = componentByName.get(normalizeSuggestionLookupName(suggestionName))
     const suggestionTag = isSeperatorByHyphen ? hyphenate(suggestionName) : suggestionName
     const [childRequiredProps, _index] = await getRequireProp(suggestion, index, framework, parent)
 
     if (suggestion) {
       if (tags.has(suggestionTag))
         return `$${_index + 1}`
-      return getTemplateStr(map, suggestion, _index, framework, isSeperatorByHyphen, parent, tags)
+      return getTemplateStr(componentByName, suggestion, _index, framework, isSeperatorByHyphen, parent, tags)
     }
     tags.add(suggestionTag)
     return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index + 1}>$${_index + 2}</${suggestionTag}>\n`

@@ -136,6 +136,26 @@ describe('utils reducer regressions', () => {
     expect((react[0] as any).snippet).toContain('<demo')
   })
 
+  it('uses the same Svelte event names for optional and required snippets', async () => {
+    const { getRequireProp, propsReducer } = await import('../../src/ui/utils')
+    const events = [
+      { name: 'click', kind: 'dom', required: true },
+      { name: 'onclick', kind: 'dom', required: true },
+      { name: 'inflate', kind: 'component', required: true },
+    ] as any
+    const props = await propsReducer({ uiName: 'fixture', lib: 'fixture', map: [{ name: 'Demo', props: {}, events }] as any })
+    const context = { languageId: 'svelte', framework: 'svelte' as const, uri: 'file:///Demo.svelte' }
+    const optional = props.Demo.events[0](context).map(item => item.content)
+    expect(optional).toContain('onclick={onclick}')
+    expect(optional).toContain('inflate={inflate}')
+    expect(optional).not.toContain('ononclick={ononclick}')
+
+    const [required] = await getRequireProp({ props: {}, events }, 0, 'svelte')
+    expect(required.filter(item => item.startsWith('onclick='))).toHaveLength(2)
+    expect(required.some(item => item.startsWith('inflate='))).toBe(true)
+    expect(required.some(item => item.startsWith('oninflate='))).toBe(false)
+  })
+
   it('keeps same-major APIs when only an alias adapter major is known', async () => {
     const { propsReducer } = await import('../../src/ui/utils')
     const component = {
@@ -181,6 +201,15 @@ describe('utils reducer regressions', () => {
     expect(legacy.Demo.tableDocument.value).not.toContain('new-event')
     expect(legacy.Demo.tableDocument.value).not.toContain('new-slot')
     expect(legacy.Demo.rawSlots).toEqual([])
+  })
+
+  it('indexes large component suggestion maps once with normalized aliases', async () => {
+    const { createComponentSuggestionIndex } = await import('../../src/ui/utils')
+    const rows = Array.from({ length: 1000 }, (_, index) => [{ name: `UiComponent${index}` }, `Component ${index}`] as any)
+    const index = createComponentSuggestionIndex(rows, 'Ui')
+
+    expect(index.get('UiComponent999')?.name).toBe('UiComponent999')
+    expect(index.get('Component999')?.name).toBe('UiComponent999')
   })
 
   it('normalizes object suggestions in snippets and documentation', async () => {

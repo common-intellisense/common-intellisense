@@ -87,7 +87,7 @@ function normalizeSuggestions(value: unknown, path: string) {
   })
 }
 
-function normalizeNamedArray(value: unknown, path: string) {
+function normalizeNamedArray(value: unknown, path: string, eventEntries = false) {
   if (value === undefined)
     return []
   if (!Array.isArray(value))
@@ -99,6 +99,8 @@ function normalizeNamedArray(value: unknown, path: string) {
     requireNonEmptyString(entry.name, `${entryPath}.name`)
     for (const key of ['description', 'description_zh', 'version', 'detail', 'platform', 'value'])
       validateOptionalString(entry, key, entryPath)
+    if (eventEntries && entry.kind !== undefined && entry.kind !== 'dom' && entry.kind !== 'component')
+      invalid(`${entryPath}.kind`)
     return { ...entry, params: normalizeParams(entry.params, `${entryPath}.params`) }
   })
 }
@@ -142,7 +144,7 @@ function normalizeComponent(value: unknown, path: string) {
   return {
     ...value,
     props,
-    events: normalizeNamedArray(value.events, `${path}.events`),
+    events: normalizeNamedArray(value.events, `${path}.events`, true),
     methods: normalizeNamedArray(value.methods, `${path}.methods`),
     slots: normalizeNamedArray(value.slots, `${path}.slots`),
     exposed: normalizeNamedArray(value.exposed, `${path}.exposed`),
