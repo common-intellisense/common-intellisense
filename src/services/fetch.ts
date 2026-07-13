@@ -926,21 +926,56 @@ async function settleCustomSources(items: Array<{ id: string, taskKey: string, l
   return Promise.all(items.map(({ id, taskKey, load }) => getOrCreateSourceTask(taskKey, id, load)))
 }
 
+async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSourceLoadValue> {
+  const identity = getRemoteSourceIdentity(uri)
+  const { requestUri, cacheKey, displayName } = identity
+  if (!isTrustedRemoteUri(uri))
+    throw new Error(`Skipped untrusted remoteUri: ${displayName}`)
+  const now = Date.now()
+  const cached = getFetchCacheEntry(cacheKey) || ''
+  const retryState = remoteUriRetry.get(cacheKey)
+  const retryDeferred = !!cached && !!retryState && now < retryState.nextRetryAt
+  const needsRefresh = !cached || (!retryDeferred && now - (remoteUriFetchedAt.get(cacheKey) || 0) >= remoteUriCacheTTL)
+  const evaluate = (scriptContent: string) => {
+    const reduced: Record<string, any> = {}
+    appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent, displayName, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), displayName)
+    return reduced
+  }
+  let scriptContent = cached
+  if (needsRefresh) {
+    try {
+      const fetched = await fetchRemoteText(requestUri)
+      if (typeof fetched !== 'string' || fetched.length > maxRemoteScriptSize)
+        throw new Error(`Remote adapter is invalid or too large: ${displayName}`)
+      if (sourceEpoch !== epoch)
+        throw new Error(`Remote adapter configuration changed while loading: ${displayName}`)
+      // Evaluate the exact bytes before they become the last-known-good cache.
+      const value = evaluate(fetched)
+      setFetchCacheEntry(cacheKey, fetched)
+      remoteUriFetchedAt.set(cacheKey, Date.now())
+      remoteUriRetry.delete(cacheKey)
+      return { value, signature: createHash('sha256').update(fetched).digest('hex') }
+    }
+    catch (error) {
+      if (!cached)
+        throw sanitizeRemoteError(error)
+      const failureCount = (remoteUriRetry.get(cacheKey)?.failureCount || 0) + 1
+      const delay = remoteRetryDelays[Math.min(failureCount - 1, remoteRetryDelays.length - 1)]
+      remoteUriRetry.set(cacheKey, { failureCount, nextRetryAt: Date.now() + delay })
+      logger.error(isZh ? `刷新失败，使用缓存: ${displayName}` : `Refresh failed, using cached module: ${displayName}`)
+      scriptContent = cached
+    }
+  }
+  return { value: evaluate(scriptContent), signature: createHash('sha256').update(scriptContent).digest('hex') }
+}
+
 export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
   const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
   const epoch = sourceEpoch
   const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: isLegacyAdapterEnabled() })
   return settleCustomSources(uris.map((uri) => {
     const identity = getRemoteSourceIdentity(uri)
-    return {
-      id: identity.id,
-      taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`,
-      load: async () => {
-        const value = await fetchFromRemoteUrlsInternal([uri], epoch)
-        const content = getFetchCacheEntry(identity.cacheKey) || ''
-        return { value, signature: createHash('sha256').update(content).digest('hex') }
-      },
-    }
+    return { id: identity.id, taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`, load: () => loadRemoteUrlSource(uri, epoch) }
   }))
 }
 
@@ -962,78 +997,19 @@ export function fetchFromRemoteUrls() {
 async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
   if (!uris.length)
     return {}
-
-  const now = Date.now()
-  const plans = uris.map((uri) => {
-    const identity = getRemoteSourceIdentity(uri)
-    if (!isTrustedRemoteUri(uri)) {
-      logger.error(`Skipped untrusted remoteUri: ${identity.displayName}`)
-      return null
-    }
-    const cached = getFetchCacheEntry(identity.cacheKey) || ''
-    const lastFetchedAt = remoteUriFetchedAt.get(identity.cacheKey) || 0
-    const retryState = remoteUriRetry.get(identity.cacheKey)
-    const retryDeferred = !!cached && !!retryState && now < retryState.nextRetryAt
-    const needsRefresh = !cached || (!retryDeferred && now - lastFetchedAt >= remoteUriCacheTTL)
-    return { identity, cached, needsRefresh }
-  }).filter(Boolean) as Array<{ identity: ReturnType<typeof getRemoteSourceIdentity>, cached: string, needsRefresh: boolean }>
-  if (!plans.length)
-    return {}
-
-  let resolver: () => void = () => { }
-  let rejecter: (msg?: string) => void = () => { }
-  createFakeProgress({
-    title: isZh ? `正在拉取远程文件` : 'Pulling remote files',
-    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
-    callback(resolve, reject) {
-      resolver = resolve
-      rejecter = reject
-    },
+  const trusted = uris.filter((uri) => {
+    if (isTrustedRemoteUri(uri))
+      return true
+    logger.error(`Skipped untrusted remoteUri: ${getRemoteSourceIdentity(uri).displayName}`)
+    return false
   })
-  logger.info(isZh ? '从 remoteUris 中拉取数据...' : 'Fetching data from remoteUris...')
   try {
-    const loaded = await Promise.all(plans.map(async ({ identity, cached, needsRefresh }) => {
-      const { requestUri, cacheKey, displayName } = identity
-      const evaluate = (scriptContent: string) => {
-        const reduced: Record<string, any> = {}
-        appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent, displayName, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), displayName)
-        return reduced
-      }
-      if (!needsRefresh && cached)
-        return evaluate(cached)
-
-      logger.info(isZh ? `正在加载 ${displayName}` : `Loading ${displayName}`)
-      try {
-        const fetched = await fetchRemoteText(requestUri)
-        if (typeof fetched !== 'string' || fetched.length > maxRemoteScriptSize)
-          throw new Error(`Remote adapter is invalid or too large: ${displayName}`)
-        if (sourceEpoch !== epoch)
-          throw new Error(`Remote adapter configuration changed while loading: ${displayName}`)
-        const reduced = evaluate(fetched)
-        setFetchCacheEntry(cacheKey, fetched)
-        remoteUriFetchedAt.set(cacheKey, Date.now())
-        remoteUriRetry.delete(cacheKey)
-        return reduced
-      }
-      catch (error) {
-        if (!cached)
-          throw sanitizeRemoteError(error)
-        const failureCount = (remoteUriRetry.get(cacheKey)?.failureCount || 0) + 1
-        const delay = remoteRetryDelays[Math.min(failureCount - 1, remoteRetryDelays.length - 1)]
-        remoteUriRetry.set(cacheKey, { failureCount, nextRetryAt: Date.now() + delay })
-        logger.error(isZh ? `刷新失败，使用缓存: ${displayName}` : `Refresh failed, using cached module: ${displayName}`)
-        return evaluate(cached)
-      }
-    }))
-    const result: Record<string, any> = {}
-    for (const exportsData of loaded)
-      Object.assign(result, exportsData)
-    resolver()
-    return sourceEpoch === epoch ? result : Promise.reject(new Error('Remote adapter configuration changed'))
+    const loaded = await Promise.all(trusted.map(uri => loadRemoteUrlSource(uri, epoch)))
+    if (sourceEpoch !== epoch)
+      return {}
+    return Object.assign({}, ...loaded.map(item => item.value || {}))
   }
   catch (error) {
-    rejecter(String(error))
-    logger.error(String(error))
     if (sourceEpoch !== epoch)
       return {}
     throw error
@@ -1049,6 +1025,32 @@ export function normalizeNpmResource(input: string) {
   return normalized
 }
 
+async function loadRemoteNpmSource(item: { name: string, resource?: string } | string, epoch: number): Promise<CustomSourceLoadValue> {
+  const name = typeof item === 'string' ? item : item.name
+  const resource = normalizeNpmResource(typeof item === 'string' ? 'index.cjs' : item.resource || 'index.cjs')
+  const version = await getLatestVersion(name)
+  if (!version)
+    throw new Error(`No supported remote npm adapter version: ${name}`)
+  const key = `${name}@${version}::${resource}`
+  const cached = getFetchCacheEntry(key)
+  const scriptContent = cached !== undefined
+    ? cached
+    : await Promise.any([
+        fetchAndExtractPackage({ name, dist: resource, logger }),
+        resource === 'index.cjs'
+          ? fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>
+          : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
+      ])
+  const reduced: Record<string, any> = {}
+  appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), key)
+  if (sourceEpoch !== epoch)
+    throw new Error('Remote npm adapter configuration changed')
+  if (cached === undefined && scriptContent)
+    setFetchCacheEntry(key, scriptContent)
+  const signature = createHash('sha256').update(`${key}\0${scriptContent || ''}`).digest('hex')
+  return { value: reduced, signature }
+}
+
 export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
   const uris = (getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[] | undefined) || []
   const epoch = sourceEpoch
@@ -1059,14 +1061,7 @@ export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
     return {
       id,
       taskKey: `${epoch}\0${id}\0legacy:${isLegacyAdapterEnabled()}`,
-      load: async () => {
-        const resource = normalizeNpmResource(rawResource)
-        const normalizedItem = typeof item === 'string' ? item : { ...item, resource }
-        const value = await fetchFromRemoteNpmUrlsInternal([normalizedItem], epoch)
-        const cacheEntry = [...cacheFetch.entries()].reverse().find(([key]) => key.startsWith(`${name}@`) && key.endsWith(`::${resource}`))
-        const content = cacheEntry?.[1] || `${name}::${resource}`
-        return { value, signature: createHash('sha256').update(content).digest('hex') }
-      },
+      load: () => loadRemoteNpmSource(item, epoch),
     }
   }))
 }
@@ -1089,69 +1084,8 @@ export function fetchFromRemoteNpmUrls() {
 async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: string } | string)[], epoch: number) {
   if (!uris.length)
     return {}
-
-  const result: any = {}
-
-  const fixedUris = (await Promise.all(uris.map(async (item) => {
-    let name = ''
-    let resource = 'index.cjs'
-    if (typeof item === 'string') {
-      name = item
-    }
-    else {
-      name = item.name
-      resource = normalizeNpmResource(item.resource || resource)
-    }
-    logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
-    const version = await getLatestVersion(name)
-    if (!version)
-      throw new Error(`No supported remote npm adapter version: ${name}`)
-    return [name, version, resource]
-  }))) as [string, string, string][]
-
-  let resolver: () => void = () => { }
-  let rejecter: (msg?: string) => void = () => { }
-  createFakeProgress({
-    title: isZh ? `正在拉取远程 NPM 文件` : 'Pulling remote NPM files',
-    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
-    callback(resolve, reject) {
-      resolver = resolve
-      rejecter = reject
-    },
-  })
-  logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
-
-  try {
-    const loaded = await Promise.all(fixedUris.map(async ([name, version, resource]) => {
-      const key = `${name}@${version}::${resource}`
-      const cached = getFetchCacheEntry(key)
-      const scriptContent = cached !== undefined
-        ? cached
-        : await Promise.any([
-            fetchAndExtractPackage({ name, dist: resource, logger }),
-            resource === 'index.cjs'
-              ? fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>
-              : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
-          ])
-      const reduced: Record<string, any> = {}
-      appendReducedExports(reduced, evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), key)
-      if (cached === undefined && scriptContent && sourceEpoch === epoch)
-        setFetchCacheEntry(key, scriptContent)
-      return reduced
-    }))
-    for (const exportsData of loaded)
-      Object.assign(result, exportsData)
-    resolver()
-  }
-  catch (error) {
-    rejecter(String(error))
-    logger.error(String(error))
-    throw error
-  }
-
-  if (sourceEpoch !== epoch)
-    throw new Error('Remote npm adapter configuration changed')
-  return result
+  const loaded = await Promise.all(uris.map(item => loadRemoteNpmSource(item, epoch)))
+  return Object.assign({}, ...loaded.map(item => item.value || {}))
 }
 
 const localUrisMap = new Map<string, any>()
@@ -1163,6 +1097,37 @@ export function resolveLocalAdapterPath(workspaceRoot: string, configuredUri: st
   return relative.startsWith('..') || path.isAbsolute(relative) ? undefined : target
 }
 
+async function loadLocalSource(configuredUri: string, epoch: number, workspaceRoot?: string): Promise<CustomSourceLoadValue> {
+  if (vscode.workspace && vscode.workspace.isTrusted === false)
+    throw new Error('Local adapters are disabled in untrusted workspaces')
+  const root = workspaceRoot || getRootPath()
+  if (!root)
+    throw new Error('Local adapter workspace root is unavailable')
+  const normalizedRoot = path.resolve(root)
+  const uri = resolveLocalAdapterPath(normalizedRoot, configuredUri)
+  if (!uri)
+    throw new Error(`Skipped local adapter outside workspace: ${configuredUri}`)
+  const [realUri, realRoot] = await Promise.all([fsp.realpath(uri), fsp.realpath(normalizedRoot)])
+  const realRelative = path.relative(realRoot, realUri)
+  if (realRelative.startsWith('..') || path.isAbsolute(realRelative))
+    throw new Error(`Skipped local adapter symlink outside workspace: ${configuredUri}`)
+  const scriptContent = await fsp.readFile(realUri, 'utf8')
+  if (scriptContent.length > maxRemoteScriptSize)
+    throw new Error(`Local adapter is too large: ${uri}`)
+  const signature = createHash('sha256').update(scriptContent).digest('hex')
+  const cachedExports = getFetchCacheEntry(uri) === scriptContent ? localUrisMap.get(uri) : undefined
+  if (cachedExports)
+    return { value: cachedExports, signature }
+  const exportsData = evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
+  const reduced: Record<string, any> = {}
+  appendReducedExports(reduced, exportsData, uri)
+  if (sourceEpoch !== epoch)
+    throw new Error('Local adapter configuration changed')
+  setFetchCacheEntry(uri, scriptContent)
+  localUrisMap.set(uri, reduced)
+  return { value: reduced, signature }
+}
+
 export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomSourceResult[]> {
   const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
   const epoch = sourceEpoch
@@ -1172,19 +1137,7 @@ export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomS
     return {
       id,
       taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${isLegacyAdapterEnabled()}`,
-      load: async () => {
-        const value = await fetchFromLocalUrisInternal([configuredUri], epoch, workspaceRoot)
-        const resolved = resolveLocalAdapterPath(root, configuredUri)
-        let signature = `missing:${configuredUri}`
-        if (resolved) {
-          try {
-            const content = await fsp.readFile(await fsp.realpath(resolved))
-            signature = createHash('sha256').update(content).digest('hex')
-          }
-          catch {}
-        }
-        return { value, signature }
-      },
+      load: () => loadLocalSource(configuredUri, epoch, workspaceRoot),
     }
   }))
 }
@@ -1205,55 +1158,10 @@ export function fetchFromLocalUris(workspaceRoot?: string) {
 }
 
 async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspaceRoot?: string) {
-  const result: Record<string, any> = {}
   if (!uris.length)
-    return result
-  if (vscode.workspace && vscode.workspace.isTrusted === false) {
-    logger.error(isZh ? '不受信任的工作区已禁用本地适配器' : 'Local adapters are disabled in untrusted workspaces')
-    return result
-  }
-  const root = workspaceRoot || getRootPath()
-  if (!root)
-    return result
-  const normalizedRoot = path.resolve(root)
-  for (const configuredUri of uris) {
-    try {
-      const uri = resolveLocalAdapterPath(normalizedRoot, configuredUri)
-      if (!uri) {
-        logger.error(`Skipped local adapter outside workspace: ${configuredUri}`)
-        continue
-      }
-      const realUri = await fsp.realpath(uri)
-      const realRoot = await fsp.realpath(normalizedRoot)
-      const realRelative = path.relative(realRoot, realUri)
-      if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
-        logger.error(`Skipped local adapter symlink outside workspace: ${configuredUri}`)
-        continue
-      }
-      const scriptContent = await fsp.readFile(realUri, 'utf8')
-      if (scriptContent.length > maxRemoteScriptSize)
-        throw new Error(`Local adapter is too large: ${uri}`)
-      if (getFetchCacheEntry(uri) === scriptContent && localUrisMap.has(uri)) {
-        Object.assign(result, localUrisMap.get(uri))
-        continue
-      }
-      const exportsData = evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
-      const reduced: Record<string, any> = {}
-      appendReducedExports(reduced, exportsData, uri)
-      if (sourceEpoch !== epoch)
-        continue
-      setFetchCacheEntry(uri, scriptContent)
-      localUrisMap.set(uri, reduced)
-      Object.assign(result, reduced)
-    }
-    catch (error) {
-      logger.error(`Failed to load local adapter ${configuredUri}: ${String(error)}`)
-      throw error
-    }
-  }
-  if (sourceEpoch !== epoch)
-    throw new Error('Local adapter configuration changed')
-  return result
+    return {}
+  const loaded = await Promise.all(uris.map(item => loadLocalSource(item, epoch, workspaceRoot)))
+  return Object.assign({}, ...loaded.map(item => item.value || {}))
 }
 
 export function clearFetchCaches() {

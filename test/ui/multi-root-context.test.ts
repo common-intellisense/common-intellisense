@@ -8,7 +8,9 @@ const { fetchOfficial, watchFileMock } = vi.hoisted(() => ({
 vi.mock('find-up', () => ({
   findUp: vi.fn(async (_name: string, options: any) => options.cwd.startsWith('/workspace-b')
     ? '/workspace-b/packages/app/package.json'
-    : '/workspace-a/packages/app/package.json'),
+    : options.cwd.includes('/packages/b/')
+      ? '/workspace-a/packages/b/package.json'
+      : '/workspace-a/packages/app/package.json'),
 }))
 vi.mock('node:fs/promises', () => ({
   default: {
@@ -132,6 +134,24 @@ describe('multi-root package contexts', () => {
     expect((await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a'))?.uis).toEqual([])
     state = 'valid'
     expect((await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a'))?.uis).toEqual([['antd', '5.0.0']])
+  })
+
+  it('notifies every loaded child package when the shared root manifest changes', async () => {
+    const mod = await import('../../src/ui/ui-find')
+    const rebuildA = vi.fn()
+    const rebuildB = vi.fn()
+
+    await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', rebuildA, '/workspace-a')
+    await mod.findPkgUI('/workspace-a/packages/b/src/App.tsx', rebuildB, '/workspace-a')
+    // Re-registering a child replaces, rather than duplicates, its subscriber.
+    await mod.findPkgUI('/workspace-a/packages/app/src/Other.tsx', rebuildA, '/workspace-a')
+
+    const rootWatch = (watchFileMock.mock.calls as any[]).find(([file]) => file === '/workspace-a/package.json')
+    expect(rootWatch).toBeDefined()
+    rootWatch[1].onChange()
+
+    expect(rebuildA).toHaveBeenCalledTimes(1)
+    expect(rebuildB).toHaveBeenCalledTimes(1)
   })
 
   it('does not inherit workspace-root dependencies without monorepo metadata', async () => {

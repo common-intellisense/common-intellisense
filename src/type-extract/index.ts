@@ -49,11 +49,18 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
   if (!pkgName || !uiName)
     return
 
-  const basePath = options.resolveFrom
-    ? path.extname(options.resolveFrom)
-      ? path.dirname(options.resolveFrom)
-      : options.resolveFrom
-    : (getRootPath() || process.cwd())
+  let basePath = getRootPath() || process.cwd()
+  if (options.resolveFrom) {
+    try {
+      const stat = await fsp.stat(options.resolveFrom)
+      basePath = stat.isFile() ? path.dirname(options.resolveFrom) : options.resolveFrom
+    }
+    catch {
+      basePath = path.basename(options.resolveFrom) === 'package.json'
+        ? path.dirname(options.resolveFrom)
+        : options.resolveFrom
+    }
+  }
   const requireBase = path.resolve(basePath, 'package.json')
   const require = createRequire(requireBase)
   let pkgJsonPath = ''
@@ -66,7 +73,8 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
 
   const pkgRoot = path.dirname(pkgJsonPath)
   const pkgRootReal = await fsp.realpath(pkgRoot)
-  const pkgJson = JSON.parse(await fsp.readFile(pkgJsonPath, 'utf-8'))
+  const pkgJsonContent = await fsp.readFile(pkgJsonPath, 'utf-8')
+  const pkgJson = JSON.parse(pkgJsonContent)
   const version = pkgJson?.version || '0.0.0'
   const typeEntry = resolveTypesEntry(pkgJson, pkgRoot)
   if (!typeEntry)
@@ -106,6 +114,21 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
       strictNullChecks: true,
     }
     const host = ts.createCompilerHost(compilerOptions)
+    const sourceHashes = new Map<string, string>()
+    let sourceChangedDuringRead = false
+    const originalReadFile = host.readFile.bind(host)
+    host.readFile = (fileName) => {
+      const text = originalReadFile(fileName)
+      if (text !== undefined && isRelevantPackageFile(fileName, pkgRoot)) {
+        const normalized = path.resolve(fileName)
+        const digest = hashText(text)
+        const previous = sourceHashes.get(normalized)
+        if (previous !== undefined && previous !== digest)
+          sourceChangedDuringRead = true
+        sourceHashes.set(normalized, digest)
+      }
+      return text
+    }
     const origResolveModuleNames = host.resolveModuleNames?.bind(host)
     host.resolveModuleNames = (moduleNames, containingFile, ...rest) => {
       const baseResolved = origResolveModuleNames
@@ -120,11 +143,14 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
         return preferDtsResolved(fallback)
       })
     }
+    sourceHashes.set(path.resolve(pkgJsonPath), hashText(pkgJsonContent))
     const program = ts.createProgram(rootNames, compilerOptions, host)
-    const packageSourceFiles = program.getSourceFiles()
-      .map(sourceFile => sourceFile.fileName)
-      .filter(fileName => fileName === pkgJsonPath || fileName.startsWith(`${pkgRoot}${path.sep}`))
-    packageSourceFiles.push(pkgJsonPath)
+    const packageSourceFiles = [...new Set([
+      ...program.getSourceFiles()
+        .map(sourceFile => sourceFile.fileName)
+        .filter(fileName => isRelevantPackageFile(fileName, pkgRoot)),
+      pkgJsonPath,
+    ])]
     const finalSignature = await getTypeCacheSignature({ pkgRoot: pkgRootReal, version, files: packageSourceFiles })
     const finalCacheKey = `${snapshotKey}::${finalSignature}::${uiName}`
     const checker = program.getTypeChecker()
@@ -155,7 +181,8 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
       [`${uiName}`]: () => propsConfig,
       [`${uiName}Raw`]: () => rawComponents,
     }
-    if (typeCache.getEpoch() === cacheEpoch) {
+    const filesChangedDuringBuild = sourceChangedDuringRead || await didRecordedSourcesChange(sourceHashes)
+    if (typeCache.getEpoch() === cacheEpoch && !filesChangedDuringBuild) {
       typeCache.setSnapshot(snapshotKey, packageSourceFiles)
       typeCache.set(finalCacheKey, result)
     }
@@ -170,6 +197,28 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
     typeCache.clearInFlight(cacheKey, promise)
     typeCache.prune()
   }
+}
+
+function hashText(text: string) {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+function isRelevantPackageFile(fileName: string, pkgRoot: string) {
+  const relative = path.relative(pkgRoot, fileName)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative) && !relative.split(path.sep).includes('node_modules'))
+}
+
+async function didRecordedSourcesChange(sourceHashes: Map<string, string>) {
+  for (const [fileName, recordedHash] of sourceHashes) {
+    try {
+      if (hashText(await fsp.readFile(fileName, 'utf8')) !== recordedHash)
+        return true
+    }
+    catch {
+      return true
+    }
+  }
+  return false
 }
 
 async function pathExists(target: string) {
@@ -188,9 +237,9 @@ async function getTypeCacheSignature(input: { pkgRoot: string, version: string, 
   hash.update(input.version)
   for (const file of [...new Set(input.files)].sort()) {
     try {
-      const stat = await fsp.stat(file)
+      const content = await fsp.readFile(file)
       hash.update(path.relative(input.pkgRoot, file))
-      hash.update(`${Number(stat.mtimeMs)}:${Number(stat.size)}`)
+      hash.update(createHash('sha256').update(content).digest('hex'))
     }
     catch {
       hash.update(`${path.relative(input.pkgRoot, file)}:missing`)

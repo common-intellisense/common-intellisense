@@ -29,6 +29,15 @@ describe('component provider source deduplication', () => {
     ]))
   })
 
+  it('associates directives with the exact adapter identity', () => {
+    const value = target()
+    const directives = [{ name: 'focus' }]
+    mergeComponents(value, [{ ...provider('antd', 'a', 'Button'), directives }], {}, ['antd-mobile5', 'antd5'], 'antd5', 'official:antd5')
+
+    expect(value.directivesMap.antd5).toBe(directives)
+    expect(value.directivesMap['antd-mobile5']).toBeUndefined()
+  })
+
   it('keeps different sources that contribute the same lib and prefix', () => {
     const value = target()
     mergeComponents(value, [provider('element-plus', 'el', 'ElButton')], {}, [], 'elementPlus2', 'official:elementPlus2')

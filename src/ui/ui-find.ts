@@ -11,7 +11,7 @@ import { fetchFromCommonIntellisense, fetchLocalSourceResults, fetchRemoteNpmSou
 import type { ComponentSourceScope } from '../services/component-resolver'
 import { findComponentSourceScope, getPackageSource } from '../services/component-resolver'
 import { clearPackageVersionCache, resolveInstalledPackageVersion } from '../services/package-version'
-import { cacheMap, deactivateUICache as deactivateCache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../services/ui-cache'
+import { cacheMap, deactivateUICache as deactivateCache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, removeRootPackageSubscriber, rootPkgCache, urlCache } from '../services/ui-cache'
 import { clearTypeCache } from '../type-extract/cache'
 import { formatUIName, getAlias, getPrefix, getSelectedUIs } from './ui-utils'
 
@@ -674,12 +674,17 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
           const components = exports[key]?.()
           if (components) {
             composed.cacheMap.set(scopedKey, components)
-            mergeComponents(composed.optionsComponents, components, composed.userPrefix, [], key.slice(0, -10), scopedKey)
+            const directiveKey = `custom:${sourceId}:${key.slice(0, -'Components'.length)}`
+            mergeComponents(composed.optionsComponents, components, composed.userPrefix, [], directiveKey, scopedKey)
           }
         }
         else {
           const completion = await exports[key]?.({ resolveFrom: composed.pkgPath })
           if (completion) {
+            // Runtime directive lookup must use the source-scoped identity even
+            // when multiple manifests reuse the same export/uiName.
+            for (const item of Object.values(completion) as any[])
+              item.uiName = scopedKey
             composed.cacheMap.set(scopedKey, completion)
             composed.uiCompletions ||= {} as PropsConfig
             Object.assign(composed.uiCompletions, completion)
@@ -745,8 +750,7 @@ export function mergeComponents(target: OptionsComponents, components: any[], us
     if (!target.prefix.includes(prefix))
       target.prefix.push(prefix)
     target.data.push(data)
-    const libWithVersion = originNames.find(item => item.startsWith(lib)) || fallbackName
-    target.directivesMap[libWithVersion] = directives
+    target.directivesMap[fallbackName] = directives
   }
 }
 
@@ -884,8 +888,14 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
         }
         catch {}
       }
-      rootPkgCache.set(rootPath, { rootPkgPath, rootPkg, isMonorepo })
+      rootPkgCache.set(rootPath, { rootPkgPath, rootPkg, isMonorepo, subscribers: new Map() })
     }
+  }
+
+  if (onChange && rootPath && rootPkgPath && rootPkgPath !== pkg) {
+    const cached = rootPkgCache.get(rootPath)!
+    cached.subscribers ||= new Map()
+    cached.subscribers.set(pkg, onChange)
   }
 
   if (onChange && !mainWatchers.has(pkg)) {
@@ -894,15 +904,17 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
       onChange()
     }
     mainWatchers.set(pkg, watchFile(pkg, { onChange: invalidate }))
-    // Always watch an existing workspace-root manifest, even before it becomes a
-    // monorepo. Adding `workspaces` to that file must invalidate child contexts.
+    // A root manifest is shared by every child package. Rebuild all subscribed
+    // children rather than only the package that created this watcher.
     if (rootPath && rootPkgPath && rootPkgPath !== pkg) {
       const cached = rootPkgCache.get(rootPath)!
       if (!cached.stopRoot) {
         cached.stopRoot = watchFile(rootPkgPath, {
           onChange: () => {
+            const subscribers = [...(cached.subscribers?.values() || [])]
             invalidatePackageContext(rootPath)
-            onChange()
+            for (const rebuild of subscribers)
+              rebuild()
           },
         })
       }
@@ -917,8 +929,10 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
           if (filename?.toString() !== 'pnpm-workspace.yaml')
             return
           cached.isMonorepo = false
+          const subscribers = [...(cached.subscribers?.values() || [])]
           invalidatePackageContext(rootPath)
-          onChange()
+          for (const rebuild of subscribers)
+            rebuild()
         })
         cached.stopWorkspace = () => watcher.close()
       }
@@ -937,8 +951,13 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
     const declared = deps[key]
     const parsed = parseDeclaredDependency(declared)
     const resolveFrom = getDependencyResolveFrom(key, localDependencies, pkgDir, rootPath)
-    const installedName = parsed.packageName || key
-    const installed = await resolveInstalledPackageVersion(installedName, resolveFrom)
+    // npm aliases are installed and resolved under the dependency key in the
+    // consuming project (for example `antd`), not under the target package's
+    // declared name. Fall back to the target identity for non-standard layouts.
+    const installed = await resolveInstalledPackageVersion(key, resolveFrom)
+      ?? (parsed.packageName && parsed.packageName !== key
+        ? await resolveInstalledPackageVersion(parsed.packageName, resolveFrom)
+        : undefined)
     const version = selectDependencyVersion(installed, parsed.major, parsed.range)
     if (!version) {
       logger.error(`${key} version is unsupported: ${declared}`)
@@ -978,6 +997,7 @@ export function invalidatePackageContext(cwdOrPkg: string) {
     contexts.delete(pkgPath)
     contextLoads.delete(pkgPath)
     disposePackageWatcher(pkgPath)
+    removeRootPackageSubscriber(pkgPath)
   }
   for (const [documentPath, packagePath] of documentPackageCache) {
     if (packagePath && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg)))

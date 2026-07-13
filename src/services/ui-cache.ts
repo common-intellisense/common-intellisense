@@ -4,7 +4,21 @@ import { clearPackageVersionCache } from './package-version'
 export const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
 export const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
 export const urlCache = new Map<string, { uis: Uis, pkg: string }>()
-export const rootPkgCache: Map<string, { rootPkgPath: string, rootPkg: any, isMonorepo: boolean, stopRoot?: () => void, stopWorkspace?: () => void }> = new Map()
+export interface RootPackageCacheEntry {
+  rootPkgPath: string
+  rootPkg: any
+  isMonorepo: boolean
+  stopRoot?: () => void
+  stopWorkspace?: () => void
+  subscribers?: Map<string, () => void>
+}
+
+export const rootPkgCache = new Map<string, RootPackageCacheEntry>()
+
+export function removeRootPackageSubscriber(packagePath: string) {
+  for (const value of rootPkgCache.values())
+    value.subscribers?.delete(packagePath)
+}
 
 export function invalidateRootPackageCacheForManifest(manifestPath: string) {
   for (const [rootPath, value] of rootPkgCache) {
@@ -14,6 +28,7 @@ export function invalidateRootPackageCacheForManifest(manifestPath: string) {
     catch {}
     try { value.stopWorkspace?.() }
     catch {}
+    value.subscribers?.clear()
     rootPkgCache.delete(rootPath)
   }
 }
@@ -26,6 +41,7 @@ export function disposeRootWatchers() {
     catch {}
     value.stopRoot = undefined
     value.stopWorkspace = undefined
+    value.subscribers?.clear()
   }
 }
 

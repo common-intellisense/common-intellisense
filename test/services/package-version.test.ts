@@ -30,6 +30,28 @@ describe('package-version service', () => {
     await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.7')
   })
 
+  it('resolves npm aliases by their consuming dependency key', async () => {
+    const pkgDir = path.join(tempDir, 'node_modules', 'antd')
+    await fsp.mkdir(pkgDir, { recursive: true })
+    await fsp.writeFile(path.join(pkgDir, 'package.json'), JSON.stringify({
+      name: '@corp/antd-fork',
+      version: '5.2.1',
+    }))
+
+    await expect(resolveInstalledPackageVersion('antd', tempDir)).resolves.toBe('5.2.1')
+  })
+
+  it('keeps dotted directories as resolution bases', async () => {
+    const dottedDir = path.join(tempDir, 'packages', 'ui.v2')
+    const pkgDir = path.join(dottedDir, 'node_modules', 'element-plus')
+    await fsp.mkdir(pkgDir, { recursive: true })
+    await fsp.writeFile(path.join(dottedDir, 'package.json'), JSON.stringify({ name: 'dotted-fixture' }))
+    await fsp.writeFile(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'element-plus', version: '2.8.0' }))
+
+    await expect(resolveInstalledPackageVersion('element-plus', dottedDir)).resolves.toBe('2.8.0')
+    await expect(resolveInstalledPackageVersion('element-plus', path.join(dottedDir, 'package.json'))).resolves.toBe('2.8.0')
+  })
+
   it('does not cache missing packages', async () => {
     await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBeUndefined()
 

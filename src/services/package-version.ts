@@ -13,20 +13,27 @@ interface VersionCacheEntry {
 
 const packageVersionCache = new Map<string, VersionCacheEntry>()
 
-function getBasePath(resolveFrom?: string) {
+async function getBasePath(resolveFrom?: string) {
   if (!resolveFrom)
     return getRootPath() || process.cwd()
 
-  return path.extname(resolveFrom)
-    ? path.dirname(resolveFrom)
-    : resolveFrom
+  try {
+    const stat = await fsp.stat(resolveFrom)
+    return stat.isFile() ? path.dirname(resolveFrom) : resolveFrom
+  }
+  catch {
+    // Callers normally pass either an existing package directory or its
+    // package.json. Do not treat dotted directory names (for example ui.v2)
+    // as files merely because path.extname() is non-empty.
+    return path.basename(resolveFrom) === 'package.json' ? path.dirname(resolveFrom) : resolveFrom
+  }
 }
 
 export async function resolveInstalledPackageVersion(pkgName: string, resolveFrom?: string) {
   if (!pkgName)
     return
 
-  const basePath = getBasePath(resolveFrom)
+  const basePath = await getBasePath(resolveFrom)
   const cacheKey = `${basePath}::${pkgName}`
   const cached = packageVersionCache.get(cacheKey)
   if (cached) {
