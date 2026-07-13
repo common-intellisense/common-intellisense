@@ -384,6 +384,28 @@ describe('fetch service additional tests (mocked)', () => {
     expect(result.ButtonProps()[0].name).toBe('Button')
   })
 
+  it('loads BOM-prefixed data manifests without treating them as legacy code', async () => {
+    allowLegacyAdapters = false
+    const warning = vi.fn()
+    ;(vscode.window as any).showWarningMessage = warning
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(`\uFEFF${JSON.stringify({
+      schemaVersion: 1,
+      exports: {
+        ButtonProps: { uiName: 'button', lib: 'button', map: [{ name: 'Button' }] },
+      },
+    })}`)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps()[0].name).toBe('Button')
+    expect(warning).not.toHaveBeenCalled()
+
+    mod.clearFetchCaches()
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('\uFEFF   \n')
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Adapter is empty')
+  })
+
   it('rejects unknown manifest schema versions', async () => {
     allowLegacyAdapters = false
     const ofetchMod = await import('ofetch')

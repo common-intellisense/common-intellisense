@@ -53,6 +53,14 @@ describe('remote redirect validation', () => {
     }
   })
 
+  it('allows only globally routable public addresses', async () => {
+    const { isGloballyRoutableAddress } = await import('../../src/services/fetch')
+    for (const address of ['127.0.0.1', '169.254.169.254', '192.0.0.1', '192.0.2.1', '::1', 'fe80::1', 'fec0::1', 'fc00::1', '64:ff9b:1::7f00:1', '64:ff9b::7f00:1', '2001:db8::1', '3fff::1'])
+      expect(isGloballyRoutableAddress(address), address).toBe(false)
+    for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111'])
+      expect(isGloballyRoutableAddress(address), address).toBe(true)
+  })
+
   it('rejects localhost DNS results outside the loopback range', async () => {
     const { fetchRemoteText, isLoopbackAddress } = await import('../../src/services/fetch')
     const requester = vi.fn(async () => ({ status: 200, body: 'manifest' }))

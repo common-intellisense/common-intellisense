@@ -206,6 +206,7 @@ function pruneInactiveContexts() {
     contextLoads.delete(pkgPath)
     generations.delete(pkgPath)
     disposePackageWatcher(pkgPath)
+    removeRootPackageSubscriber(pkgPath)
     for (const [documentPath, cached] of urlCache) {
       if (cached.pkg === pkgPath)
         urlCache.delete(documentPath)
@@ -314,33 +315,45 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   return load.task
 }
 
+function maybeStartCustomRefresh(context: PackageContext, expectedEpoch: number, now = Date.now()) {
+  const contextKey = context.pkgPath || context.cwd
+  const latest = contexts.get(contextKey)
+  if (!latest
+    || registryEpoch !== expectedEpoch
+    || latest.generation !== context.generation
+    || now - latest.customSourcesCheckedAt < customSourceTTL
+    || now < latest.customNextRetryAt
+    || sourceRefreshes.has(getSourceRefreshKey('official', latest))) {
+    return false
+  }
+  const refreshKey = getSourceRefreshKey('custom', latest)
+  if (sourceRefreshes.has(refreshKey))
+    return false
+  latest.customLastAttemptAt = now
+  latest.customNextRetryAt = now + sourceRetryDelays[0]
+  sourceRefreshes.add(refreshKey)
+  startContextEnhancements(latest, expectedEpoch, () => sourceRefreshes.delete(refreshKey))
+  return true
+}
+
 function revalidateStaleContext(context: PackageContext, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, workspaceRoot: string) {
   const contextKey = context.pkgPath || context.cwd
   const now = Date.now()
-  if (now - context.officialCheckedAt < officialSourceTTL) {
-    if (now - context.customSourcesCheckedAt >= customSourceTTL && now >= context.customNextRetryAt) {
-      const refreshKey = getSourceRefreshKey('custom', context)
-      if (!sourceRefreshes.has(refreshKey)) {
-        context.customLastAttemptAt = now
-        context.customNextRetryAt = now + sourceRetryDelays[0]
-        sourceRefreshes.add(refreshKey)
-        startContextEnhancements(context, registryEpoch, () => sourceRefreshes.delete(refreshKey))
-      }
-    }
+  const expectedEpoch = registryEpoch
+  const officialDue = now - context.officialCheckedAt >= officialSourceTTL && now >= context.officialNextRetryAt
+  if (!officialDue) {
+    maybeStartCustomRefresh(context, expectedEpoch, now)
     return
   }
-  if (now < context.officialNextRetryAt)
-    return
-  // An official refresh also restarts custom enhancements. Do not publish an
-  // old-baseline custom revision concurrently or it could invalidate the
-  // official refresh's context identity guard.
+
+  // Avoid publishing custom snapshots on the old official baseline. The
+  // official task always re-checks custom TTL when it settles, including errors.
   const refreshKey = getSourceRefreshKey('official', context)
   if (sourceRefreshes.has(refreshKey))
     return
   context.officialLastAttemptAt = now
   context.officialNextRetryAt = now + sourceRetryDelays[0]
   sourceRefreshes.add(refreshKey)
-  const expectedEpoch = registryEpoch
   void buildContext(context.cwd, extensionContext, detectSlots, context.generation, workspaceRoot, true)
     .then(async (refreshed) => {
       const registered = contexts.get(contextKey)
@@ -366,7 +379,6 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
       contexts.set(contextKey, composed)
       applyContext(composed)
       notifyContextUpdated(composed)
-      startTrackedContextEnhancements(composed, expectedEpoch)
     })
     .catch((error) => {
       const current = contexts.get(contextKey)
@@ -376,7 +388,12 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
       }
       logger.error(`official source refresh failed: ${String(error)}`)
     })
-    .finally(() => sourceRefreshes.delete(refreshKey))
+    .finally(() => {
+      sourceRefreshes.delete(refreshKey)
+      const latest = contexts.get(contextKey)
+      if (latest)
+        maybeStartCustomRefresh(latest, expectedEpoch)
+    })
 }
 
 export async function findUI(extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache?: boolean) {

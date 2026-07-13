@@ -32,10 +32,12 @@ interface DocumentAnalysisCacheEntry {
 }
 const documentAnalysisCache = new Map<string, DocumentAnalysisCacheEntry>()
 const maxDocumentAnalysisEntries = 10
+let excludePatterns: string[] = []
 let excludeFilter = createFilter([])
 
 function refreshExcludeFilter() {
-  excludeFilter = createFilter(getConfiguration('common-intellisense.exclude') || [])
+  excludePatterns = getConfiguration('common-intellisense.exclude') || []
+  excludeFilter = createFilter(excludePatterns)
 }
 
 export function normalizeScopedSource(from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): string | undefined {
@@ -180,12 +182,16 @@ export function getDocumentAnalysisCacheSize() {
 }
 
 function isExcluded(filePath: string) {
-  return excludeFilter(filePath)
+  return excludePatterns.length > 0 && excludeFilter(filePath)
 }
 
 function isSkip(document?: vscode.TextDocument) {
   const id = document?.languageId || vscode.window.activeTextEditor?.document.languageId
   return !id || !filter.includes(id)
+}
+
+export function shouldSkipDocument(document: vscode.TextDocument): boolean {
+  return isSkip(document) || isExcluded(getDocumentPath(document))
 }
 
 function getDocumentPath(document: vscode.TextDocument) {
@@ -258,7 +264,7 @@ export async function activate(context: vscode.ExtensionContext) {
     getDocumentWorkspaceRoot(document),
   )
   const analyzeDocumentSlots = async (document: vscode.TextDocument, packageContext: Awaited<ReturnType<typeof ensureContextForPath>>) => {
-    if (!supportsSlotAnalysis(document) || document.isClosed || !getIsShowSlots() || !packageContext?.uiCompletions || isSkip(document))
+    if (!supportsSlotAnalysis(document) || document.isClosed || !getIsShowSlots() || !packageContext?.uiCompletions || shouldSkipDocument(document))
       return
     const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }
     const cached = getDocumentSlotAnalysis(document.uri)
@@ -278,7 +284,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }
   const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
     await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
-      if (!supportsSlotAnalysis(document) || isSkip(document))
+      if (!supportsSlotAnalysis(document) || shouldSkipDocument(document))
         return
       const packageContext = existingOnly
         ? getContextForDocumentPath(getDocumentPath(document))
@@ -324,7 +330,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!editor || editor.document.languageId === 'Log')
       return
 
-    if (!supportsSlotAnalysis(editor.document) || isSkip(editor.document))
+    if (!supportsSlotAnalysis(editor.document) || shouldSkipDocument(editor.document))
       return
     // 找到当前活动的编辑器
     const visibleEditors = vscode.window.visibleTextEditors
@@ -544,7 +550,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (previous)
       clearTimeout(previous)
     slotTimers.delete(key)
-    if (!supportsSlotAnalysis(document) || !getIsShowSlots() || contentChanges.length === 0 || document.languageId === 'Log' || isSkip(document))
+    if (!supportsSlotAnalysis(document) || !getIsShowSlots() || contentChanges.length === 0 || document.languageId === 'Log' || shouldSkipDocument(document))
       return
     clearDocumentAnalysis(document.uri)
     slotTimers.set(key, setTimeout(() => {
@@ -566,7 +572,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(registerCompletionItemProvider(filter, async (document, position) => {
-    if (isSkip(document))
+    if (shouldSkipDocument(document))
       return
     const packageContext = await ensureDocumentContext(document)
     if (!packageContext?.uiCompletions)
@@ -865,7 +871,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(vscode.languages.registerHoverProvider(LANS, {
     async provideHover(document, position) {
-      if (isSkip(document))
+      if (shouldSkipDocument(document))
         return
       const packageContext = await ensureDocumentContext(document)
       if (!packageContext?.uiCompletions)
@@ -1123,7 +1129,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   void Promise.resolve(getLocalCache).then(async () => {
-    if (!initialEditor || !supportsSlotAnalysis(initialEditor.document) || isSkip(initialEditor.document))
+    if (!initialEditor || !supportsSlotAnalysis(initialEditor.document) || shouldSkipDocument(initialEditor.document))
       return
     const packageContext = await ensureDocumentContext(initialEditor.document)
     await analyzeDocumentSlots(initialEditor.document, packageContext)

@@ -213,12 +213,96 @@ function isLegacyAdapterEnabled() {
     && getConfiguration('common-intellisense.allowLegacyAdapters') === true
 }
 
-function isPrivateIpv4(host: string) {
-  const parts = host.split('.').map(Number)
+function parseIpv4(address: string) {
+  const parts = address.split('.').map(Number)
   if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255))
-    return false
-  const [a, b] = parts
-  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224
+    return
+  return parts.reduce((value, part) => (value << 8n) | BigInt(part), 0n)
+}
+
+function parseIpv6(address: string) {
+  if (address.includes('%'))
+    return
+  let input = address.toLowerCase()
+  const dottedIndex = input.lastIndexOf(':')
+  if (input.includes('.') && dottedIndex >= 0) {
+    const ipv4 = parseIpv4(input.slice(dottedIndex + 1))
+    if (ipv4 === undefined)
+      return
+    input = `${input.slice(0, dottedIndex)}:${(ipv4 >> 16n).toString(16)}:${(ipv4 & 0xFFFFn).toString(16)}`
+  }
+  const halves = input.split('::')
+  if (halves.length > 2)
+    return
+  const left = halves[0] ? halves[0].split(':') : []
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : []
+  const missing = 8 - left.length - right.length
+  if (missing < (halves.length === 2 ? 1 : 0))
+    return
+  const groups = [...left, ...Array.from({ length: missing }, () => '0'), ...right]
+  if (groups.length !== 8 || groups.some(group => !/^[0-9a-f]{1,4}$/.test(group)))
+    return
+  return groups.reduce((value, group) => (value << 16n) | BigInt(`0x${group}`), 0n)
+}
+
+function isInCidr(value: bigint, base: bigint, prefix: number, bits: number) {
+  const shift = BigInt(bits - prefix)
+  return (value >> shift) === (base >> shift)
+}
+
+const nonGlobalIpv4Cidrs: Array<[string, number]> = [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+]
+
+const nonGlobalIpv6Cidrs: Array<[string, number]> = [
+  ['::', 128],
+  ['::1', 128],
+  ['::ffff:0:0', 96],
+  ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  ['100::', 64],
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['3fff::', 20],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['fec0::', 10],
+  ['ff00::', 8],
+]
+
+/** Return true only for globally routable unicast IP addresses. */
+export function isGloballyRoutableAddress(address: string) {
+  const host = normalizeHostname(address)
+  if (isIP(host) === 4) {
+    const value = parseIpv4(host)
+    return value !== undefined && !nonGlobalIpv4Cidrs.some(([base, prefix]) => isInCidr(value, parseIpv4(base)!, prefix, 32))
+  }
+  if (isIP(host) === 6) {
+    const value = parseIpv6(host)
+    if (value === undefined)
+      return false
+    // Globally routable IPv6 unicast currently lives in 2000::/3. Keeping this
+    // allowlist conservative prevents new special-purpose ranges being accepted
+    // merely because they are absent from a denylist.
+    const globalUnicast = isInCidr(value, parseIpv6('2000::')!, 3, 128)
+    return globalUnicast && !nonGlobalIpv6Cidrs.some(([base, prefix]) => isInCidr(value, parseIpv6(base)!, prefix, 128))
+  }
+  return false
 }
 
 export function normalizeHostname(hostname: string) {
@@ -229,25 +313,7 @@ function isPrivateNetworkHost(hostname: string) {
   const host = normalizeHostname(hostname)
   if (host === 'localhost' || host.endsWith('.localhost'))
     return true
-  const ipVersion = isIP(host)
-  if (ipVersion === 4)
-    return isPrivateIpv4(host)
-  if (ipVersion === 6) {
-    if (host.startsWith('::ffff:')) {
-      const mapped = host.slice('::ffff:'.length)
-      if (isIP(mapped) === 4)
-        return isPrivateIpv4(mapped)
-      const groups = mapped.split(':')
-      if (groups.length === 2) {
-        const high = Number.parseInt(groups[0], 16)
-        const low = Number.parseInt(groups[1], 16)
-        if (Number.isFinite(high) && Number.isFinite(low))
-          return isPrivateIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`)
-      }
-    }
-    return host === '::' || host === '::1' || host.startsWith('fc') || host.startsWith('fd') || /^fe[89ab]/.test(host) || host.startsWith('ff')
-  }
-  return false
+  return isIP(host) !== 0 && !isGloballyRoutableAddress(host)
 }
 
 export function isTrustedRedirectUri(uri: string) {
@@ -333,14 +399,19 @@ export function validateLegacyAdapterLimits(keys: string[], resultSizes: number[
 }
 
 function evaluateAdapter(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean) {
-  if (typeof scriptContent !== 'string' || !scriptContent.trim())
+  if (typeof scriptContent !== 'string')
     throw new Error(`Adapter is empty: ${source}`)
   if (scriptContent.length > maxRemoteScriptSize)
     throw new Error(`Adapter is too large: ${source}`)
+  // Normalize one UTF-8 BOM for parsing/evaluation. Source signatures remain
+  // based on the original bytes, so adding or removing a BOM still invalidates.
+  const normalizedContent = scriptContent.charCodeAt(0) === 0xFEFF ? scriptContent.slice(1) : scriptContent
+  if (!normalizedContent.trim())
+    throw new Error(`Adapter is empty: ${source}`)
 
   // Prefer the data-only JSON protocol. Legacy CommonJS remains supported for compatibility.
   try {
-    const manifest = JSON.parse(scriptContent)
+    const manifest = JSON.parse(normalizedContent)
     if (!isPlainObject(manifest) || manifest.schemaVersion !== 1 || !isPlainObject(manifest.exports))
       throw new Error(`Unsupported adapter manifest schema: ${source}`)
     const exportsData = manifest.exports as Record<string, unknown>
@@ -373,7 +444,7 @@ function evaluateAdapter(scriptContent: string, source: string, localeZh: boolea
   }
   sandbox.exports = sandbox.module.exports
   const context = createAdapterVmContext(sandbox)
-  new vm.Script(scriptContent, { filename: source }).runInContext(context, { timeout: remoteExecTimeout })
+  new vm.Script(normalizedContent, { filename: source }).runInContext(context, { timeout: remoteExecTimeout })
   const serializedJson = runAdapterExports(context, remoteExecTimeout)
   if (typeof serializedJson !== 'string' || Buffer.byteLength(serializedJson) > maxAdapterEnvelopeSize)
     throw new Error(`Adapter result is invalid or too large: ${source}`)
