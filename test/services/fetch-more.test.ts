@@ -56,6 +56,12 @@ vi.mock('@vscode-use/utils', () => ({
 }))
 
 describe('fetch service additional tests (mocked)', () => {
+  it('validates remote npm resource paths', async () => {
+    const { normalizeNpmResource } = await import('../../src/services/fetch')
+    expect(normalizeNpmResource('dist/manifest.json')).toBe('dist/manifest.json')
+    for (const invalid of ['../package.json', '/absolute/path', 'C:\\absolute\\path', 'foo\\..\\bar', 'bad\0path', 'x'.repeat(257)])
+      expect(() => normalizeNpmResource(invalid)).toThrow('Invalid npm adapter resource')
+  })
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()

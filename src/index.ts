@@ -21,8 +21,8 @@ interface DocumentAnalysisCacheEntry {
   uri: string
   version: number
   code: string
-  uiDeps?: Record<string, string>
-  importDeps?: Record<string, string>
+  uiDepsByBlock: Map<number, Record<string, string>>
+  importDepsByBlock: Map<number, Record<string, string>>
 }
 const documentAnalysisCache = new Map<string, DocumentAnalysisCacheEntry>()
 const maxDocumentAnalysisEntries = 10
@@ -97,7 +97,14 @@ export async function resolveImportedComponent(rawTag: string | undefined, uiDep
   const importedTag = resolveImportedTag(rawTag, uiDeps)
   const resolvedSource = importedTag.source || localDeps[importedTag.localRoot]
   if (isLocalModuleSource(resolvedSource)) {
-    const component = await resolveLocalWrappedComponent(resolvedSource, completions, prefixes, currentDocumentPath, workspaceRoot)
+    const component = await resolveLocalWrappedComponent(
+      resolvedSource,
+      completions,
+      prefixes,
+      currentDocumentPath,
+      workspaceRoot,
+      source => selectScopedCompletions(completions, cacheMap, source, alias, sourceScopes),
+    )
     return { component, source: resolvedSource, scoped: completions }
   }
   const scoped = resolvedSource
@@ -122,7 +129,13 @@ export function getDocumentAnalysis(document: vscode.TextDocument, code?: string
   const uri = document.uri.toString()
   let entry = documentAnalysisCache.get(uri)
   if (!entry || entry.version !== document.version) {
-    entry = { uri, version: document.version, code: code ?? document.getText() }
+    entry = {
+      uri,
+      version: document.version,
+      code: code ?? document.getText(),
+      uiDepsByBlock: new Map(),
+      importDepsByBlock: new Map(),
+    }
     documentAnalysisCache.delete(uri)
     documentAnalysisCache.set(uri, entry)
     while (documentAnalysisCache.size > maxDocumentAnalysisEntries)
@@ -138,16 +151,16 @@ export function getDocumentAnalysis(document: vscode.TextDocument, code?: string
       return entry!.code
     },
     getUiDeps(activeOffset?: number) {
-      if (typeof activeOffset === 'number')
-        return getUiDeps(entry!.code, { languageId: document.languageId, uri, activeOffset }) || {}
-      entry!.uiDeps ||= getUiDeps(entry!.code, { languageId: document.languageId, uri }) || {}
-      return entry!.uiDeps
+      const key = activeOffset ?? -1
+      if (!entry!.uiDepsByBlock.has(key))
+        entry!.uiDepsByBlock.set(key, getUiDeps(entry!.code, { languageId: document.languageId, uri, activeOffset }) || {})
+      return entry!.uiDepsByBlock.get(key)!
     },
     getImportDeps(activeOffset?: number) {
-      if (typeof activeOffset === 'number')
-        return getImportDeps(entry!.code, { activeOffset }) || {}
-      entry!.importDeps ||= getImportDeps(entry!.code) || {}
-      return entry!.importDeps
+      const key = activeOffset ?? -1
+      if (!entry!.importDepsByBlock.has(key))
+        entry!.importDepsByBlock.set(key, getImportDeps(entry!.code, typeof activeOffset === 'number' ? { activeOffset } : undefined) || {})
+      return entry!.importDepsByBlock.get(key)!
     },
   }
 }
@@ -415,7 +428,7 @@ export async function activate(context: vscode.ExtensionContext) {
       languageId: document.languageId,
       uri: document.uri.toString(),
       preferredOffset,
-      registerVueComponent: preferredOffset === undefined,
+      registerVueComponent: typeof params.registerVueComponent === 'boolean' ? params.registerVueComponent : preferredOffset === undefined,
     })
     if (!edits.length)
       return

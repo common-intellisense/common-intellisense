@@ -689,19 +689,19 @@ const maxRemoteRedirects = 5
 
 type RemoteTrustClass
   = | { kind: 'publicHttps', initialProtocol: 'https:' }
-    | { kind: 'localhostHttp', hostname: string, initialProtocol: 'http:' }
-    | { kind: 'explicitTrustedHost', hostname: string, initialProtocol: 'http:' | 'https:' }
+    | { kind: 'localhostHttp', hostname: string, origin: string, initialProtocol: 'http:' }
+    | { kind: 'explicitTrustedHost', hostname: string, origin: string, initialProtocol: 'http:' | 'https:' }
 
 async function getRemoteTrustClass(uri: string): Promise<RemoteTrustClass | undefined> {
   const target = new URL(uri)
   const hostname = normalizeHostname(target.hostname)
   if (target.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname))
-    return { kind: 'localhostHttp', hostname, initialProtocol: 'http:' }
+    return { kind: 'localhostHttp', hostname, origin: target.origin, initialProtocol: 'http:' }
   // Public HTTPS keeps the stricter public trust class even when explicitly listed.
   if (isTrustedRedirectUri(uri))
     return { kind: 'publicHttps', initialProtocol: 'https:' }
   if ((target.protocol === 'http:' || target.protocol === 'https:') && isExplicitlyTrustedHost(hostname))
-    return { kind: 'explicitTrustedHost', hostname, initialProtocol: target.protocol }
+    return { kind: 'explicitTrustedHost', hostname, origin: target.origin, initialProtocol: target.protocol }
 }
 
 function isRedirectAllowed(uri: string, trust: RemoteTrustClass) {
@@ -711,7 +711,7 @@ function isRedirectAllowed(uri: string, trust: RemoteTrustClass) {
     return isTrustedRedirectUri(uri)
   if (trust.initialProtocol === 'https:' && target.protocol !== 'https:')
     return false
-  return hostname === trust.hostname && (target.protocol === 'http:' || target.protocol === 'https:')
+  return hostname === trust.hostname && target.origin === trust.origin
 }
 
 function normalizeAddress(address: string) {
@@ -1030,17 +1030,30 @@ async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
   }
 }
 
+export function normalizeNpmResource(input: string) {
+  if (!input || input.length > 256 || input.includes('\0') || input.includes('\\') || path.posix.isAbsolute(input))
+    throw new Error('Invalid npm adapter resource')
+  const normalized = path.posix.normalize(input)
+  if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized.split('/').includes('..'))
+    throw new Error('Invalid npm adapter resource')
+  return normalized
+}
+
 export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
   const uris = (getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[] | undefined) || []
   const epoch = sourceEpoch
   return settleCustomSources(uris.map((item) => {
     const name = typeof item === 'string' ? item : item.name
-    const resource = typeof item === 'string' ? 'index.cjs' : item.resource || 'index.cjs'
-    const id = `npm:${name}::${resource}`
+    const rawResource = typeof item === 'string' ? 'index.cjs' : item.resource || 'index.cjs'
+    const id = `npm:${name}::${rawResource}`
     return {
       id,
       taskKey: `${epoch}\0${id}\0legacy:${isLegacyAdapterEnabled()}`,
-      load: () => fetchFromRemoteNpmUrlsInternal([item], epoch),
+      load: () => {
+        const resource = normalizeNpmResource(rawResource)
+        const normalizedItem = typeof item === 'string' ? item : { ...item, resource }
+        return fetchFromRemoteNpmUrlsInternal([normalizedItem], epoch)
+      },
     }
   }))
 }
@@ -1074,7 +1087,7 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
     }
     else {
       name = item.name
-      resource = item.resource || resource
+      resource = normalizeNpmResource(item.resource || resource)
     }
     logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
     const version = await getLatestVersion(name)

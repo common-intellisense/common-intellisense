@@ -756,6 +756,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             prefix,
             dynamicLib: itemDynamicLib || '',
             importWay: itemImportWay || 'specifier',
+            registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
             document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version } : undefined,
           }
           return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -806,6 +807,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             prefix,
             dynamicLib: itemDynamicLib,
             importWay: itemImportWay,
+            registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
             document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version } : undefined,
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]
@@ -861,6 +863,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         prefix,
         dynamicLib: itemDynamicLib,
         importWay: itemImportWay,
+        registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
         document: context ? { uri: context.uri, version: context.version } : undefined,
       }
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })

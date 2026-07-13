@@ -181,6 +181,24 @@ describe('remote redirect validation', () => {
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenNthCalledWith(2, redirected, expect.any(Object))
   })
 
+  it.each([
+    ['http://localhost:3000/adapter', 'http://localhost:2375/version', '127.0.0.1'],
+    ['http://trusted.test:8443/adapter', 'http://trusted.test:9443/adapter', '8.8.8.8'],
+  ])('rejects same-host redirects to another port: %s', async (initial, redirected, address) => {
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+    const requester = vi.fn().mockResolvedValueOnce({ status: 302, location: redirected, body: '' })
+    await expect(fetchRemoteText(initial, async () => [{ address, family: 4 }], requester)).rejects.toThrow('untrusted URL')
+    expect(requester).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an explicit default HTTPS port as the same origin', async () => {
+    const { fetchRemoteText } = await import('../../src/services/fetch')
+    const requester = vi.fn()
+      .mockResolvedValueOnce({ status: 302, location: 'https://trusted.test/next', body: '' })
+      .mockResolvedValueOnce({ status: 200, body: 'manifest' })
+    await expect(fetchRemoteText('https://trusted.test:443/adapter', async () => [{ address: '8.8.8.8', family: 4 }], requester)).resolves.toBe('manifest')
+  })
+
   it('rejects a same-host HTTPS to HTTP downgrade', async () => {
     const { fetchRemoteText } = await import('../../src/services/fetch')
     const requester = vi.fn()

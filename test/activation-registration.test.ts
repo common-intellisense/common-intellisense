@@ -312,6 +312,33 @@ describe('activation registration', () => {
     expect(mocks.workspaceEdits[0].entries[0][1]).toEqual(expect.objectContaining({ value: 'file:///workspace/A.tsx' }))
   })
 
+  it('registers a template completion in an existing Vue Options API script', async () => {
+    const code = `<template><Button /></template>\n<script>\nexport default { name: 'Page' }\n</script>`
+    const source = {
+      languageId: 'vue',
+      version: 4,
+      uri: { fsPath: '/workspace/App.vue', toString: () => 'file:///workspace/App.vue' },
+      getText: () => code,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    }
+    mocks.openTextDocument.mockResolvedValue(source)
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    await mocks.commandHandlers.get('common-intellisense.import')?.({
+      data: { name: 'Button' },
+      lib: 'ui',
+      importWay: 'specifier',
+      registerVueComponent: true,
+      document: { uri: 'file:///workspace/App.vue', version: 3 },
+    }, { start: { offset: code.indexOf('export default') } })
+
+    const insertedText = mocks.workspaceEdits.flatMap(edit => edit.entries).map(entry => entry[3]).join('\n')
+    expect(insertedText).toContain('import { Button } from "ui"')
+    expect(insertedText).toContain('components: { Button }')
+    expect(mocks.applyEdit).toHaveBeenCalledTimes(1)
+  })
+
   it('ignores malformed string component import params without throwing', async () => {
     const source = {
       languageId: 'typescriptreact',

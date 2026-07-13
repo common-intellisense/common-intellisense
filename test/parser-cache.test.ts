@@ -56,6 +56,7 @@ describe('parser cache', () => {
     expect(vueParseMock).toHaveBeenCalledTimes(1)
 
     mod.transformVue('<template><div /></template>', pos)
+    mod.transformVue('<template></template>', pos)
     expect(vueParseMock).toHaveBeenCalledTimes(2)
   })
 
@@ -67,6 +68,7 @@ describe('parser cache', () => {
     expect(tsParseMock).toHaveBeenCalledTimes(1)
 
     mod.parserJSX('const b = 2', pos)
+    mod.parserJSX('const a = 1', pos)
     expect(tsParseMock).toHaveBeenCalledTimes(2)
   })
 

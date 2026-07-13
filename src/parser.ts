@@ -23,6 +23,7 @@ import type { ComponentSourceScope } from './services/component-resolver'
 import { isLocalModuleSource, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
 import { getNodeOffsetRange } from './services/node-range'
 import { isNativeTag } from './services/native-tags'
+import { getSvelteInstanceScript } from './services/svelte-script'
 
 const { parse: svelteParser } = require('svelte/compiler')
 
@@ -34,40 +35,45 @@ interface VineFileCtxResult {
   vineCompileWarns: VineDiagnostic[]
 }
 
-let vueSfcParseCache: { code: string, value: ReturnType<typeof parse> } | null = null
-let jsxAstCache: { code: string, value: any } | null = null
-let svelteHtmlCache: { code: string, value: any } | null = null
-let vineCtxCache: { key: string, value: VineFileCtxResult } | null = null
+const parserCacheLimit = 5
+const vueSfcParseCache = new Map<string, ReturnType<typeof parse>>()
+const jsxAstCache = new Map<string, any>()
+const svelteHtmlCache = new Map<string, any>()
+const vineCtxCache = new Map<string, VineFileCtxResult>()
 let lineIndexCache: { code: string, starts: number[] } | null = null
 
-function getVueSfcParseResult(code: string) {
-  if (vueSfcParseCache?.code === code)
-    return vueSfcParseCache.value
-  const value = parse(code)
-  vueSfcParseCache = { code, value }
+function getCached<T>(cache: Map<string, T>, key: string, create: () => T): T {
+  if (cache.has(key)) {
+    const value = cache.get(key)!
+    cache.delete(key)
+    cache.set(key, value)
+    return value
+  }
+  const value = create()
+  cache.set(key, value)
+  while (cache.size > parserCacheLimit)
+    cache.delete(cache.keys().next().value!)
   return value
+}
+
+function getVueSfcParseResult(code: string) {
+  return getCached(vueSfcParseCache, code, () => parse(code))
 }
 
 function getJsxAst(code: string) {
-  if (jsxAstCache?.code === code)
-    return jsxAstCache.value
-  const value = tsParser(code, { jsx: true, loc: true, range: true })
-  jsxAstCache = { code, value }
-  return value
+  return getCached(jsxAstCache, code, () => tsParser(code, { jsx: true, loc: true, range: true }))
 }
 
 function getSvelteHtml(code: string) {
-  if (svelteHtmlCache?.code === code)
-    return svelteHtmlCache.value
-  try {
-    const { html } = svelteParser(code)
-    svelteHtmlCache = { code, value: html }
-    return html
-  }
-  catch {
-    // Incomplete Svelte is normal while editing; providers must fail closed.
-    svelteHtmlCache = { code, value: undefined }
-  }
+  return getCached(svelteHtmlCache, code, () => {
+    try {
+      return svelteParser(code).html
+    }
+    catch {
+      // Incomplete Svelte is normal while editing; providers must fail closed.
+      return undefined
+    }
+  })
 }
 
 export interface ParserDocumentContext {
@@ -1142,7 +1148,11 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
 
     let target: any
     if (localSource) {
-      target = await resolveLocalWrappedComponent(source!, UiCompletions, prefix, sourceContext?.currentDocumentPath, sourceContext?.workspaceRoot)
+      target = await resolveLocalWrappedComponent(source!, UiCompletions, prefix, sourceContext?.currentDocumentPath, sourceContext?.workspaceRoot, (wrappedSource) => {
+        const scope = sourceContext ? getSourceScope(sourceContext, wrappedSource) : undefined
+        const scoped = scope ? sourceContext?.cacheMap.get(scope.key) : undefined
+        return scoped && typeof scoped === 'object' && !Array.isArray(scoped) ? scoped : undefined
+      })
     }
     else {
       for (const candidate of importedTag.candidates) {
@@ -1178,8 +1188,12 @@ export function parserVine(code: string, position: vscode.Position, cursorOffset
 
 export function createVineFileCtx(sourceFileName: string, source: string): VineFileCtxResult {
   const key = `${sourceFileName}\0${source}`
-  if (vineCtxCache?.key === key)
-    return vineCtxCache.value
+  if (vineCtxCache.has(key)) {
+    const cached = vineCtxCache.get(key)!
+    vineCtxCache.delete(key)
+    vineCtxCache.set(key, cached)
+    return cached
+  }
 
   const compilerCtx = createCompilerCtx({
     envMode: 'module',
@@ -1217,7 +1231,9 @@ export function createVineFileCtx(sourceFileName: string, source: string): VineF
     vineCompileErrs,
     vineCompileWarns,
   }
-  vineCtxCache = { key, value }
+  vineCtxCache.set(key, value)
+  while (vineCtxCache.size > parserCacheLimit)
+    vineCtxCache.delete(vineCtxCache.keys().next().value!)
   return value
 }
 
@@ -1451,14 +1467,15 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRo
 const localComponentExtensions = ['.vue', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte']
 const maxLocalComponentSize = 4 * 1024 * 1024
 const maxLocalComponentCacheEntries = 20
-const localComponentTagCache = new Map<string, { signature: string, tag?: string }>()
+interface LocalWrapperTarget { tag: string, source?: string }
+const localComponentTagCache = new Map<string, { signature: string, target?: LocalWrapperTarget }>()
 
 function isSameOrWithinPath(target: string, root: string) {
   const relative = path.relative(root, target)
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
-function touchLocalComponentCache(key: string, value: { signature: string, tag?: string }) {
+function touchLocalComponentCache(key: string, value: { signature: string, target?: LocalWrapperTarget }) {
   localComponentTagCache.delete(key)
   localComponentTagCache.set(key, value)
   while (localComponentTagCache.size > maxLocalComponentCacheEntries)
@@ -1504,13 +1521,16 @@ export async function resolveLocalComponentModule(url: string, currentFileUrl?: 
   }
 }
 
-export async function resolveLocalWrappedComponent(source: string, UiCompletions: PropsConfig, prefix: string[], currentFileUrl?: string, workspaceRoot?: string) {
+export async function resolveLocalWrappedComponent(source: string, UiCompletions: PropsConfig, prefix: string[], currentFileUrl?: string, workspaceRoot?: string, selectSource?: (source: string) => PropsConfig | undefined) {
   const absoluteUrl = await resolveLocalComponentModule(source, currentFileUrl, workspaceRoot)
   if (!absoluteUrl)
     return
   try {
-    const tag = await getTemplateParentElementName(absoluteUrl)
-    return tag ? findDynamic(tag, UiCompletions, prefix) : undefined
+    const target = await getTemplateParentElementName(absoluteUrl)
+    if (!target)
+      return
+    const scoped = target.source ? selectSource?.(target.source) : undefined
+    return findDynamic(target.tag, scoped || UiCompletions, prefix)
   }
   catch {}
 }
@@ -1522,8 +1542,8 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
     if (!absoluteUrl)
       return
     try {
-      const tag = await getTemplateParentElementName(absoluteUrl)
-      return tag ? findDynamic(tag, UiCompletions, prefix, from) : undefined
+      const target = await getTemplateParentElementName(absoluteUrl)
+      return target ? findDynamic(target.tag, UiCompletions, prefix, target.source || from) : undefined
     }
     catch {
       // An explicit local import is authoritative. A missing/incomplete wrapper
@@ -1541,10 +1561,10 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
     const absoluteUrl = await resolveLocalComponentModule(dep, currentFileUrl, workspaceRoot)
     if (!absoluteUrl)
       return
-    const tag = await getTemplateParentElementName(absoluteUrl)
-    if (!tag)
+    const wrapped = await getTemplateParentElementName(absoluteUrl)
+    if (!wrapped)
       return
-    target = findDynamic(tag, UiCompletions, prefix, from)
+    target = findDynamic(wrapped.tag, UiCompletions, prefix, wrapped.source || from)
   }
   return target
 }
@@ -1623,14 +1643,16 @@ async function getTemplateParentElementName(url: string) {
   const cached = localComponentTagCache.get(realUrl)
   if (cached?.signature === signature) {
     touchLocalComponentCache(realUrl, cached)
-    return cached.tag
+    return cached.target
   }
   const code = await fsp.readFile(realUrl, 'utf-8')
   const extension = path.extname(realUrl).toLowerCase()
-  const cache = (tag?: string) => {
-    touchLocalComponentCache(realUrl, { signature, tag })
-    return tag
+  const cache = (tag?: string, source?: string) => {
+    const target = tag ? { tag, source } : undefined
+    touchLocalComponentCache(realUrl, { signature, target })
+    return target
   }
+  const findImportedSource = (tag: string | undefined) => tag ? getImportDeps(code)[tag] : undefined
   if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extension)) {
     const plugins: any[] = extension === '.ts' || extension === '.tsx' ? ['typescript', 'jsx'] : ['jsx']
     const ast = babelParse(code, { sourceType: 'module', plugins }) as any
@@ -1694,12 +1716,14 @@ async function getTemplateParentElementName(url: string) {
     const roots: any[] = []
     collectReturnedJsx(defaultExport, roots)
     const tag = roots.length === 1 ? getJsxElementName(roots[0].openingElement?.name) : undefined
-    return cache(tag)
+    return cache(tag, findImportedSource(tag))
   }
   if (extension === '.svelte') {
     const html = getSvelteHtml(code)
     const elements = (html?.children || []).filter((child: any) => child?.name)
-    return cache(elements.length === 1 ? elements[0].name : undefined)
+    const tag = elements.length === 1 ? elements[0].name : undefined
+    const instanceCode = getSvelteInstanceScript(code)?.content || ''
+    return cache(tag, tag ? getImportDeps(instanceCode)[tag] : undefined)
   }
 
   // 如果有defineProps或者props的忽律，交给v-component-prompter处理
@@ -1723,5 +1747,6 @@ async function getTemplateParentElementName(url: string) {
       result = node.tag
     }
   }
-  return cache(result || undefined)
+  const tag = result || undefined
+  return cache(tag, tag ? getImportDeps(code)[tag] : undefined)
 }
