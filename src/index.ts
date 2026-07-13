@@ -53,19 +53,23 @@ export function normalizeScopedSource(from: string | undefined, alias: Record<st
   return configured.replace(/\d+$/, '')
 }
 
-export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): PropsConfig {
+export function selectScopedCompletionsStrict(cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): PropsConfig | undefined {
   if (!from)
-    return current
+    return
   const explicitScope = sourceScopes ? getSourceScope({ sourceScopes }, from) : undefined
   if (explicitScope) {
     const scoped = cacheMap.get(explicitScope.key)
-    return scoped && typeof scoped === 'object' && !Array.isArray(scoped) ? scoped as PropsConfig : current
+    return scoped && typeof scoped === 'object' && !Array.isArray(scoped) ? scoped as PropsConfig : undefined
   }
   const fixedFrom = normalizeScopedSource(from, alias, sourceScopes) || from
   const adapterName = toCamel(fixedFrom)
   const targetKey = Array.from(cacheMap.keys()).find(key => typeof key === 'string' && key.startsWith(adapterName) && /^\d+$/.test(key.slice(adapterName.length)))
   const targetValue = targetKey ? cacheMap.get(targetKey) : undefined
-  return targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue) ? targetValue as PropsConfig : current
+  return targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue) ? targetValue as PropsConfig : undefined
+}
+
+export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): PropsConfig {
+  return selectScopedCompletionsStrict(cacheMap, from, alias, sourceScopes) || current
 }
 
 function escapeRegExp(value: string) {
@@ -111,7 +115,7 @@ export async function resolveImportedComponent(rawTag: string | undefined, uiDep
       prefixes,
       currentDocumentPath,
       workspaceRoot,
-      source => selectScopedCompletions(completions, cacheMap, source, alias, sourceScopes),
+      source => selectScopedCompletionsStrict(cacheMap, source, alias, sourceScopes),
     )
     return { component, source: resolvedSource, scoped: completions }
   }
@@ -228,6 +232,8 @@ function getCompletionRenderContext(document: vscode.TextDocument, result?: any)
     framework: syntax === 'jsx' ? 'react' : hostFramework,
     uri: document.uri.toString(),
     version: document.version,
+    vueBlock: result?.vueBlock,
+    blockLang: result?.blockLang,
   }
 }
 // todo: 补充类型
@@ -450,7 +456,9 @@ export async function activate(context: vscode.ExtensionContext) {
     const edits = createImportEdits(code, from, deps, importWay, importHost, {
       languageId: document.languageId,
       uri: document.uri.toString(),
-      preferredOffset,
+      preferredOffset: params.document.vueBlock ? undefined : preferredOffset,
+      preferredVueBlock: params.document.vueBlock,
+      expectedBlockLang: params.document.blockLang,
       registerVueComponent: typeof params.registerVueComponent === 'boolean' ? params.registerVueComponent : preferredOffset === undefined,
     })
     if (!edits.length)

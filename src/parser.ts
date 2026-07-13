@@ -143,6 +143,8 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
       result.template = template
       result.hostFramework = 'vue'
       result.syntax = 'jsx'
+      result.vueBlock = activeScript === scriptSetup ? 'scriptSetup' : 'script'
+      result.blockLang = activeScript.lang
     }
     return result
   }
@@ -152,6 +154,8 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
       refs: collectVueTemplateRefs([activeScript]),
       template,
       loc: activeScript.loc,
+      vueBlock: activeScript === scriptSetup ? 'scriptSetup' : 'script',
+      blockLang: activeScript.lang,
     }
   }
   if (!template)
@@ -163,7 +167,10 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
 
   const r = dfs(ast.children, template, position, offset, cursorOffset)
   if (r) {
-    r.loc = (scriptSetup || script)?.loc
+    const importTarget = scriptSetup || script
+    r.loc = importTarget?.loc
+    r.vueBlock = scriptSetup ? 'scriptSetup' : script ? 'script' : undefined
+    r.blockLang = importTarget?.lang
     return r
   }
   return r
@@ -1467,7 +1474,8 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRo
 const localComponentExtensions = ['.vue', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte']
 const maxLocalComponentSize = 4 * 1024 * 1024
 const maxLocalComponentCacheEntries = 20
-interface LocalWrapperTarget { tag: string, source?: string }
+interface WrapperImport { localName: string, importedName: string, source: string }
+interface LocalWrapperTarget { localTag: string, lookupTag: string, source?: string }
 const localComponentTagCache = new Map<string, { signature: string, target?: LocalWrapperTarget }>()
 
 function isSameOrWithinPath(target: string, root: string) {
@@ -1529,8 +1537,15 @@ export async function resolveLocalWrappedComponent(source: string, UiCompletions
     const target = await getTemplateParentElementName(absoluteUrl)
     if (!target)
       return
-    const scoped = target.source ? selectSource?.(target.source) : undefined
-    return findDynamic(target.tag, scoped || UiCompletions, prefix)
+    if (target.source) {
+      const scoped = selectSource?.(target.source)
+      // An explicit wrapper import is authoritative. If its source is unknown,
+      // never guess from the flattened completion table.
+      if (!scoped)
+        return
+      return findDynamic(target.lookupTag, scoped, prefix)
+    }
+    return findDynamic(target.lookupTag, UiCompletions, prefix)
   }
   catch {}
 }
@@ -1543,7 +1558,7 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
       return
     try {
       const target = await getTemplateParentElementName(absoluteUrl)
-      return target ? findDynamic(target.tag, UiCompletions, prefix, target.source || from) : undefined
+      return target ? findDynamic(target.lookupTag, UiCompletions, prefix, target.source || from) : undefined
     }
     catch {
       // An explicit local import is authoritative. A missing/incomplete wrapper
@@ -1564,7 +1579,7 @@ export async function findDynamicComponent(name: string, deps: Record<string, st
     const wrapped = await getTemplateParentElementName(absoluteUrl)
     if (!wrapped)
       return
-    target = findDynamic(wrapped.tag, UiCompletions, prefix, wrapped.source || from)
+    target = findDynamic(wrapped.lookupTag, UiCompletions, prefix, wrapped.source || from)
   }
   return target
 }
@@ -1634,6 +1649,47 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
   return target
 }
 
+function createWrapperImportIndex(code: string): Map<string, WrapperImport> {
+  const imports = new Map<string, WrapperImport>()
+  if (!code.trim())
+    return imports
+  try {
+    const ast = babelParse(code, { sourceType: 'module', plugins: ['typescript', 'jsx'] }) as any
+    for (const node of ast.program?.body || []) {
+      if (node.type !== 'ImportDeclaration' || typeof node.source?.value !== 'string')
+        continue
+      for (const specifier of node.specifiers || []) {
+        const localName = specifier.local?.name
+        if (!localName)
+          continue
+        const importedName = specifier.type === 'ImportSpecifier'
+          ? (specifier.imported?.name || specifier.imported?.value)
+          : specifier.type === 'ImportNamespaceSpecifier' ? '*' : 'default'
+        imports.set(localName, { localName, importedName: String(importedName), source: node.source.value })
+      }
+    }
+  }
+  catch {}
+  return imports
+}
+
+function resolveWrapperTarget(localTag: string | undefined, imports: Map<string, WrapperImport>): LocalWrapperTarget | undefined {
+  if (!localTag)
+    return
+  const [root, ...members] = localTag.split('.')
+  const imported = imports.get(root)
+  if (!imported)
+    return { localTag, lookupTag: localTag }
+  const importedRoot = imported.importedName === '*'
+    ? (members.shift() || root)
+    : imported.importedName === 'default' ? root : imported.importedName
+  return {
+    localTag,
+    lookupTag: [importedRoot, ...members].filter(Boolean).join('.'),
+    source: imported.source,
+  }
+}
+
 async function getTemplateParentElementName(url: string) {
   const realUrl = await fsp.realpath(url)
   const stat = await fsp.stat(realUrl)
@@ -1647,12 +1703,10 @@ async function getTemplateParentElementName(url: string) {
   }
   const code = await fsp.readFile(realUrl, 'utf-8')
   const extension = path.extname(realUrl).toLowerCase()
-  const cache = (tag?: string, source?: string) => {
-    const target = tag ? { tag, source } : undefined
+  const cache = (target?: LocalWrapperTarget) => {
     touchLocalComponentCache(realUrl, { signature, target })
     return target
   }
-  const findImportedSource = (tag: string | undefined) => tag ? getImportDeps(code)[tag] : undefined
   if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extension)) {
     const plugins: any[] = extension === '.ts' || extension === '.tsx' ? ['typescript', 'jsx'] : ['jsx']
     const ast = babelParse(code, { sourceType: 'module', plugins }) as any
@@ -1716,14 +1770,14 @@ async function getTemplateParentElementName(url: string) {
     const roots: any[] = []
     collectReturnedJsx(defaultExport, roots)
     const tag = roots.length === 1 ? getJsxElementName(roots[0].openingElement?.name) : undefined
-    return cache(tag, findImportedSource(tag))
+    return cache(resolveWrapperTarget(tag, createWrapperImportIndex(code)))
   }
   if (extension === '.svelte') {
     const html = getSvelteHtml(code)
     const elements = (html?.children || []).filter((child: any) => child?.name)
     const tag = elements.length === 1 ? elements[0].name : undefined
     const instanceCode = getSvelteInstanceScript(code)?.content || ''
-    return cache(tag, tag ? getImportDeps(instanceCode)[tag] : undefined)
+    return cache(resolveWrapperTarget(tag, createWrapperImportIndex(instanceCode)))
   }
 
   // 如果有defineProps或者props的忽律，交给v-component-prompter处理
@@ -1748,5 +1802,6 @@ async function getTemplateParentElementName(url: string) {
     }
   }
   const tag = result || undefined
-  return cache(tag, tag ? getImportDeps(code)[tag] : undefined)
+  const wrapperImports = createWrapperImportIndex(`${script?.content || ''}\n${scriptSetup?.content || ''}`)
+  return cache(resolveWrapperTarget(tag, wrapperImports))
 }

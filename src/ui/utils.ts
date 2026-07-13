@@ -34,6 +34,8 @@ export interface CompletionRenderContext {
   version?: number
   /** Current template node, used by relation-aware prop snippets. */
   parent?: any
+  vueBlock?: 'script' | 'scriptSetup'
+  blockLang?: string
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
 
@@ -767,7 +769,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib: itemDynamicLib || '',
             importWay: itemImportWay || 'specifier',
             registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
-            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version } : undefined,
+            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version, vueBlock: context.vueBlock, blockLang: context.blockLang } : undefined,
           }
           return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
@@ -818,7 +820,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib: itemDynamicLib,
             importWay: itemImportWay,
             registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
-            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version } : undefined,
+            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version, vueBlock: context.vueBlock, blockLang: context.blockLang } : undefined,
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]
           return createCompletionItem({ content: _content, detail: description, snippet, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -874,7 +876,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         dynamicLib: itemDynamicLib,
         importWay: itemImportWay,
         registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
-        document: context ? { uri: context.uri, version: context.version } : undefined,
+        document: context ? { uri: context.uri, version: context.version, vueBlock: context.vueBlock, blockLang: context.blockLang } : undefined,
       }
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
       return completionItem

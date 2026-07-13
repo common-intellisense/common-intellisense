@@ -916,11 +916,9 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
   }
 
   if (onChange && !mainWatchers.has(pkg)) {
-    const invalidate = () => {
-      invalidatePackageContext(cwd)
-      onChange()
-    }
-    mainWatchers.set(pkg, watchFile(pkg, { onChange: invalidate }))
+    // buildContext's callback owns invalidation and rebuild. Wrapping it with a
+    // second invalidation advances generations and clears shared caches twice.
+    mainWatchers.set(pkg, watchFile(pkg, { onChange }))
     // A root manifest is shared by every child package. Rebuild all subscribed
     // children rather than only the package that created this watcher.
     if (rootPath && rootPkgPath && rootPkgPath !== pkg) {

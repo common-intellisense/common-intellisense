@@ -16,6 +16,8 @@ export interface ImportDocumentContext {
   languageId?: string
   uri?: string
   preferredOffset?: number
+  preferredVueBlock?: 'script' | 'scriptSetup'
+  expectedBlockLang?: string
   registerVueComponent?: boolean
 }
 
@@ -67,6 +69,8 @@ export function createImportEdits(code: string, source: string, dependencies: st
 
   const script = getScriptRegion(code, host, context)
   if (!script) {
+    if (host === 'vue' && context.preferredVueBlock)
+      return []
     const statements = createStatements(source, names, importWay)
     if (!statements)
       return []
@@ -379,12 +383,22 @@ function getScriptRegion(code: string, host: ImportHost, context: ImportDocument
 
   const { descriptor } = parseVueSfc(code)
   const blocks = [descriptor.script, descriptor.scriptSetup].filter(block => block && !block.src)
-  const preferred = typeof context.preferredOffset === 'number'
-    ? blocks.find(block => context.preferredOffset! >= block!.loc.start.offset && context.preferredOffset! <= block!.loc.end.offset)
-    : undefined
-  const selected = preferred || (descriptor.scriptSetup && !descriptor.scriptSetup.src
-    ? descriptor.scriptSetup
-    : descriptor.script && !descriptor.script.src ? descriptor.script : undefined)
+  let selected
+  if (context.preferredVueBlock) {
+    selected = context.preferredVueBlock === 'scriptSetup' ? descriptor.scriptSetup : descriptor.script
+    if (!selected || selected.src)
+      return null
+    if (context.expectedBlockLang !== undefined && (selected.lang || '') !== context.expectedBlockLang)
+      return null
+  }
+  else {
+    const preferred = typeof context.preferredOffset === 'number'
+      ? blocks.find(block => context.preferredOffset! >= block!.loc.start.offset && context.preferredOffset! <= block!.loc.end.offset)
+      : undefined
+    selected = preferred || (descriptor.scriptSetup && !descriptor.scriptSetup.src
+      ? descriptor.scriptSetup
+      : descriptor.script && !descriptor.script.src ? descriptor.script : undefined)
+  }
   if (!selected)
     return null
   const lang = selected.lang?.toLowerCase()

@@ -15,6 +15,14 @@ const svelteWrapper = path.join(fixturesDir, 'SvelteButton.svelte')
 const _jsWrappers = ['JsButton.js', 'MjsButton.mjs', 'CjsButton.cjs'].map(name => path.join(fixturesDir, name))
 const _directoryJsWrapper = path.join(fixturesDir, 'DirectoryJsButton', 'index.js')
 const defaultRootWrapper = path.join(fixturesDir, 'DefaultRootButton.tsx')
+const wrapperIdentityFiles = [
+  ['NamedAliasButton.tsx', `import { Button as BaseButton } from '@vendor/ui'\nexport default () => <BaseButton />`],
+  ['BareAliasButton.tsx', `import { Button as BaseButton } from 'antd'\nexport default () => <BaseButton />`],
+  ['DefaultSubpathButton.tsx', `import Button from 'antd/es/button'\nexport default () => <Button />`],
+  ['NamespaceButton.tsx', `import * as UI from '@vendor/ui'\nexport default () => <UI.Button />`],
+  ['UnknownButton.tsx', `import { Button } from '@unknown/ui'\nexport default () => <Button />`],
+  ['VueAliasButton.vue', `<script setup>import { Button as BaseButton } from '@vendor/ui'</script><template><BaseButton /></template>`],
+] as const
 
 beforeAll(async () => {
   await fsp.mkdir(fixturesDir, { recursive: true })
@@ -29,6 +37,8 @@ beforeAll(async () => {
   await fsp.mkdir(path.dirname(_directoryJsWrapper), { recursive: true })
   await fsp.writeFile(_directoryJsWrapper, `export default () => <ElButton />`, 'utf8')
   await fsp.writeFile(defaultRootWrapper, `const preview = <Spinner />\nconst Wrapped = () => <ElButton />\nexport default Wrapped`, 'utf8')
+  for (const [name, content] of wrapperIdentityFiles)
+    await fsp.writeFile(path.join(fixturesDir, name), content, 'utf8')
   // ensure getCurrentFileUrl resolves into the repo so relative imports point to test dir
   try {
     ;(vsutils as any).getCurrentFileUrl = () => path.join(process.cwd(), 'test', 'index.html')
@@ -47,6 +57,8 @@ afterAll(async () => {
       await fsp.rm(wrapper)
     await fsp.rm(path.dirname(_directoryJsWrapper), { recursive: true })
     await fsp.rm(defaultRootWrapper)
+    for (const [name] of wrapperIdentityFiles)
+      await fsp.rm(path.join(fixturesDir, name))
     await fsp.rmdir(fixturesDir)
   }
   catch {}
@@ -161,5 +173,38 @@ export default {}
         path.join(process.cwd(), 'test'),
       )).resolves.toMatchObject({ component: button, source })
     }
+  })
+
+  it('preserves wrapper imported names and authoritative package sources', async () => {
+    const wrong = { lib: 'other-ui', marker: 'wrong' }
+    const vendor = { lib: '@vendor/ui', marker: 'vendor' }
+    const antd = { lib: 'antd', marker: 'antd' }
+    const cacheMap = new Map<string, any>([
+      ['vendor', { Button: vendor }],
+      ['antd5', { Button: antd }],
+    ])
+    const sourceScopes: any = new Map([
+      ['@vendor/ui', { key: 'vendor', exactLib: '@vendor/ui' }],
+      ['antd', { key: 'antd5', exactLib: 'antd' }],
+      ['antd/es/button', { key: 'antd5', exactLib: 'antd' }],
+    ])
+    const resolve = (name: string) => resolveImportedComponent(
+      'Wrapper',
+      { Wrapper: `./fixtures-dyn/${name}` },
+      { Button: wrong } as any,
+      cacheMap,
+      {},
+      [],
+      sourceScopes,
+      { Wrapper: `./fixtures-dyn/${name}` },
+      path.join(process.cwd(), 'test', 'App.tsx'),
+      path.join(process.cwd(), 'test'),
+    )
+
+    for (const name of ['NamedAliasButton.tsx', 'NamespaceButton.tsx', 'VueAliasButton.vue'])
+      await expect(resolve(name)).resolves.toMatchObject({ component: vendor })
+    for (const name of ['BareAliasButton.tsx', 'DefaultSubpathButton.tsx'])
+      await expect(resolve(name)).resolves.toMatchObject({ component: antd })
+    await expect(resolve('UnknownButton.tsx')).resolves.toMatchObject({ component: undefined })
   })
 })

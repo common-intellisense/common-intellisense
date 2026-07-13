@@ -246,6 +246,27 @@ const Button = {}
     expect(createImportEdits(dynamic, 'ui', ['Button'], 'specifier', true)).toEqual([])
   })
 
+  it('uses stable Vue block identity after offsets move', () => {
+    const original = `<script lang="tsx">\nconst node = <Button />\n</script>\n<script setup lang="ts">\nconst count = ref(0)\n</script>`
+    const shifted = `<!-- formatter inserted this -->\n${original}`
+    const output = applyEdits(shifted, createImportEdits(shifted, 'ui', ['Button'], 'specifier', 'vue', {
+      languageId: 'vue',
+      preferredOffset: original.indexOf('const node'),
+      preferredVueBlock: 'script',
+      expectedBlockLang: 'tsx',
+      registerVueComponent: false,
+    }))
+    const normalEnd = output.indexOf('</script>')
+    expect(output.slice(0, normalEnd)).toContain('import { Button } from "ui"')
+    expect(output.slice(normalEnd)).not.toContain('import { Button } from "ui"')
+
+    const setupOnly = `<script setup lang="ts"></script>`
+    expect(createImportEdits(setupOnly, 'ui', ['Button'], 'specifier', 'vue', {
+      preferredVueBlock: 'script',
+      expectedBlockLang: 'tsx',
+    })).toEqual([])
+  })
+
   it('targets the active Vue script block when normal script and setup coexist', () => {
     const vue = `<script lang="tsx">\nconst node = <Button />\n</script>\n<script setup lang="ts">\nconst count = ref(0)\n</script>`
     const normalOffset = vue.indexOf('const node')

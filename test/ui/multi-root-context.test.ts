@@ -84,6 +84,18 @@ describe('multi-root package contexts', () => {
     expect(second?.uis).toEqual([])
   })
 
+  it('invokes a child package watcher callback exactly once per change', async () => {
+    const onChange = vi.fn()
+    const mod = await import('../../src/ui/ui-find')
+
+    await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', onChange, '/workspace-a')
+    const packageWatch = (watchFileMock.mock.calls as any[][]).find(([file]) => file === '/workspace-a/packages/app/package.json')
+    expect(packageWatch).toBeDefined()
+
+    packageWatch![1].onChange()
+    expect(onChange).toHaveBeenCalledTimes(1)
+  })
+
   it('watches an existing non-monorepo root for a false-to-true transition', async () => {
     const fs = await import('node:fs/promises')
     let rootHasWorkspaces = false

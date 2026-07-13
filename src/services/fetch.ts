@@ -159,8 +159,6 @@ const remoteExecTimeout = 1200
 const maxRemoteScriptSize = 8 * 1024 * 1024
 const maxAdapterResultSize = 8 * 1024 * 1024
 const maxTotalAdapterResultSize = 16 * 1024 * 1024
-// Bound the host-side outer JSON parse before allocating its object graph.
-const maxAdapterEnvelopeSize = maxTotalAdapterResultSize + 1024 * 1024
 const maxAdapterDepth = 30
 const maxAdapterArrayLength = 20_000
 const maxAdapterStringLength = 1_000_000
@@ -434,23 +432,13 @@ async function evaluateAdapter(scriptContent: string, source: string, localeZh: 
   // Execute compatibility code in a terminable Worker. This is not a security
   // sandbox, but the parent-owned wall-clock deadline protects Extension Host
   // responsiveness even if code escapes node:vm into nextTick/timer queues.
-  const serializedJson = await runLegacyAdapterInWorker(normalizedContent, source, localeZh, remoteExecTimeout)
-  if (typeof serializedJson !== 'string' || Buffer.byteLength(serializedJson) > maxAdapterEnvelopeSize)
-    throw new Error(`Adapter result is invalid or too large: ${source}`)
-  const serialized = JSON.parse(serializedJson) as unknown
-  if (!Array.isArray(serialized))
-    throw new Error(`Adapter result is invalid or too large: ${source}`)
-
-  const keys: string[] = []
-  const resultSizes: number[] = []
-  const entries: Array<[string, string]> = []
-  for (const entry of serialized) {
-    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || typeof entry[1] !== 'string')
-      throw new Error(`Adapter result is invalid or too large: ${source}`)
-    keys.push(entry[0])
-    resultSizes.push(Buffer.byteLength(entry[1]))
-    entries.push([entry[0], entry[1]])
-  }
+  const entries = await runLegacyAdapterInWorker(normalizedContent, source, localeZh, remoteExecTimeout, {
+    maxExports: maxAdapterExports,
+    maxSingleResultSize: maxAdapterResultSize,
+    maxTotalResultSize: maxTotalAdapterResultSize,
+  })
+  const keys = entries.map(([key]) => key)
+  const resultSizes = entries.map(([, json]) => Buffer.byteLength(json))
   // Validate every byte budget before parsing any individual export.
   validateLegacyAdapterLimits(keys, resultSizes, source)
 
