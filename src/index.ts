@@ -13,7 +13,7 @@ import { isNativeTag } from './services/native-tags'
 import { invalidateRootPackageCacheForManifest } from './services/ui-cache'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resetCustomSourcesForApprovalChange, resolvePackagePathForDocument } from './ui/ui-find'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, handlePackageManifestLifecycle, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resetCustomSourcesForApprovalChange, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getUiImportedName } from './ui/ui-utils'
 import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn, resolveLocalWrappedComponent } from './parser'
 
@@ -156,7 +156,12 @@ export async function resolveImportedComponent(rawTag: string | undefined, uiDep
     return {}
   const importedTag = resolveImportedTag(rawTag, uiDeps)
   const resolvedSource = importedTag.source || localDeps[importedTag.localRoot]
-  if (isLocalModuleSource(resolvedSource)) {
+  const scope = findComponentSourceScope(sourceScopes, resolvedSource)
+  // Registered package scopes are authoritative. Otherwise, allow the project
+  // resolver to prove that any import spelling (including custom tsconfig paths)
+  // points to a workspace wrapper. Bare packages resolving into node_modules are
+  // rejected by the local resolver and remain authoritative external sources.
+  if (resolvedSource && !scope) {
     const component = await resolveLocalWrappedComponent(
       resolvedSource,
       completions,
@@ -165,12 +170,12 @@ export async function resolveImportedComponent(rawTag: string | undefined, uiDep
       workspaceRoot,
       source => selectScopedCompletionsStrict(cacheMap, source, alias, sourceScopes),
     )
-    return { component, source: resolvedSource, scoped: completions }
+    if (component || isLocalModuleSource(resolvedSource))
+      return { component, source: resolvedSource, scoped: completions }
   }
   const scoped = resolvedSource
     ? selectScopedCompletions(completions, cacheMap, resolvedSource, alias, sourceScopes)
     : completions
-  const scope = findComponentSourceScope(sourceScopes, resolvedSource)
   const normalizedSource = scope?.exactLib || scope?.lib || (!scope ? normalizeScopedSource(resolvedSource, alias, sourceScopes) : undefined)
   for (const candidate of importedTag.candidates) {
     const component = await findDynamicComponent(candidate, {}, scoped, prefixes, normalizedSource)
@@ -300,9 +305,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const packageManifestWatcher = vscode.workspace.createFileSystemWatcher?.('**/package.json')
   if (packageManifestWatcher) {
     const invalidateManifest = (uri: vscode.Uri) => {
-      invalidateRootPackageCacheForManifest(uri.fsPath)
-      invalidateDocumentPackageMappingsForManifest(uri.fsPath)
-      invalidatePackageContext(uri.fsPath)
+      const manifestPath = uri.fsPath
+      const segments = manifestPath.split(/[\\/]+/)
+      if (segments.some(segment => ['node_modules', 'dist', 'build', '.cache'].includes(segment)) || isExcluded(manifestPath))
+        return
+      handlePackageManifestLifecycle(manifestPath)
+      invalidateRootPackageCacheForManifest(manifestPath)
     }
     context.subscriptions.push(
       packageManifestWatcher,
@@ -760,7 +768,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return UiCompletions.icons
       const name = fixedTagName(result.tag)
       const propName = result.propName
-      const resolved = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+      const resolved = importedResolution
       const target = resolved.component || (!resolved.source ? await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, undefined, getDocumentPath(document)) : undefined)
 
       if (!target) {

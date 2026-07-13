@@ -26,6 +26,10 @@ describe('data-only adapter manifest validation', () => {
     expect(exportsData.demo.map[0].events[0].ignored).toBeUndefined()
   })
 
+  it('rejects thenable export keys before crossing an async boundary', () => {
+    expect(() => normalizeAdapterManifestExports({ then: { uiName: 'then', lib: 'demo', map: [] } }, 'fixture')).toThrow('Unsafe adapter export key')
+  })
+
   it('validates and clones component directives', () => {
     const exportsData = normalizeAdapterManifestExports({
       demoComponents: {
@@ -47,6 +51,7 @@ describe('data-only adapter manifest validation', () => {
   })
 
   it.each([
+    ...['__proto__', 'prototype', 'constructor', 'then', 'icons'].map(name => ({ uiName: 'demo', lib: 'demo', map: [{ name }] })),
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { disabled: null } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { type: 42 } } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', exposed: [{ name: 'focus', version: 3 }] }] },

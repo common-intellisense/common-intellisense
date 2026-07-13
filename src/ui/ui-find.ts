@@ -273,6 +273,47 @@ export function invalidateDocumentPackageMappingsForManifest(manifestPath: strin
   }
 }
 
+/**
+ * Handle discovery-level package.json create/delete events without treating every
+ * nested manifest as a change to its parent package. Precise package/root watchers
+ * own normal rebuilds; this global path only invalidates an exact known package or
+ * document mappings for which the changed manifest is a nearer package boundary.
+ */
+export function handlePackageManifestLifecycle(manifestPath: string) {
+  const normalizedManifest = path.resolve(manifestPath)
+  const manifestDirectory = path.dirname(normalizedManifest)
+  const packagePaths: string[] = []
+  const documentPaths: string[] = []
+
+  const rootEntry = [...rootPkgCache.entries()].find(([, value]) => path.resolve(value.rootPkgPath) === normalizedManifest)
+  if (rootEntry) {
+    packagePaths.push(...[...contexts.values()]
+      .filter(context => isSameOrWithin(path.dirname(context.pkgPath), rootEntry[0]))
+      .map(context => context.pkgPath))
+    invalidatePackageContext(rootEntry[0])
+  }
+  else if (contexts.has(normalizedManifest) || contextLoads.has(normalizedManifest)) {
+    packagePaths.push(normalizedManifest)
+    invalidatePackageContext(normalizedManifest)
+  }
+
+  for (const [documentPath, packagePath] of [...documentPackageCache]) {
+    const currentDirectory = packagePath ? path.dirname(packagePath) : undefined
+    const mappedToChangedManifest = packagePath === normalizedManifest
+    const introducesNearerBoundary = !!currentDirectory
+      && normalizedManifest !== packagePath
+      && isSameOrWithin(manifestDirectory, currentDirectory)
+      && isSameOrWithin(documentPath, manifestDirectory)
+    if (!mappedToChangedManifest && !introducesNearerBoundary)
+      continue
+    documentPackageCache.delete(documentPath)
+    urlCache.delete(documentPath)
+    documentPaths.push(documentPath)
+  }
+
+  return { packagePaths, documentPaths }
+}
+
 export async function ensureContextForPath(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, cleanCache = false, workspaceRoot?: string) {
   if (!cwd || cwd === 'exthhost')
     return

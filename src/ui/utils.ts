@@ -172,7 +172,7 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
 export function propsReducer(options: PropsOptions) {
   const { uiName, lib, map, prefix = '', dynamicLib, resolveFrom, installedVersion, adapterMajor } = options
 
-  const result: PropsConfig = {}
+  const result: PropsConfig = Object.create(null)
   // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
   // let icons
   // if (iconData) {

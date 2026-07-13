@@ -1421,9 +1421,12 @@ export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRo
 const localComponentExtensions = ['.vue', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte']
 const maxLocalComponentSize = 4 * 1024 * 1024
 const maxLocalComponentCacheEntries = 20
+const maxLocalResolutionCacheEntries = 100
+const localResolutionCacheTtl = 2_000
 interface WrapperImport { localName: string, importedName: string, source: string }
 interface LocalWrapperTarget { localTag: string, lookupTag: string, source?: string }
 const localComponentTagCache = new Map<string, { signature: string, target?: LocalWrapperTarget }>()
+const localResolutionCache = new Map<string, { expiresAt: number, promise: Promise<string | undefined> }>()
 
 function isSameOrWithinPath(target: string, root: string) {
   const relative = path.relative(root, target)
@@ -1439,6 +1442,7 @@ function touchLocalComponentCache(key: string, value: { signature: string, targe
 
 export function clearLocalComponentCache() {
   localComponentTagCache.clear()
+  localResolutionCache.clear()
 }
 
 async function findProjectResolutionContext(currentFile: string, workspaceRoot: string) {
@@ -1505,7 +1509,7 @@ async function resolveProjectAliasBase(source: string, currentFile: string, work
     return path.resolve(projectRoot, source.slice(1))
 }
 
-export async function resolveLocalComponentModule(url: string, currentFileUrl?: string, workspaceRoot?: string) {
+async function resolveLocalComponentModuleUncached(url: string, currentFileUrl?: string, workspaceRoot?: string) {
   // Provider paths always pass workspaceRoot. Legacy calls are limited to the
   // current document directory rather than being allowed to read arbitrary files.
   const effectiveCurrentFile = currentFileUrl || getCurrentFileUrl()
@@ -1535,12 +1539,31 @@ export async function resolveLocalComponentModule(url: string, currentFileUrl?: 
       const realCandidate = await fsp.realpath(candidate)
       if (!isSameOrWithinPath(realCandidate, realRoot))
         continue
+      const relativeCandidate = path.relative(realRoot, realCandidate)
+      if (relativeCandidate.split(path.sep).includes('node_modules'))
+        continue
       const stat = await fsp.stat(realCandidate)
       if (stat.isFile() && stat.size <= maxLocalComponentSize)
         return realCandidate
     }
     catch {}
   }
+}
+
+export function resolveLocalComponentModule(url: string, currentFileUrl?: string, workspaceRoot?: string) {
+  const key = `${path.resolve(workspaceRoot || '')}\0${path.resolve(currentFileUrl || '')}\0${url}`
+  const cached = localResolutionCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) {
+    localResolutionCache.delete(key)
+    localResolutionCache.set(key, cached)
+    return cached.promise
+  }
+  const promise = resolveLocalComponentModuleUncached(url, currentFileUrl, workspaceRoot)
+  localResolutionCache.delete(key)
+  localResolutionCache.set(key, { expiresAt: Date.now() + localResolutionCacheTtl, promise })
+  while (localResolutionCache.size > maxLocalResolutionCacheEntries)
+    localResolutionCache.delete(localResolutionCache.keys().next().value!)
+  return promise
 }
 
 export async function resolveLocalWrappedComponent(source: string, UiCompletions: PropsConfig, prefix: string[], currentFileUrl?: string, workspaceRoot?: string, selectSource?: (source: string) => PropsConfig | undefined) {

@@ -1,5 +1,11 @@
 type PlainRecord = Record<string, unknown>
 
+const maxComponentsPerLibrary = 5_000
+const maxComponentMembers = 1_000
+const maxAggregateComponents = 10_000
+const maxDomainStringLength = 100_000
+const reservedComponentNames = new Set(['__proto__', 'prototype', 'constructor', 'then', 'icons'])
+
 function isPlainRecord(value: unknown): value is PlainRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     return false
@@ -12,13 +18,20 @@ function invalid(path: string): never {
 }
 
 function requireNonEmptyString(value: unknown, path: string): string {
-  if (typeof value !== 'string' || !value.trim())
+  if (typeof value !== 'string' || !value.trim() || value.length > maxDomainStringLength)
     invalid(path)
   return value
 }
 
+function requireSafeComponentName(value: unknown, path: string) {
+  const name = requireNonEmptyString(value, path)
+  if (reservedComponentNames.has(name))
+    invalid(path)
+  return name
+}
+
 function validateOptionalString(record: PlainRecord, key: string, path: string) {
-  if (record[key] !== undefined && typeof record[key] !== 'string')
+  if (record[key] !== undefined && (typeof record[key] !== 'string' || record[key].length > maxDomainStringLength))
     invalid(`${path}.${key}`)
 }
 
@@ -90,7 +103,7 @@ function normalizeSuggestions(value: unknown, path: string) {
 function normalizeNamedArray(value: unknown, path: string, eventEntries = false) {
   if (value === undefined)
     return []
-  if (!Array.isArray(value))
+  if (!Array.isArray(value) || value.length > maxComponentMembers)
     invalid(path)
   return value.map((entry, index) => {
     const entryPath = `${path}[${index}]`
@@ -145,14 +158,14 @@ function normalizeProp(prop: PlainRecord, path: string) {
 function normalizeComponent(value: unknown, path: string) {
   if (!isPlainRecord(value))
     invalid(path)
-  requireNonEmptyString(value.name, `${path}.name`)
+  requireSafeComponentName(value.name, `${path}.name`)
   for (const key of ['description', 'description_zh', 'tag', 'link', 'link_zh', 'dynamicLib', 'version'])
     validateOptionalString(value, key, path)
   if (value.importWay !== undefined && !['as default', 'default', 'specifier'].includes(String(value.importWay)))
     invalid(`${path}.importWay`)
-  if (value.props !== undefined && !isPlainRecord(value.props))
+  if (value.props !== undefined && (!isPlainRecord(value.props) || Object.keys(value.props).length > maxComponentMembers))
     invalid(`${path}.props`)
-  const props: PlainRecord = {}
+  const props: PlainRecord = Object.create(null)
   for (const [name, prop] of Object.entries(value.props || {})) {
     if (!name.trim() || (name.startsWith(':') && name.length < 2))
       invalid(`${path}.props.${name || '<empty>'}`)
@@ -214,14 +227,14 @@ function normalizeComponentsExport(value: PlainRecord, path: string) {
     validateOptionalString(value, key, path)
   if (value.importWay !== undefined && !['as default', 'default', 'specifier'].includes(String(value.importWay)))
     invalid(`${path}.importWay`)
-  if (!Array.isArray(value.map))
+  if (!Array.isArray(value.map) || value.map.length > maxComponentsPerLibrary)
     invalid(`${path}.map`)
   const map = value.map.map((entry, index) => {
     if (!Array.isArray(entry) || !entry.length)
       invalid(`${path}.map[${index}]`)
     const component = entry[0]
     const normalizedComponent = typeof component === 'string'
-      ? requireNonEmptyString(component, `${path}.map[${index}][0]`)
+      ? requireSafeComponentName(component, `${path}.map[${index}][0]`)
       : normalizeComponent(component, `${path}.map[${index}][0]`)
     if (entry[1] !== undefined && typeof entry[1] !== 'string')
       invalid(`${path}.map[${index}][1]`)
@@ -237,7 +250,7 @@ function normalizePropsExport(value: PlainRecord, path: string) {
   requireNonEmptyString(value.lib, `${path}.lib`)
   for (const key of ['prefix', 'dynamicLib', 'resolveFrom', 'installedVersion', 'adapterMajor'])
     validateOptionalString(value, key, path)
-  if (!Array.isArray(value.map))
+  if (!Array.isArray(value.map) || value.map.length > maxComponentsPerLibrary)
     invalid(`${path}.map`)
   return { ...value, map: value.map.map((component, index) => normalizeComponent(component, `${path}.map[${index}]`)) }
 }
@@ -245,10 +258,19 @@ function normalizePropsExport(value: PlainRecord, path: string) {
 /** Validate and clone data-only adapter exports before reducer closures are created. */
 export function normalizeAdapterManifestExports(exportsData: Record<string, unknown>, source: string) {
   const normalized: Record<string, unknown> = {}
+  let aggregateComponents = 0
   for (const [key, value] of Object.entries(exportsData)) {
+    if (['__proto__', 'prototype', 'constructor', 'then'].includes(key))
+      throw new TypeError(`Unsafe adapter export key: ${source}#${key}`)
     if (!isPlainRecord(value))
       throw new TypeError(`Invalid adapter manifest export: ${source}#${key}`)
     const path = `${source}#${key}`
+    const map = value.map
+    if (Array.isArray(map)) {
+      aggregateComponents += map.length
+      if (aggregateComponents > maxAggregateComponents)
+        invalid(`${source}.components`)
+    }
     normalized[key] = key.endsWith('Components')
       ? normalizeComponentsExport(value, path)
       : normalizePropsExport(value, path)
