@@ -154,7 +154,7 @@ Custom sources should use the data-only manifest format:
 }
 ```
 
-**Migration notice:** Legacy CommonJS adapters are executable code and are now disabled for custom sources by default; they are always disabled in Restricted Mode. Migrate existing private adapters to the data-only manifest above. Only set `"common-intellisense.allowLegacyAdapters": true` as a temporary compatibility measure for sources you fully trust; `node:vm` bounds execution time but is not a security sandbox. When a legacy source is blocked, the extension shows one migration warning per source per session.
+**Migration notice:** Legacy CommonJS adapters are executable code and are disabled for custom sources by default; they are always disabled in Restricted Mode. Migrate existing private adapters to the data-only manifest above. Approve a legacy source only through `common-intellisense.legacyAdapterAllowlist`, using the exact source identity and SHA-256 digest shown by the migration warning. The deprecated `common-intellisense.allowLegacyAdapters` flag is an emergency compatibility escape hatch that authorizes every configured custom source and therefore expands the executable-code trust boundary.
 
 ## How to Contribute
 
@@ -162,7 +162,17 @@ This repository is maintained by individuals, and needs to be updated with some 
 
 ## How to support private libraries
 
-If your project is a private library, you can also refer to [vuetify](https://github.com/common-intellisense/vuetify3), provide an exported uri, if your uri is an accessible packaged `dist/index.cjs` address, in vscode `common-intellisense.remoteUris`, configure this link, the plug-in will request this link and get the corresponding prompt information. You can also directly configure an npm package name (@xx/yy-ui), configure it in `common-intellisense.remoteNpmUris`, so that the plug-in will request the `dist/index.cjs` produced by the npm package and get the corresponding prompt information. [Bilibili video](https://www.bilibili.com/video/BV1zn2oYUEQG/)
+Publish a `schemaVersion: 1` JSON manifest like the example above. Point `common-intellisense.remoteUris` to its HTTPS URL, use `common-intellisense.localUris` for a manifest inside the workspace, or publish it in npm and configure:
+
+```json
+{
+  "common-intellisense.remoteNpmUris": [
+    { "name": "@company/ui-metadata", "resource": "dist/manifest.json" }
+  ]
+}
+```
+
+Legacy `dist/index.cjs` adapters are executable code and are supported only as a temporary migration path for an explicitly approved source/digest. Do not enable the deprecated global legacy flag unless every configured custom source is trusted.
 
 ## How to configure the component's JSON
 ```json

@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Breaking / Security
 
-- Custom executable CommonJS adapters from `remoteUris`, `remoteNpmUris`, and `localUris` are now disabled by default. Migrate trusted sources to the data-only `schemaVersion: 1` manifest format. As a temporary compatibility measure, trusted workspaces can explicitly enable `common-intellisense.allowLegacyAdapters`; executable adapters remain disabled in Restricted Mode.
+- Custom executable CommonJS adapters from `remoteUris`, `remoteNpmUris`, and `localUris` are now disabled by default. Migrate trusted sources to the data-only `schemaVersion: 1` manifest format. Legacy approval is scoped to an exact source identity and SHA-256 digest through `common-intellisense.legacyAdapterAllowlist`; executable adapters remain disabled in Restricted Mode. The deprecated global `allowLegacyAdapters` flag is retained only as an emergency compatibility escape hatch and authorizes every configured custom source.
 
 - Add global Vitest test setup to stub VSCode and runtime-only modules for unit tests.
 - Implement suffix-match fallback for UI component lookup so bare/pascal names (e.g. `Pagination`) can match prefixed completion keys (e.g. `ElPagination`).

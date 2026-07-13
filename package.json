@@ -266,10 +266,18 @@
             "type": "string"
           }
         },
+        "common-intellisense.legacyAdapterAllowlist": {
+          "type": "array",
+          "default": [],
+          "description": "Exact source-and-SHA256 approvals for legacy executable adapters. Copy the approval entry shown in the warning only after verifying the source and digest.",
+          "items": {
+            "type": "string"
+          }
+        },
         "common-intellisense.allowLegacyAdapters": {
           "type": "boolean",
           "default": false,
-          "description": "Allow executable CommonJS from custom remote/local sources. Only enable for sources you trust; node:vm is not a security sandbox."
+          "description": "Deprecated emergency escape hatch that allows executable CommonJS from every configured custom source. Prefer legacyAdapterAllowlist; executable adapters are not a security sandbox."
         }
       }
     },
@@ -352,6 +360,7 @@
         "common-intellisense.remoteNpmUris",
         "common-intellisense.localUris",
         "common-intellisense.trustedHosts",
+        "common-intellisense.legacyAdapterAllowlist",
         "common-intellisense.allowLegacyAdapters"
       ]
     }

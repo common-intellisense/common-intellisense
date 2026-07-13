@@ -6,6 +6,7 @@ let remoteUris: string[] = ['https://fake/remote.js']
 let remoteNpmUris: ({ name: string, resource?: string } | string)[] = [{ name: '@common-intellisense/button', resource: undefined }]
 let trustedHosts: string[] = ['fake']
 let allowLegacyAdapters = true
+let legacyAdapterAllowlist: string[] = []
 const fetchFromTypesMock = vi.fn()
 
 async function useMockRemoteRequester(mod: typeof import('../../src/services/fetch')) {
@@ -46,6 +47,8 @@ vi.mock('@vscode-use/utils', () => ({
       return trustedHosts
     if (k === 'common-intellisense.allowLegacyAdapters')
       return allowLegacyAdapters
+    if (k === 'common-intellisense.legacyAdapterAllowlist')
+      return legacyAdapterAllowlist
     return undefined
   },
   getLocale: () => 'en',
@@ -69,6 +72,7 @@ describe('fetch service additional tests (mocked)', () => {
     remoteNpmUris = [{ name: '@common-intellisense/button', resource: undefined }]
     trustedHosts = ['fake']
     allowLegacyAdapters = true
+    legacyAdapterAllowlist = []
     fetchFromTypesMock.mockReset()
   })
 
@@ -348,7 +352,7 @@ describe('fetch service additional tests (mocked)', () => {
     await Promise.resolve()
     expect(warning).toHaveBeenCalledTimes(1)
     expect(warning.mock.calls[0][0]).not.toContain('secret')
-    expect(executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', 'common-intellisense.allowLegacyAdapters')
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', 'common-intellisense.legacyAdapterAllowlist')
 
     mod.notifyLegacyAdapterBlocked('https://example.com/b.cjs?token=other')
     await Promise.resolve()
@@ -363,6 +367,28 @@ describe('fetch service additional tests (mocked)', () => {
     const mod = await import('../../src/services/fetch')
     mod.clearFetchCaches()
 
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
+  })
+
+  it('approves legacy execution by exact source and content digest', async () => {
+    allowLegacyAdapters = false
+    remoteUris = ['https://fake/approved.cjs']
+    const script = 'module.exports = { ApprovedProps: () => ({ ok: true }) }'
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(script)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
+    const sourceId = mod.getRemoteSourceIdentity(remoteUris[0]).id
+    legacyAdapterAllowlist = [mod.getLegacyAdapterApproval(sourceId, script)]
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteUrls()
+    expect(result.ApprovedProps()).toEqual({ ok: true })
+
+    legacyAdapterAllowlist = [`${sourceId}#sha256:changed`]
+    mod.clearFetchCaches()
     await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
   })
 

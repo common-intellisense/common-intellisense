@@ -253,6 +253,31 @@ describe('package context generations', () => {
     nowSpy.mockRestore()
   })
 
+  it('keeps the last-known-good source snapshot when refreshed exports fail reduction', async () => {
+    let now = 3_250_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    localFetchMock
+      .mockResolvedValueOnce({ CustomProps: () => ({ StableButton: { source: 'old' } }) })
+      .mockResolvedValueOnce({ CustomProps: () => { throw new Error('broken reducer') } })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.StableButton).toBeDefined())
+    const checkedAt = mod.getContextForDocumentPath(documentPath)!.customSourcesCheckedAt
+    now += 6 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customFailureCount).toBe(1))
+    const context = mod.getContextForDocumentPath(documentPath)!
+    expect(context.uiCompletions?.StableButton).toMatchObject({ source: 'old' })
+    expect(context.customSourcesCheckedAt).toBe(checkedAt)
+    expect(context.customNextRetryAt).toBeGreaterThan(now)
+    nowSpy.mockRestore()
+  })
+
   it('replays the last successful custom snapshot onto a refreshed official baseline', async () => {
     let now = 3_500_000
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)

@@ -12,7 +12,7 @@ describe('data-only adapter manifest validation', () => {
         map: [{
           name: 'Demo',
           props: { disabled: { type: 'boolean', required: false, default: false } },
-          events: [{ name: 'change' }],
+          events: [{ name: 'change', required: false, ignored: 'not-public' }],
           methods: [{ name: 'focus' }],
           exposed: [{ name: 'focus' }],
           slots: [{ name: 'default' }],
@@ -22,6 +22,8 @@ describe('data-only adapter manifest validation', () => {
 
     expect(exportsData.demo.map[0].props.disabled.type).toBe('boolean')
     expect(exportsData.demoComponents.map[0][0]).toBe('Demo')
+    expect(exportsData.demo.map[0].events[0].required).toBe(false)
+    expect(exportsData.demo.map[0].events[0].ignored).toBeUndefined()
   })
 
   it('validates and clones component directives', () => {
@@ -54,6 +56,7 @@ describe('data-only adapter manifest validation', () => {
     { lib: 'demo', directives: [{ name: 'loading', params: [{ name: 'delay' }] }], map: [['Demo', 'Demo']] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { ':': { type: 'string' } } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'click', kind: 'invalid' }] }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'submit', required: 'false' }] }] },
   ])('rejects malformed props before reducers are created', (value) => {
     expect(() => normalizeAdapterManifestExports({ demo: value }, 'fixture')).toThrow(/Invalid adapter manifest field/)
   })

@@ -145,7 +145,7 @@
 }
 ```
 
-**迁移提示：**自定义来源的旧 CommonJS 适配器属于可执行代码，现已默认禁用，并且在 Restricted Mode 中始终禁用。请将现有私有适配器迁移到上面的 data-only manifest。仅可对完全信任的来源临时设置 `"common-intellisense.allowLegacyAdapters": true`；`node:vm` 仅用于限制执行时间，不是安全沙箱。旧来源被阻止时，扩展会在每个会话中针对每个来源最多提示一次。`localUris` 只允许工作区内部文件。
+**迁移提示：**自定义来源的旧 CommonJS 适配器属于可执行代码，现已默认禁用，并且在 Restricted Mode 中始终禁用。请将现有私有适配器迁移到上面的 data-only manifest。仅通过 `common-intellisense.legacyAdapterAllowlist` 按迁移警告中显示的精确来源身份和 SHA-256 摘要批准可信旧来源。已弃用的 `common-intellisense.allowLegacyAdapters` 只是紧急兼容开关，会授权所有已配置的自定义来源并扩大可执行代码信任边界。`localUris` 只允许工作区内部文件。
 
 Slot CodeLens 当前仅支持 Vue 与 Vine；在提供 React 专属子节点插入语法前，React/TSX Slot CodeLens 保持禁用。
 

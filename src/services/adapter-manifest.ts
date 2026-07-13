@@ -101,7 +101,26 @@ function normalizeNamedArray(value: unknown, path: string, eventEntries = false)
       validateOptionalString(entry, key, entryPath)
     if (eventEntries && entry.kind !== undefined && entry.kind !== 'dom' && entry.kind !== 'component')
       invalid(`${entryPath}.kind`)
-    return { ...entry, params: normalizeParams(entry.params, `${entryPath}.params`) }
+    if (eventEntries)
+      validateOptionalBoolean(entry, 'required', entryPath)
+    const params = normalizeParams(entry.params, `${entryPath}.params`)
+    if (!eventEntries)
+      return { ...entry, params }
+    // Events are consumed directly by snippet generation. Clone only the public
+    // event contract so unknown manifest fields cannot silently activate future
+    // reducer behavior.
+    return {
+      name: entry.name,
+      description: entry.description,
+      description_zh: entry.description_zh,
+      version: entry.version,
+      detail: entry.detail,
+      platform: entry.platform,
+      value: entry.value,
+      params,
+      kind: entry.kind,
+      required: entry.required,
+    }
   })
 }
 

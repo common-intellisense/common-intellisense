@@ -57,20 +57,22 @@ export function getRemoteSourceIdentity(uri: string) {
 }
 
 /** Warn once per source and session when a custom executable adapter is blocked. */
-export function notifyLegacyAdapterBlocked(source: string) {
-  if (warnedLegacyAdapterSources.has(source))
+export function notifyLegacyAdapterBlocked(source: string, approval?: string) {
+  const warningKey = approval || source
+  if (warnedLegacyAdapterSources.has(warningKey))
     return
-  warnedLegacyAdapterSources.add(source)
+  warnedLegacyAdapterSources.add(warningKey)
   const visibleSource = displayAdapterSource(source)
   const restricted = vscode.workspace?.isTrusted === false
-  const reason = restricted ? 'Executable adapters are disabled in Restricted Mode.' : 'Executable adapters are disabled by default.'
-  const warning = `${reason} Blocked ${visibleSource}. Migrate to a data-only manifest, or temporarily enable legacy adapters only for a trusted source.`
+  const reason = restricted ? 'Executable adapters are disabled in Restricted Mode.' : 'Executable adapters require source-scoped approval.'
+  const approvalHint = approval ? ` Add this exact entry to common-intellisense.legacyAdapterAllowlist: ${approval}.` : ''
+  const warning = `${reason} Blocked ${visibleSource}.${approvalHint} Migrate to a data-only manifest, or use the deprecated global escape hatch only for fully trusted configurations.`
   const showWarningMessage = vscode.window?.showWarningMessage
   if (typeof showWarningMessage !== 'function')
     return
   void Promise.resolve(showWarningMessage(warning, 'Open Settings', 'Migration Guide')).then((action) => {
     if (action === 'Open Settings')
-      return vscode.commands?.executeCommand?.('workbench.action.openSettings', 'common-intellisense.allowLegacyAdapters')
+      return vscode.commands?.executeCommand?.('workbench.action.openSettings', 'common-intellisense.legacyAdapterAllowlist')
     if (action === 'Migration Guide' && vscode.env?.openExternal && vscode.Uri?.parse)
       return vscode.env.openExternal(vscode.Uri.parse(legacyMigrationUrl))
   }).catch(error => logger.error(`Failed to show legacy adapter migration warning: ${String(error)}`))
@@ -196,20 +198,33 @@ function mergeComponentsWithTypeFallback(remote: any[], fallback: any[]) {
   })
 }
 
+function getLegacyConfigurationIdentity() {
+  return {
+    emergency: getConfiguration('common-intellisense.allowLegacyAdapters') === true,
+    allowlist: (getConfiguration('common-intellisense.legacyAdapterAllowlist') as string[] | undefined) || [],
+  }
+}
+
+export function getLegacyAdapterApproval(sourceId: string, content: string) {
+  return `${sourceId}#sha256:${createHash('sha256').update(content).digest('hex')}`
+}
+
+function isLegacyAdapterApproved(sourceId: string, content: string) {
+  if (vscode.workspace?.isTrusted === false)
+    return false
+  const configuration = getLegacyConfigurationIdentity()
+  return configuration.emergency || configuration.allowlist.includes(getLegacyAdapterApproval(sourceId, content))
+}
+
 function getSourceTaskKey(kind: string, configuration: unknown, workspaceRoot?: string) {
   return JSON.stringify({
     kind,
     root: workspaceRoot || getRootPath() || '',
     configuration,
     trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [],
-    allowLegacyAdapters: getConfiguration('common-intellisense.allowLegacyAdapters') === true,
+    legacy: getLegacyConfigurationIdentity(),
     workspaceTrusted: vscode.workspace?.isTrusted !== false,
   })
-}
-
-function isLegacyAdapterEnabled() {
-  return vscode.workspace?.isTrusted !== false
-    && getConfiguration('common-intellisense.allowLegacyAdapters') === true
 }
 
 function parseIpv4(address: string) {
@@ -425,8 +440,7 @@ async function evaluateAdapter(scriptContent: string, source: string, localeZh: 
   }
 
   if (!allowLegacyCode) {
-    notifyLegacyAdapterBlocked(source)
-    throw new Error(`Executable adapter blocked; enable common-intellisense.allowLegacyAdapters to trust this source: ${source}`)
+    throw new Error(`Executable adapter blocked: ${source}`)
   }
 
   // Execute compatibility code in a terminable Worker. This is not a security
@@ -994,6 +1008,18 @@ async function settleCustomSources(items: Array<{ id: string, taskKey: string, l
   return Promise.all(items.map(({ id, taskKey, load }) => getOrCreateSourceTask(taskKey, id, load)))
 }
 
+async function evaluateCustomAdapterForEpoch(content: string, sourceId: string, displayName: string, epoch: number) {
+  const approval = getLegacyAdapterApproval(sourceId, content)
+  try {
+    return await evaluateAdapterForEpoch(content, displayName, getLocale()!.includes('zh'), isLegacyAdapterApproved(sourceId, content), epoch)
+  }
+  catch (error) {
+    if (String(error).includes('Executable adapter blocked'))
+      notifyLegacyAdapterBlocked(displayName, approval)
+    throw error
+  }
+}
+
 async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSourceLoadValue> {
   const identity = getRemoteSourceIdentity(uri)
   const { requestUri, cacheKey, displayName } = identity
@@ -1006,7 +1032,7 @@ async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSo
   const needsRefresh = !cached || (!retryDeferred && now - (remoteUriFetchedAt.get(cacheKey) || 0) >= remoteUriCacheTTL)
   const evaluate = async (scriptContent: string) => {
     const reduced: Record<string, any> = {}
-    appendReducedExports(reduced, await evaluateAdapterForEpoch(scriptContent, displayName, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), displayName)
+    appendReducedExports(reduced, await evaluateCustomAdapterForEpoch(scriptContent, identity.id, displayName, epoch), displayName)
     return reduced
   }
   let scriptContent = cached
@@ -1040,7 +1066,7 @@ async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSo
 export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
   const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
   const epoch = sourceEpoch
-  const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: isLegacyAdapterEnabled() })
+  const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: getLegacyConfigurationIdentity() })
   return settleCustomSources(uris.map((uri) => {
     const identity = getRemoteSourceIdentity(uri)
     return { id: identity.id, taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`, load: () => loadRemoteUrlSource(uri, epoch) }
@@ -1110,7 +1136,7 @@ async function loadRemoteNpmSource(item: { name: string, resource?: string } | s
           : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`)),
       ]), npmDownloadDeadline, `Downloading ${name}/${resource}`)
   const reduced: Record<string, any> = {}
-  appendReducedExports(reduced, await evaluateAdapterForEpoch(scriptContent || '', key, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch), key)
+  appendReducedExports(reduced, await evaluateCustomAdapterForEpoch(scriptContent || '', `npm:${name}::${resource}`, key, epoch), key)
   if (sourceEpoch !== epoch)
     throw new Error('Remote npm adapter configuration changed')
   if (cached === undefined && scriptContent)
@@ -1128,7 +1154,7 @@ export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
     const id = `npm:${name}::${rawResource}`
     return {
       id,
-      taskKey: `${epoch}\0${id}\0legacy:${isLegacyAdapterEnabled()}`,
+      taskKey: `${epoch}\0${id}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
       load: () => loadRemoteNpmSource(item, epoch),
     }
   }))
@@ -1156,8 +1182,6 @@ async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: 
   return Object.assign({}, ...loaded.map(item => item.value || {}))
 }
 
-const localUrisMap = new Map<string, any>()
-
 export function resolveLocalAdapterPath(workspaceRoot: string, configuredUri: string) {
   const root = path.resolve(workspaceRoot)
   const target = path.resolve(root, configuredUri)
@@ -1183,16 +1207,15 @@ async function loadLocalSource(configuredUri: string, epoch: number, workspaceRo
   if (scriptContent.length > maxRemoteScriptSize)
     throw new Error(`Local adapter is too large: ${uri}`)
   const signature = createHash('sha256').update(scriptContent).digest('hex')
-  const cachedExports = getFetchCacheEntry(uri) === scriptContent ? localUrisMap.get(uri) : undefined
-  if (cachedExports)
-    return { value: cachedExports, signature }
-  const exportsData = await evaluateAdapterForEpoch(scriptContent, uri, getLocale()!.includes('zh'), isLegacyAdapterEnabled(), epoch)
+  // Always re-check the current source/digest approval before reusing executable
+  // output. A configuration change must not inherit code authorized earlier.
+  const sourceId = `local:${uri}`
+  const exportsData = await evaluateCustomAdapterForEpoch(scriptContent, sourceId, uri, epoch)
   const reduced: Record<string, any> = {}
   appendReducedExports(reduced, exportsData, uri)
   if (sourceEpoch !== epoch)
     throw new Error('Local adapter configuration changed')
   setFetchCacheEntry(uri, scriptContent)
-  localUrisMap.set(uri, reduced)
   return { value: reduced, signature }
 }
 
@@ -1204,7 +1227,7 @@ export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomS
     const id = `local:${resolveLocalAdapterPath(root, configuredUri) || configuredUri}`
     return {
       id,
-      taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${isLegacyAdapterEnabled()}`,
+      taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
       load: () => loadLocalSource(configuredUri, epoch, workspaceRoot),
     }
   }))
@@ -1243,7 +1266,6 @@ export function clearFetchCaches() {
   latestVersionInFlight.clear()
   remoteUriFetchedAt.clear()
   remoteUriRetry.clear()
-  localUrisMap.clear()
   perSourceTasks.clear()
   remoteHttpTasks.clear()
   remoteNpmTasks.clear()
