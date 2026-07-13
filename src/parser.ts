@@ -135,7 +135,8 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
     return
   const scripts = [script, scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
   const activeScript = scripts.find(block => isInPosition(block.loc, position, offset))
-  if (activeScript?.lang === 'tsx') {
+  const activeScriptLang = activeScript?.lang?.toLowerCase()
+  if (activeScript && (activeScriptLang === 'tsx' || activeScriptLang === 'jsx')) {
     const relativeOffset = Math.max(0, Math.min(cursorOffset - activeScript.loc.start.offset, activeScript.content.length))
     const result = parserJSX(activeScript.content, getSourcePosition(activeScript.content, relativeOffset))
     if (result) {

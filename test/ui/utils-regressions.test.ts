@@ -133,7 +133,28 @@ describe('utils reducer regressions', () => {
 
     const [components] = componentsReducer({ lib: 'fixture-lib', map: [[{ name: 'Demo' }, 'Demo']] as any })
     const react = await Promise.all(components.data(undefined, { languageId: 'typescriptreact', framework: 'react', uri: 'file:///Demo.tsx' }))
-    expect((react[0] as any).snippet).toContain('<demo')
+    expect((react[0] as any).snippet).toContain('<Demo')
+    expect((react[0] as any).snippet).not.toContain('<demo')
+
+    const [, unprefixed] = componentsReducer({ lib: 'element-plus', prefix: 'El', map: [[{ name: 'ElButton' }, 'Button']] as any })
+    const [tsxButton] = await Promise.all(unprefixed.data(undefined, {
+      languageId: 'vue',
+      hostFramework: 'vue',
+      syntax: 'jsx',
+      framework: 'react',
+      uri: 'file:///Demo.vue',
+    })) as any[]
+    expect(tsxButton.snippet).toContain('<Button')
+    expect(tsxButton.params.data.name).toBe('Button')
+
+    const [templateButton] = await Promise.all(unprefixed.data(undefined, {
+      languageId: 'vue',
+      hostFramework: 'vue',
+      syntax: 'template',
+      framework: 'vue',
+      uri: 'file:///Demo.vue',
+    })) as any[]
+    expect(templateButton.snippet).toContain('<el-button')
   })
 
   it('uses the same Svelte event names for optional and required snippets', async () => {
@@ -364,6 +385,6 @@ describe('utils reducer regressions', () => {
       ],
     })
     expect(firstDocumentation.supportHtml).toBe(false)
-    expect(firstDocumentation.value).toContain('[Copy](command:intellisense.copyDemo?encoded:<alpha-card$1>$2</alpha-card>)')
+    expect(firstDocumentation.value).toContain('[Copy](command:intellisense.copyDemo?encoded:<AlphaCard$1>$2</AlphaCard>)')
   })
 })

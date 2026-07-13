@@ -33,16 +33,18 @@ describe('vue script block selection', () => {
     })
   })
 
-  it('uses script-relative coordinates while retaining the Vue host for TSX', () => {
+  it.each(['tsx', 'jsx'])('uses script-relative coordinates while retaining the Vue host for %s', (lang) => {
     const code = `<template><div /></template>
 
-<script setup lang="tsx">
-const button = <ElButton size="small" />
+<script setup lang="${lang}">
+const buttonRef = ref()
+const button = <ElButton ref={buttonRef} size="small" />
 </script>`
     const tag = parseAt(code, 'ElButton') as any
     const prop = parseAt(code, 'size') as any
-    expect(tag).toMatchObject({ type: 'tag', tag: 'ElButton', hostFramework: 'vue' })
-    expect(prop).toMatchObject({ type: 'props', tag: 'ElButton', propName: 'size', hostFramework: 'vue' })
+    expect(tag).toMatchObject({ type: 'tag', tag: 'ElButton', hostFramework: 'vue', syntax: 'jsx', vueBlock: 'scriptSetup', blockLang: lang })
+    expect(prop).toMatchObject({ type: 'props', tag: 'ElButton', propName: 'size', hostFramework: 'vue', syntax: 'jsx' })
+    expect(tag.refsMap).toMatchObject({ buttonRef: 'ElButton' })
     expect(tag.template).toBeDefined()
   })
 

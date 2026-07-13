@@ -4,6 +4,13 @@ import type { CompletionRenderContext } from './utils'
 export interface DocumentEditIdentity {
   uri: string
   version: number
+  packagePath?: string
+  contextGeneration?: number
+  contextRevision?: number
+  sourceId?: string
+  sourceSignature?: string
+  vueBlock?: 'script' | 'scriptSetup'
+  blockLang?: string
 }
 
 export interface PropsConfig { [key: string]: any }

@@ -1189,6 +1189,42 @@ export function resolveLocalAdapterPath(workspaceRoot: string, configuredUri: st
   return relative.startsWith('..') || path.isAbsolute(relative) ? undefined : target
 }
 
+/** Resolve a local adapter using the same trust and workspace boundary for loading and watching. */
+export async function resolveLocalAdapterFile(workspaceRoot: string, configuredUri: string, options: { allowMissing?: boolean } = {}) {
+  if (vscode.workspace?.isTrusted === false || !configuredUri.trim() || configuredUri.trim() === '.')
+    return
+  const root = path.resolve(workspaceRoot)
+  const target = resolveLocalAdapterPath(root, configuredUri)
+  if (!target)
+    return
+  let realRoot: string
+  try {
+    realRoot = await fsp.realpath(root)
+  }
+  catch {
+    return
+  }
+  try {
+    const [realTarget, stat] = await Promise.all([fsp.realpath(target), fsp.stat(target)])
+    const relative = path.relative(realRoot, realTarget)
+    if (!stat.isFile() || relative.startsWith('..') || path.isAbsolute(relative))
+      return
+    return target
+  }
+  catch {
+    if (!options.allowMissing)
+      return
+    try {
+      const realParent = await fsp.realpath(path.dirname(target))
+      const relative = path.relative(realRoot, realParent)
+      if (relative.startsWith('..') || path.isAbsolute(relative))
+        return
+      return target
+    }
+    catch {}
+  }
+}
+
 async function loadLocalSource(configuredUri: string, epoch: number, workspaceRoot?: string): Promise<CustomSourceLoadValue> {
   if (vscode.workspace && vscode.workspace.isTrusted === false)
     throw new Error('Local adapters are disabled in untrusted workspaces')
@@ -1196,13 +1232,10 @@ async function loadLocalSource(configuredUri: string, epoch: number, workspaceRo
   if (!root)
     throw new Error('Local adapter workspace root is unavailable')
   const normalizedRoot = path.resolve(root)
-  const uri = resolveLocalAdapterPath(normalizedRoot, configuredUri)
+  const uri = await resolveLocalAdapterFile(normalizedRoot, configuredUri)
   if (!uri)
-    throw new Error(`Skipped local adapter outside workspace: ${configuredUri}`)
-  const [realUri, realRoot] = await Promise.all([fsp.realpath(uri), fsp.realpath(normalizedRoot)])
-  const realRelative = path.relative(realRoot, realUri)
-  if (realRelative.startsWith('..') || path.isAbsolute(realRelative))
-    throw new Error(`Skipped local adapter symlink outside workspace: ${configuredUri}`)
+    throw new Error(`Skipped unsafe local adapter: ${configuredUri}`)
+  const realUri = await fsp.realpath(uri)
   const scriptContent = await fsp.readFile(realUri, 'utf8')
   if (scriptContent.length > maxRemoteScriptSize)
     throw new Error(`Local adapter is too large: ${uri}`)

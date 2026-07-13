@@ -40,6 +40,7 @@ export interface CompletionRenderContext {
   contextGeneration?: number
   contextRevision?: number
   sourceId?: string
+  sourceSignature?: string
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
 
@@ -55,6 +56,7 @@ function getCompletionDocumentIdentity(context: CompletionRenderContext | undefi
     contextGeneration: context.contextGeneration,
     contextRevision: context.contextRevision,
     sourceId: context.sourceId,
+    sourceSignature: context.sourceSignature,
   }
 }
 
@@ -62,6 +64,11 @@ function getSyntaxFramework(context: CompletionRenderContext | undefined, fallba
   if (context?.syntax === 'jsx')
     return 'react'
   return context?.framework || fallback
+}
+
+export function renderComponentTag(componentName: string, framework: CompletionFramework, isSeparatedByHyphen: boolean) {
+  const usesVueTemplateSyntax = framework === 'vue' || framework === 'vine'
+  return usesVueTemplateSyntax && isSeparatedByHyphen ? hyphenate(componentName) : componentName
 }
 
 export function renderSvelteEventPropName(event: { name: string, kind?: 'dom' | 'component' }) {
@@ -753,7 +760,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             itemDynamicLib = content.dynamicLib || dynamicLib
             itemImportWay = content.importWay || importWay
 
-            const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
+            const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen)
             snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
@@ -807,9 +814,10 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           if (typeof content === 'object') {
             itemDynamicLib = content.dynamicLib || dynamicLib
             itemImportWay = content.importWay || importWay
-            snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
-            const tag = content.name.slice(prefix.length)
-            _content = `${tag}  ${content.tag || detail}`
+            const importName = content.name.slice(prefix.length)
+            const renderedName = framework === 'react' ? importName : content.name
+            snippet = await getTemplateStr(componentByName, { ...content, name: renderedName }, 0, framework, isSeperatorByHyphen, parent)
+            _content = `${renderComponentTag(renderedName, framework, isSeperatorByHyphen)}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
           else {
@@ -862,7 +870,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         itemDynamicLib = content.dynamicLib || dynamicLib
         itemImportWay = content.importWay || importWay
         snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
-        const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
+        const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen)
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
       }
@@ -1252,7 +1260,7 @@ export function generateScriptNames(name: string): [string[], string] {
 
 // 防止递归出现重复tag
 async function getTemplateStr(componentByName: Map<string, Component>, content: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
-  const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
+  const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen)
   if (tags.has(tag))
     return `$${++index}`
 
@@ -1269,7 +1277,7 @@ async function getSuggestionsTemplateStr(content: any, componentByName: Map<stri
     if (!suggestionName)
       return `$${++index}`
     const suggestion = componentByName.get(normalizeSuggestionLookupName(suggestionName))
-    const suggestionTag = isSeperatorByHyphen ? hyphenate(suggestionName) : suggestionName
+    const suggestionTag = renderComponentTag(suggestionName, framework, isSeperatorByHyphen)
     const [childRequiredProps, _index] = await getRequireProp(suggestion, index, framework, parent)
 
     if (suggestion) {

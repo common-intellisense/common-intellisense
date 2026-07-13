@@ -451,13 +451,15 @@ export async function activate(context: vscode.ExtensionContext) {
     const capturedIdentity = params.document
     if (capturedIdentity.packagePath
       || typeof capturedIdentity.contextGeneration === 'number'
-      || typeof capturedIdentity.contextRevision === 'number') {
+      || typeof capturedIdentity.contextRevision === 'number'
+      || capturedIdentity.sourceId) {
       const currentContext = getContextForDocumentPath(getDocumentPath(document))
         || await ensureDocumentContext(document)
       if (!currentContext
         || (capturedIdentity.packagePath && currentContext.pkgPath !== capturedIdentity.packagePath)
         || (typeof capturedIdentity.contextGeneration === 'number' && currentContext.generation !== capturedIdentity.contextGeneration)
-        || (typeof capturedIdentity.contextRevision === 'number' && currentContext.revision !== capturedIdentity.contextRevision)) {
+        || (capturedIdentity.sourceId && currentContext.sourceSignatures.get(capturedIdentity.sourceId) !== capturedIdentity.sourceSignature)
+        || (!capturedIdentity.sourceId && typeof capturedIdentity.contextRevision === 'number' && currentContext.revision !== capturedIdentity.contextRevision)) {
         return
       }
     }

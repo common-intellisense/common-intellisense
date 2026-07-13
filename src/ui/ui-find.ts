@@ -7,7 +7,7 @@ import { createLog, getConfiguration, getCurrentFileUrl, getRootPath, watchFile 
 import { findUp } from 'find-up'
 import semver from 'semver'
 import { UINames as configUINames } from '../constants'
-import { fetchFromCommonIntellisense, fetchLocalSourceResults, fetchRemoteNpmSourceResults, fetchRemoteUrlSourceResults, getLocalCache, writeLocalCache } from '../services/fetch'
+import { fetchFromCommonIntellisense, fetchLocalSourceResults, fetchRemoteNpmSourceResults, fetchRemoteUrlSourceResults, getLocalCache, resolveLocalAdapterFile, writeLocalCache } from '../services/fetch'
 import type { ComponentSourceScope } from '../services/component-resolver'
 import { findComponentSourceScope, getPackageSource } from '../services/component-resolver'
 import { clearPackageVersionCache, resolveInstalledPackageVersion } from '../services/package-version'
@@ -22,6 +22,7 @@ interface ContextModel {
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
   sourceScopes: Map<string, ComponentSourceScope>
+  sourceSignatures: Map<string, string>
 }
 
 interface CustomSourceSnapshot {
@@ -54,6 +55,7 @@ export interface PackageContext {
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
   sourceScopes: Map<string, ComponentSourceScope>
+  sourceSignatures: Map<string, string>
   officialModel: ContextModel
   customSourceSnapshots: CustomSourceSnapshots
 }
@@ -120,6 +122,7 @@ function getSourceRefreshKey(kind: 'custom' | 'official', context: PackageContex
 
 let registryEpoch = 0
 let volatileSnapshotSequence = 0
+let officialSourceSignatureSequence = 0
 let activeContext: PackageContext | undefined
 const contextInvalidationListeners = new Set<(packagePaths?: string[]) => void>()
 const contextUpdateListeners = new Set<(context: PackageContext) => void>()
@@ -156,6 +159,7 @@ function cloneModel(model: ContextModel): ContextModel {
   return {
     cacheMap: new Map(model.cacheMap),
     sourceScopes: new Map(model.sourceScopes),
+    sourceSignatures: new Map(model.sourceSignatures),
     optionsComponents: {
       prefix: [...model.optionsComponents.prefix],
       data: [...model.optionsComponents.data],
@@ -466,6 +470,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   const formatToPkg = new Map<string, { pkgName: string, version: string, installedVersion?: string, adapterMajor: string }>()
   const selectionToAdapter = new Map<string, string>()
   const sourceScopes = new Map<string, ComponentSourceScope>()
+  const sourceSignatures = new Map<string, string>()
   const adapterSources = new Map<string, string[]>()
 
   for (const [declaredName, version] of uis) {
@@ -518,6 +523,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   }))
 
   let officialLoadFailed = uiNames.length > 0 && loadedLibraries.some(item => item.failed)
+  const officialBuildSignature = `official-build:${++officialSourceSignatureSequence}`
 
   for (const { name, pkgInfo, exports } of loadedLibraries) {
     if (!exports)
@@ -528,7 +534,10 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
       const components = exports[componentsKey]?.()
       if (components) {
         localCache.set(componentsKey, components)
-        mergeComponents(localOptions, components, userPrefix, originNames, name, `official:${name}:${componentsKey}`)
+        const sourceId = `official:${name}`
+        const sourceSignature = `${officialBuildSignature}:${name}@${pkgInfo?.installedVersion || pkgInfo?.adapterMajor || 'unknown'}`
+        sourceSignatures.set(sourceId, sourceSignature)
+        mergeComponents(localOptions, components, userPrefix, originNames, name, `official:${name}:${componentsKey}`, sourceId, sourceSignature)
       }
     }
     catch (error) {
@@ -558,7 +567,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   void writeLocalCache().catch(error => logger.error(`cache write failed: ${String(error)}`))
 
   const checkedAt = Date.now()
-  const officialModel: ContextModel = { optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache, sourceScopes }
+  const officialModel: ContextModel = { optionsComponents: localOptions, uiCompletions: localCompletions, cacheMap: localCache, sourceScopes, sourceSignatures }
   return {
     cwd,
     pkgPath,
@@ -582,9 +591,10 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   }
 }
 
-function getConfiguredLocalSourcePaths(workspaceRoot: string) {
+async function getConfiguredLocalSourcePaths(workspaceRoot: string, allowMissing = false) {
   const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
-  return uris.map(uri => path.resolve(workspaceRoot, uri))
+  const resolved = await Promise.all(uris.map(uri => resolveLocalAdapterFile(workspaceRoot, uri, { allowMissing })))
+  return resolved.filter((sourcePath): sourcePath is string => !!sourcePath)
 }
 
 export async function resetCustomSourcesForApprovalChange() {
@@ -614,13 +624,14 @@ export async function resetCustomSourcesForApprovalChange() {
 
 export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath: string) {
   const resolvedSource = path.resolve(sourcePath)
+  const safePaths = await getConfiguredLocalSourcePaths(workspaceRoot, true)
+  if (!safePaths.includes(resolvedSource))
+    return
   const sourceId = `local:${resolvedSource}`
   const exists = await fsp.stat(resolvedSource).then(stat => stat.isFile(), () => false)
   for (const context of [...contexts.values()]) {
-    if (path.resolve(context.workspaceRoot) !== path.resolve(workspaceRoot)
-      || !getConfiguredLocalSourcePaths(context.workspaceRoot).includes(resolvedSource)) {
+    if (path.resolve(context.workspaceRoot) !== path.resolve(workspaceRoot))
       continue
-    }
     context.customSourcesCheckedAt = 0
     context.customNextRetryAt = 0
     if (!exists && context.customSourceSnapshots.has(sourceId)) {
@@ -635,8 +646,18 @@ export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath
   }
 }
 
-function ensureLocalSourceWatchers(context: PackageContext) {
-  for (const sourcePath of getConfiguredLocalSourcePaths(context.workspaceRoot)) {
+async function ensureLocalSourceWatchers(context: PackageContext) {
+  const configuredPaths = await getConfiguredLocalSourcePaths(context.workspaceRoot, true)
+  const rootPrefix = `${path.resolve(context.workspaceRoot)}\0`
+  for (const [key, entry] of localSourceWatchers) {
+    if (key.startsWith(rootPrefix) && !configuredPaths.some(sourcePath => key === `${rootPrefix}${sourcePath}`)) {
+      entry.stop()
+      if (entry.timer)
+        clearTimeout(entry.timer)
+      localSourceWatchers.delete(key)
+    }
+  }
+  for (const sourcePath of configuredPaths) {
     const key = `${path.resolve(context.workspaceRoot)}\0${sourcePath}`
     if (localSourceWatchers.has(key))
       continue
@@ -655,7 +676,7 @@ function ensureLocalSourceWatchers(context: PackageContext) {
 }
 
 function startTrackedContextEnhancements(context: PackageContext, expectedEpoch: number) {
-  ensureLocalSourceWatchers(context)
+  void ensureLocalSourceWatchers(context).catch(error => logger.error(`local source watcher setup failed: ${String(error)}`))
   const refreshKey = getSourceRefreshKey('custom', context)
   if (sourceRefreshes.has(refreshKey))
     return
@@ -666,7 +687,7 @@ function startTrackedContextEnhancements(context: PackageContext, expectedEpoch:
 }
 
 async function prepareCustomSnapshot(context: PackageContext, sourceId: string, exports: Record<string, any>, signature: string): Promise<CustomSourceSnapshot> {
-  const model: ContextModel = { optionsComponents: emptyOptions(), uiCompletions: null, cacheMap: new Map(), sourceScopes: new Map() }
+  const model: ContextModel = { optionsComponents: emptyOptions(), uiCompletions: null, cacheMap: new Map(), sourceScopes: new Map(), sourceSignatures: new Map([[sourceId, signature]]) }
   for (const key of Object.keys(exports)) {
     const scopedKey = `custom:${sourceId}:${key}`
     if (key.endsWith('Components')) {
@@ -674,7 +695,7 @@ async function prepareCustomSnapshot(context: PackageContext, sourceId: string, 
       if (components) {
         model.cacheMap.set(scopedKey, components)
         const directiveKey = `custom:${sourceId}:${key.slice(0, -'Components'.length)}`
-        mergeComponents(model.optionsComponents, components, context.userPrefix, [], directiveKey, scopedKey)
+        mergeComponents(model.optionsComponents, components, context.userPrefix, [], directiveKey, scopedKey, sourceId, signature)
       }
       continue
     }
@@ -825,6 +846,8 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
       composed.cacheMap.set(key, value)
     for (const [key, value] of model.sourceScopes)
       composed.sourceScopes.set(key, value)
+    for (const [key, value] of model.sourceSignatures)
+      composed.sourceSignatures.set(key, value)
     if (model.uiCompletions) {
       composed.uiCompletions ||= {} as PropsConfig
       Object.assign(composed.uiCompletions, model.uiCompletions)
@@ -868,7 +891,7 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
   return enhanced
 }
 
-export function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string, sourceId = fallbackName) {
+export function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string, sourceId = fallbackName, completionSourceId?: string, sourceSignature?: string) {
   for (const component of components) {
     let { prefix, data, directives, lib } = component
     if (userPrefix?.[lib])
@@ -882,7 +905,8 @@ export function mergeComponents(target: OptionsComponents, components: any[], us
       target.libs.push(lib)
     if (!target.prefix.includes(prefix))
       target.prefix.push(prefix)
-    target.data.push(data)
+    const providers = Array.isArray(data) ? data : [data]
+    target.data.push(...providers.map((provider: any) => (parent: any, context: any) => provider(parent, completionSourceId ? { ...context, sourceId: completionSourceId, sourceSignature } : context)))
     target.directivesMap[fallbackName] = directives
   }
 }

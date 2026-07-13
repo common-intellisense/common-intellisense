@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
-import { resolveLocalAdapterPath } from '../../src/services/fetch'
+import { resolveLocalAdapterFile, resolveLocalAdapterPath } from '../../src/services/fetch'
 
 describe('local adapter workspace boundary', () => {
   it('resolves a workspace-root manifest from a nested package context', () => {
@@ -10,5 +12,21 @@ describe('local adapter workspace boundary', () => {
 
   it('rejects paths outside the workspace root', () => {
     expect(resolveLocalAdapterPath(path.resolve('/repo'), '../outside.json')).toBeUndefined()
+  })
+
+  it('shares file, missing-file, directory, and symlink boundaries with watchers', async () => {
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'ci-local-path-'))
+    const root = path.join(base, 'workspace')
+    const outside = path.join(base, 'outside.json')
+    await fsp.mkdir(root)
+    await fsp.writeFile(outside, '{}')
+    await fsp.writeFile(path.join(root, 'inside.json'), '{}')
+    await fsp.symlink(outside, path.join(root, 'escape.json'))
+    expect(await resolveLocalAdapterFile(root, './inside.json')).toBe(path.join(root, 'inside.json'))
+    expect(await resolveLocalAdapterFile(root, './missing.json', { allowMissing: true })).toBe(path.join(root, 'missing.json'))
+    expect(await resolveLocalAdapterFile(root, '.')).toBeUndefined()
+    expect(await resolveLocalAdapterFile(root, '../outside.json')).toBeUndefined()
+    expect(await resolveLocalAdapterFile(root, './escape.json')).toBeUndefined()
+    await fsp.rm(base, { recursive: true, force: true })
   })
 })
