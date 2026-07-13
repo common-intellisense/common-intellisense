@@ -36,8 +36,27 @@ export interface CompletionRenderContext {
   parent?: any
   vueBlock?: 'script' | 'scriptSetup'
   blockLang?: string
+  packagePath?: string
+  contextGeneration?: number
+  contextRevision?: number
+  sourceId?: string
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
+
+function getCompletionDocumentIdentity(context: CompletionRenderContext | undefined) {
+  if (!context || typeof context.version !== 'number')
+    return undefined
+  return {
+    uri: context.uri,
+    version: context.version,
+    vueBlock: context.vueBlock,
+    blockLang: context.blockLang,
+    packagePath: context.packagePath,
+    contextGeneration: context.contextGeneration,
+    contextRevision: context.contextRevision,
+    sourceId: context.sourceId,
+  }
+}
 
 function getSyntaxFramework(context: CompletionRenderContext | undefined, fallback: CompletionFramework): CompletionFramework {
   if (context?.syntax === 'jsx')
@@ -769,7 +788,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib: itemDynamicLib || '',
             importWay: itemImportWay || 'specifier',
             registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
-            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version, vueBlock: context.vueBlock, blockLang: context.blockLang } : undefined,
+            document: getCompletionDocumentIdentity(context),
           }
           return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
@@ -820,7 +839,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             dynamicLib: itemDynamicLib,
             importWay: itemImportWay,
             registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
-            document: context && typeof context.version === 'number' ? { uri: context.uri, version: context.version, vueBlock: context.vueBlock, blockLang: context.blockLang } : undefined,
+            document: getCompletionDocumentIdentity(context),
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]
           return createCompletionItem({ content: _content, detail: description, snippet, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -876,7 +895,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         dynamicLib: itemDynamicLib,
         importWay: itemImportWay,
         registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
-        document: context ? { uri: context.uri, version: context.version, vueBlock: context.vueBlock, blockLang: context.blockLang } : undefined,
+        document: getCompletionDocumentIdentity(context),
       }
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
       return completionItem

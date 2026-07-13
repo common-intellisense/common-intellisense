@@ -13,7 +13,7 @@ import { isNativeTag } from './services/native-tags'
 import { invalidateRootPackageCacheForManifest } from './services/ui-cache'
 import { prettierType } from './prettier-type'
 import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
-import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resolvePackagePathForDocument } from './ui/ui-find'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, invalidateContexts, invalidateDocumentPackageMappingsForManifest, invalidatePackageContext, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resetCustomSourcesForApprovalChange, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getUiImportedName } from './ui/ui-utils'
 import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn, resolveLocalWrappedComponent } from './parser'
 
@@ -420,16 +420,22 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     const rebuildContexts = ['ui', 'prefix', 'alias', 'translate'].some(affects)
-    const rebuildSources = ['remoteUris', 'remoteNpmUris', 'localUris', 'trustedHosts', 'allowLegacyAdapters'].some(affects)
+    const approvalChanged = affects('legacyAdapterAllowlist') || affects('allowLegacyAdapters')
+    const rebuildSources = ['remoteUris', 'remoteNpmUris', 'localUris', 'trustedHosts', 'legacyAdapterAllowlist', 'allowLegacyAdapters'].some(affects)
     if (!rebuildContexts && !rebuildSources)
       return
 
     if (rebuildSources)
       clearFetchCaches()
-    invalidateContexts()
+    if (approvalChanged) {
+      void resetCustomSourcesForApprovalChange().then(() => rebuildVisibleDocumentContexts()).catch(error => logger.error(`Failed to apply legacy adapter approvals: ${String(error)}`))
+    }
+    else {
+      invalidateContexts()
+      void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
+    }
     clearDocumentAnalysis()
     documentAnalysisCache.clear()
-    void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.import', async (params, activeLoc) => {
@@ -442,6 +448,19 @@ export async function activate(context: vscode.ExtensionContext) {
     // freshness check; only reject a document older than the captured request.
     if (document.version < params.document.version)
       return
+    const capturedIdentity = params.document
+    if (capturedIdentity.packagePath
+      || typeof capturedIdentity.contextGeneration === 'number'
+      || typeof capturedIdentity.contextRevision === 'number') {
+      const currentContext = getContextForDocumentPath(getDocumentPath(document))
+        || await ensureDocumentContext(document)
+      if (!currentContext
+        || (capturedIdentity.packagePath && currentContext.pkgPath !== capturedIdentity.packagePath)
+        || (typeof capturedIdentity.contextGeneration === 'number' && currentContext.generation !== capturedIdentity.contextGeneration)
+        || (typeof capturedIdentity.contextRevision === 'number' && currentContext.revision !== capturedIdentity.contextRevision)) {
+        return
+      }
+    }
     const { data, lib, prefix = '', dynamicLib, importWay = 'specifier' } = params
     if (typeof data?.name !== 'string' || !data.name.trim())
       return
@@ -605,7 +624,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
     const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
-    const renderContext = { ...getCompletionRenderContext(document, result), parent: result.parent }
+    const renderContext = {
+      ...getCompletionRenderContext(document, result),
+      parent: result.parent,
+      packagePath: packageContext.pkgPath,
+      contextGeneration: packageContext.generation,
+      contextRevision: packageContext.revision,
+    }
     const isTemplateSyntax = renderContext.syntax !== 'jsx'
     const dependencyScopeOffset = getDependencyScopeOffset(document.languageId, result)
     const deps = isVue ? completionAnalysis.getImportDeps(dependencyScopeOffset) : {}

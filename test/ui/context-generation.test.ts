@@ -278,6 +278,44 @@ describe('package context generations', () => {
     nowSpy.mockRestore()
   })
 
+  it('keeps a slow failing local snapshot while a fast HTTP refresh publishes', async () => {
+    let now = 3_400_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    let rejectLocal!: (error: Error) => void
+    localFetchMock
+      .mockResolvedValueOnce({ LocalProps: () => ({ LocalButton: { source: 'local-old' } }) })
+      .mockResolvedValueOnce({ LocalProps: () => new Promise((_resolve, reject) => { rejectLocal = reject }) })
+    remoteFetchMock
+      .mockResolvedValueOnce({ RemoteProps: () => ({ RemoteV1: { source: 'remote-old' } }) })
+      .mockResolvedValueOnce({ RemoteProps: () => ({ RemoteV2: { source: 'remote-new' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => {
+      const context = mod.getContextForDocumentPath(documentPath)
+      expect(context?.uiCompletions?.LocalButton).toBeDefined()
+      expect(context?.uiCompletions?.RemoteV1).toBeDefined()
+    })
+
+    now += 6 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => {
+      const context = mod.getContextForDocumentPath(documentPath)
+      expect(context?.uiCompletions?.RemoteV2).toBeDefined()
+      expect(context?.uiCompletions?.LocalButton).toMatchObject({ source: 'local-old' })
+    })
+
+    rejectLocal(new Error('slow local reduction failed'))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customFailureCount).toBe(1))
+    const finalContext = mod.getContextForDocumentPath(documentPath)
+    expect(finalContext?.uiCompletions?.LocalButton).toMatchObject({ source: 'local-old' })
+    expect(finalContext?.uiCompletions?.RemoteV2).toMatchObject({ source: 'remote-new' })
+    nowSpy.mockRestore()
+  })
+
   it('replays the last successful custom snapshot onto a refreshed official baseline', async () => {
     let now = 3_500_000
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)

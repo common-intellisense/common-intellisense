@@ -378,6 +378,34 @@ describe('activation registration', () => {
     expect(mocks.applyEdit).toHaveBeenCalledTimes(1)
   })
 
+  it('rejects an import command from a stale package context revision', async () => {
+    mocks.openTextDocument.mockResolvedValue({
+      languageId: 'typescriptreact',
+      version: 8,
+      uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
+      getText: () => 'export default () => <Button />',
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    })
+    mocks.getDocumentContext.mockReturnValue({ pkgPath: '/workspace/package.json', generation: 2, revision: 4 })
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    await mocks.commandHandlers.get('common-intellisense.import')?.({
+      data: { name: 'Button' },
+      lib: 'ui',
+      importWay: 'specifier',
+      document: {
+        uri: 'file:///workspace/A.tsx',
+        version: 3,
+        packagePath: '/workspace/package.json',
+        contextGeneration: 2,
+        contextRevision: 3,
+      },
+    })
+
+    expect(mocks.applyEdit).not.toHaveBeenCalled()
+  })
+
   it('does not import when the selected component tag is absent', async () => {
     mocks.openTextDocument.mockResolvedValue({
       languageId: 'typescriptreact',

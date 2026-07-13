@@ -1255,204 +1255,115 @@ export function isSamePrefix(label: string, key: string) {
 
 const IMPORT_VUE_REG = /import\s+(\S+)\s+from\s+['"]([^"']+.vue)['"]/g
 
-export function getImportDeps(text: string, context: { activeOffset?: number } = {}) {
+function getBabelPluginsForVueBlock(lang?: string) {
+  switch (lang?.toLowerCase()) {
+    case 'tsx':
+      return ['typescript', 'jsx'] as any[]
+    case 'jsx':
+      return ['jsx'] as any[]
+    case 'js':
+    case 'javascript':
+      return [] as any[]
+    default:
+      return ['typescript'] as any[]
+  }
+}
+
+function findDynamicImportSource(node: any): string | null {
+  if (!node)
+    return null
+  if (node.type === 'CallExpression' && node.callee?.type === 'Import')
+    return node.arguments?.[0]?.value || null
+  if (node.type === 'ImportExpression' || node.type === 'Import')
+    return node.source?.value || node.arguments?.[0]?.value || null
+  if (node.type === 'MemberExpression')
+    return findDynamicImportSource(node.object)
+  if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression')
+    return findDynamicImportSource(node.body)
+  if (node.type === 'BlockStatement') {
+    const returned = node.body.find((entry: any) => entry.type === 'ReturnStatement')
+    return findDynamicImportSource(returned?.argument)
+  }
+  return null
+}
+
+function parseImportDepsBlock(content: string, lang?: string) {
   const deps: Record<string, string> = {}
+  if (!content.trim())
+    return deps
   try {
-    const { descriptor: { script, scriptSetup } } = getVueSfcParseResult(text)
-    let scriptContent = ''
-    const blocks = [script, scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
-    const active = typeof context.activeOffset === 'number'
-      ? blocks.find(block => context.activeOffset! >= block.loc.start.offset && context.activeOffset! <= block.loc.end.offset)
-      : undefined
-    if (active) {
-      scriptContent = active.content
-    }
-    else {
-      if (script?.content)
-        scriptContent += script.content
-      if (scriptSetup?.content)
-        scriptContent += `\n${scriptSetup.content}`
-    }
-
-    const findImportSource = (node: any): string | null => {
-      if (!node)
-        return null
-      if (node.type === 'CallExpression' && node.callee && node.callee.type === 'Import') {
-        return node.arguments?.[0]?.value || null
-      }
-      if (node.type === 'ImportExpression' || node.type === 'Import') {
-        return node.source?.value || (node.arguments && node.arguments[0]?.value) || null
-      }
-      if (node.type === 'MemberExpression')
-        return findImportSource(node.object)
-      if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') {
-        return findImportSource(node.body)
-      }
-      if (node.type === 'BlockStatement') {
-        const ret = node.body.find((n: any) => n.type === 'ReturnStatement')
-        return findImportSource(ret && ret.argument)
-      }
-      return null
-    }
-
-    if (!scriptContent) {
-      // If there's no <script> or <script setup> (e.g., plain .tsx/.jsx files),
-      // attempt to parse the raw text to extract import declarations.
-      const astRaw = babelParse(text, {
-        sourceType: 'module',
-        plugins: ['typescript', 'jsx'],
-      })
-
-      traverse(astRaw as any, {
-        ImportDeclaration(p: any) {
-          const source = p.node.source.value
-          if (!/^[./@]/.test(source))
-            return
-          for (const spec of p.node.specifiers) {
-            if (spec.type === 'ImportDefaultSpecifier')
-              deps[spec.local.name] = source
-            else if (spec.type === 'ImportSpecifier')
-              deps[spec.local.name] = source
-            else if (spec.type === 'ImportNamespaceSpecifier')
-              deps[spec.local.name] = source
-          }
-        },
-        VariableDeclarator(p: any) {
-          try {
-            const id = p.node.id
-            const init = p.node.init
-            if (!id || !init)
-              return
-
-            if (init.type === 'CallExpression' && init.callee && init.callee.type === 'Import') {
-              const source = init.arguments?.[0]?.value
-              if (source && id.name)
-                deps[id.name] = source
-              return
-            }
-
-            if (init.type === 'ImportExpression' || init.type === 'Import') {
-              const source = init.source?.value || (init.arguments && init.arguments[0]?.value)
-              if (source && id.name)
-                deps[id.name] = source
-              return
-            }
-
-            if (init.type === 'CallExpression' && init.callee && init.callee.name === 'defineAsyncComponent') {
-              const arg = init.arguments && init.arguments[0]
-              if (arg) {
-                const source = findImportSource(arg)
-                if (source && id.name)
-                  deps[id.name] = source
-              }
-            }
-          }
-          catch {
-            // ignore
-          }
-        },
-        ExportDefaultDeclaration(p: any) {
-          const decl = p.node.declaration
-          if (!decl || decl.type !== 'ObjectExpression')
-            return
-          for (const prop of decl.properties) {
-            if (prop.type !== 'ObjectProperty')
-              continue
-            const keyName = prop.key && (prop.key.name || prop.key.value)
-            if (keyName !== 'components')
-              continue
-            const val = prop.value
-            if (val.type === 'ObjectExpression') {
-              for (const entry of val.properties) {
-                if (entry.type !== 'ObjectProperty')
-                  continue
-                const localName = entry.key.name || entry.key.value
-                if (entry.value.type === 'Identifier') {
-                  const ref = entry.value.name
-                  if (deps[ref])
-                    deps[localName] = deps[ref]
-                  else
-                    deps[localName] = ref
-                }
-                else if (entry.value.type === 'ObjectExpression') {
-                  deps[localName] = localName
-                }
-                else {
-                  deps[localName] = localName
-                }
-              }
-            }
-          }
-        },
-      })
-
-      return deps
-    }
-
-    const ast = babelParse(scriptContent, {
+    const ast = babelParse(content, {
       sourceType: 'module',
-      plugins: ['typescript', 'jsx'],
+      plugins: getBabelPluginsForVueBlock(lang),
     })
-
     traverse(ast as any, {
       ImportDeclaration(p: any) {
         const source = p.node.source.value
         if (!/^[./@]/.test(source))
           return
-        for (const spec of p.node.specifiers) {
-          if (spec.type === 'ImportDefaultSpecifier')
-            deps[spec.local.name] = source
-          else if (spec.type === 'ImportSpecifier')
-            deps[spec.local.name] = source
-          else if (spec.type === 'ImportNamespaceSpecifier')
-            deps[spec.local.name] = source
-        }
+        for (const specifier of p.node.specifiers || [])
+          deps[specifier.local.name] = source
+      },
+      VariableDeclarator(p: any) {
+        const id = p.node.id
+        const init = p.node.init
+        if (!id?.name || !init)
+          return
+        const source = init.type === 'CallExpression' && init.callee?.name === 'defineAsyncComponent'
+          ? findDynamicImportSource(init.arguments?.[0])
+          : findDynamicImportSource(init)
+        if (source)
+          deps[id.name] = source
       },
       ExportDefaultDeclaration(p: any) {
-        const decl = p.node.declaration
-        if (!decl || decl.type !== 'ObjectExpression')
+        const declaration = p.node.declaration
+        if (declaration?.type !== 'ObjectExpression')
           return
-        for (const prop of decl.properties) {
-          if (prop.type !== 'ObjectProperty')
+        for (const property of declaration.properties || []) {
+          if (property.type !== 'ObjectProperty' || (property.key?.name || property.key?.value) !== 'components' || property.value?.type !== 'ObjectExpression')
             continue
-          const keyName = prop.key && (prop.key.name || prop.key.value)
-          if (keyName !== 'components')
-            continue
-          const val = prop.value
-          if (val.type === 'ObjectExpression') {
-            for (const entry of val.properties) {
-              if (entry.type !== 'ObjectProperty')
-                continue
-              const localName = entry.key.name || entry.key.value
-              if (entry.value.type === 'Identifier') {
-                const ref = entry.value.name
-                if (deps[ref])
-                  deps[localName] = deps[ref]
-                else
-                  deps[localName] = ref
-              }
-              else if (entry.value.type === 'ObjectExpression') {
-                deps[localName] = localName
-              }
-              else {
-                deps[localName] = localName
-              }
-            }
+          for (const entry of property.value.properties || []) {
+            if (entry.type !== 'ObjectProperty')
+              continue
+            const localName = entry.key?.name || entry.key?.value
+            if (!localName)
+              continue
+            if (entry.value?.type === 'Identifier')
+              deps[localName] = deps[entry.value.name] || entry.value.name
+            else
+              deps[localName] = localName
           }
         }
       },
     })
   }
   catch {
-    const clean = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
-    for (const match of clean.matchAll(IMPORT_VUE_REG)) {
-      if (!match)
-        continue
+    // Recover simple local default imports per block without combining scopes.
+    const clean = content.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')
+    for (const match of clean.matchAll(IMPORT_VUE_REG))
       deps[match[1]] = match[2]
-    }
+  }
+  return deps
+}
+
+export function getImportDeps(text: string, context: { activeOffset?: number } = {}) {
+  const { descriptor: { script, scriptSetup } } = getVueSfcParseResult(text)
+  const blocks = [script, scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
+  if (!blocks.length)
+    return parseImportDepsBlock(text, 'tsx')
+
+  if (typeof context.activeOffset === 'number') {
+    const active = blocks.find(block => context.activeOffset! >= block.loc.start.offset && context.activeOffset! <= block.loc.end.offset)
+    return active ? parseImportDepsBlock(active.content, active.lang) : {}
   }
 
-  return deps
+  // Template scope sees both blocks. Apply normal script first so script-setup
+  // bindings deterministically win when the same local name exists in both.
+  return Object.assign(
+    {},
+    script ? parseImportDepsBlock(script.content, script.lang) : {},
+    scriptSetup ? parseImportDepsBlock(scriptSetup.content, scriptSetup.lang) : {},
+  )
 }
 
 export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRoot?: string) {

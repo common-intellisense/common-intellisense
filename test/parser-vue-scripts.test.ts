@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clearDocumentAnalysis, detectSlots, getDocumentSlotAnalysis, parser } from '../src/parser'
+import { clearDocumentAnalysis, detectSlots, getDocumentSlotAnalysis, getImportDeps, parser } from '../src/parser'
 
 function positionIn(code: string, needle: string) {
   const offset = code.indexOf(needle)
@@ -65,6 +65,24 @@ const button = <ElButton size="small" />
     expect(groups.some((group: any) => group.offset === 0 && group.children.some((entry: any) => entry.child.tag === 'UiTable'))).toBe(true)
     expect(groups.every((group: any) => group.offset === 0)).toBe(true)
     expect(groups.some((group: any) => group.children.some((entry: any) => entry.child.openingElement))).toBe(false)
+  })
+
+  it('parses local imports per block and lets setup bindings win in template scope', () => {
+    const code = `<script lang="ts">
+const state = createModuleState()
+import NormalWrapper from './NormalWrapper.vue'
+</script>
+<script setup lang="ts">
+const state = ref(0)
+import NormalWrapper from './SetupWrapper.vue'
+const AsyncButton = defineAsyncComponent(() => import('./AsyncButton.vue'))
+</script>`
+    const normalOffset = code.indexOf('const state = createModuleState')
+    expect(getImportDeps(code, { activeOffset: normalOffset })).toEqual({ NormalWrapper: './NormalWrapper.vue' })
+    expect(getImportDeps(code)).toMatchObject({
+      NormalWrapper: './SetupWrapper.vue',
+      AsyncButton: './AsyncButton.vue',
+    })
   })
 
   it('uses either active block and aggregates refs from both blocks', () => {

@@ -587,6 +587,31 @@ function getConfiguredLocalSourcePaths(workspaceRoot: string) {
   return uris.map(uri => path.resolve(workspaceRoot, uri))
 }
 
+export async function resetCustomSourcesForApprovalChange() {
+  const expectedEpoch = registryEpoch
+  for (const [contextKey, current] of [...contexts]) {
+    if (registryEpoch !== expectedEpoch || contexts.get(contextKey) !== current)
+      continue
+    const resetGeneration = nextGeneration(contextKey)
+    const reset: PackageContext = {
+      ...current,
+      ...cloneModel(current.officialModel),
+      generation: resetGeneration,
+      revision: current.revision + 1,
+      customSourcesCheckedAt: 0,
+      customLastAttemptAt: 0,
+      customFailureCount: 0,
+      customNextRetryAt: 0,
+      customSourceSnapshots: new Map(),
+    }
+    contexts.set(contextKey, reset)
+    if (activeContext?.pkgPath === current.pkgPath)
+      applyContext(reset)
+    notifyContextUpdated(reset)
+    startTrackedContextEnhancements(reset, expectedEpoch)
+  }
+}
+
 export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath: string) {
   const resolvedSource = path.resolve(sourcePath)
   const sourceId = `local:${resolvedSource}`
@@ -678,55 +703,74 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
     { prefix: 'http:', load: fetchRemoteUrlSourceResults },
     { prefix: 'npm:', load: fetchRemoteNpmSourceResults },
   ]
-  const sourceResults: CustomSourceSnapshots = new Map(context.customSourceSnapshots)
+  // Loader preparation is concurrent, but aggregate snapshot replacement is
+  // serialized. Never remove a prefix from the shared aggregate before an
+  // awaited reducer has completed: another loader could otherwise publish that
+  // transient, incomplete Map and permanently drop last-known-good metadata.
+  let committedSnapshots: CustomSourceSnapshots = new Map(context.customSourceSnapshots)
   let publishQueue: Promise<void> = Promise.resolve()
   let publishedAny = false
   let loaderFailed = false
   let publicationFailed = false
 
+  const prefixEntries = (snapshots: CustomSourceSnapshots, prefix: string) =>
+    [...snapshots].filter(([id]) => id.startsWith(prefix))
+
+  const samePrefixSnapshots = (left: CustomSourceSnapshots, right: CustomSourceSnapshots, prefix: string) => {
+    const leftEntries = prefixEntries(left, prefix)
+    const rightEntries = prefixEntries(right, prefix)
+    return leftEntries.length === rightEntries.length
+      && leftEntries.every(([id, snapshot]) => right.get(id) === snapshot)
+  }
+
   const loaderTasks = loaders.map(({ prefix, load }) => Promise.resolve()
     .then(load)
     .then(async (results) => {
-      const previous = new Map(sourceResults)
-      for (const id of sourceResults.keys()) {
-        if (id.startsWith(prefix))
-          sourceResults.delete(id)
-      }
+      // Prepare this source class in isolation from the other concurrent
+      // loaders. A failed source explicitly retains its baseline snapshot;
+      // sources absent from a successful result are intentionally removed.
+      const baselinePrefix = new Map(prefixEntries(context.customSourceSnapshots, prefix))
+      const preparedPrefix: CustomSourceSnapshots = new Map()
       for (const result of results) {
+        const old = baselinePrefix.get(result.id)
         if (result.status === 'success') {
-          const old = previous.get(result.id)
           const signature = result.signature || `volatile:${++volatileSnapshotSequence}`
           if (old && result.signature && old.signature === result.signature) {
-            sourceResults.set(result.id, old)
+            preparedPrefix.set(result.id, old)
           }
           else {
             try {
-              sourceResults.set(result.id, await prepareCustomSnapshot(context, result.id, result.value || {}, signature))
+              preparedPrefix.set(result.id, await prepareCustomSnapshot(context, result.id, result.value || {}, signature))
             }
             catch (error) {
               loaderFailed = true
               if (old)
-                sourceResults.set(result.id, old)
+                preparedPrefix.set(result.id, old)
               logger.error(`custom source reduction failed [${result.id}]: ${String(error)}`)
             }
           }
         }
         else {
-          if (previous.has(result.id))
-            sourceResults.set(result.id, previous.get(result.id)!)
+          if (old)
+            preparedPrefix.set(result.id, old)
           loaderFailed = true
           logger.error(`custom source failed [${result.id}]: ${String(result.error)}`)
         }
       }
-      const previousEntries = [...previous].filter(([id]) => id.startsWith(prefix))
-      const nextEntries = [...sourceResults].filter(([id]) => id.startsWith(prefix))
-      const changed = previousEntries.length !== nextEntries.length
-        || previousEntries.some(([id, value]) => sourceResults.get(id) !== value)
-      if (!changed)
-        return
+
       publishQueue = publishQueue.then(async () => {
+        if (samePrefixSnapshots(committedSnapshots, preparedPrefix, prefix))
+          return
+        const next = new Map(committedSnapshots)
+        for (const id of next.keys()) {
+          if (id.startsWith(prefix))
+            next.delete(id)
+        }
+        for (const [id, snapshot] of preparedPrefix)
+          next.set(id, snapshot)
+        committedSnapshots = next
         try {
-          const published = await publishContextEnhancement(context, expectedEpoch, sourceResults)
+          const published = await publishContextEnhancement(context, expectedEpoch, new Map(next))
           publishedAny ||= !!published
         }
         catch (error) {
