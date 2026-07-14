@@ -11,7 +11,7 @@ import { fetchFromCommonIntellisense, fetchLocalSourceResults, fetchRemoteNpmSou
 import type { ComponentSourceScope } from '../services/component-resolver'
 import { findComponentSourceScope, getPackageSource } from '../services/component-resolver'
 import { clearPackageVersionCache, resolveInstalledPackageVersion } from '../services/package-version'
-import { cacheMap, deactivateUICache as deactivateCache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, removeRootPackageSubscriber, rootPkgCache, urlCache } from '../services/ui-cache'
+import { cacheMap, deactivateUICache as deactivateCache, disposeRootPackageCache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, removeRootPackageSubscriber, rootPkgCache, urlCache } from '../services/ui-cache'
 import { clearTypeCache } from '../type-extract/cache'
 import { formatUIName, getAlias, getPrefix, getSelectedUIs } from './ui-utils'
 
@@ -201,6 +201,23 @@ function disposePackageWatcher(pkgPath: string) {
   mainWatchers.delete(pkgPath)
 }
 
+function disposeUnusedWorkspaceResources(workspaceRoot: string) {
+  const resolvedRoot = path.resolve(workspaceRoot)
+  if ([...contexts.values()].some(context => path.resolve(context.workspaceRoot) === resolvedRoot))
+    return
+  disposeRootPackageCache(workspaceRoot)
+  const prefix = `${resolvedRoot}\0`
+  for (const [key, watcher] of localSourceWatchers) {
+    if (!key.startsWith(prefix))
+      continue
+    if (watcher.timer)
+      clearTimeout(watcher.timer)
+    try { watcher.stop() }
+    catch {}
+    localSourceWatchers.delete(key)
+  }
+}
+
 function pruneInactiveContexts() {
   if (contexts.size <= maxInactivePackageContexts)
     return
@@ -210,11 +227,14 @@ function pruneInactiveContexts() {
       break
     if (referenced.has(pkgPath))
       continue
+    const workspaceRoot = contexts.get(pkgPath)?.workspaceRoot
     contexts.delete(pkgPath)
     contextLoads.delete(pkgPath)
     generations.delete(pkgPath)
     disposePackageWatcher(pkgPath)
     removeRootPackageSubscriber(pkgPath)
+    if (workspaceRoot)
+      disposeUnusedWorkspaceResources(workspaceRoot)
     for (const [documentPath, cached] of urlCache) {
       if (cached.pkg === pkgPath)
         urlCache.delete(documentPath)
@@ -229,7 +249,13 @@ export function releaseDocumentContext(documentPath: string) {
 }
 
 export function getContextRegistryStats() {
-  return { contexts: contexts.size, documents: documentPackageCache.size, watchers: mainWatchers.size }
+  return {
+    contexts: contexts.size,
+    documents: documentPackageCache.size,
+    watchers: mainWatchers.size,
+    rootWorkspaces: rootPkgCache.size,
+    localWatchers: localSourceWatchers.size,
+  }
 }
 
 export function getContextForDocumentPath(cwd: string) {
@@ -466,10 +492,10 @@ async function buildContext(cwd: string, extensionContext: vscode.ExtensionConte
   urlCache.set(cwd, discovered)
   const { pkg, uis } = discovered
   const context = await buildCompletions(uis, {
-    selectedUIs: getSelectedUIs(pkg) || [],
-    alias: getAlias(pkg) || {},
+    selectedUIs: getSelectedUIs(pkg, workspaceRoot) || [],
+    alias: getAlias(pkg, workspaceRoot) || {},
     detectSlots,
-    prefix: getPrefix(pkg) || {},
+    prefix: getPrefix(pkg, workspaceRoot) || {},
     pkgPath: pkg,
     workspaceRoot,
   }, cwd, generation)
@@ -693,8 +719,13 @@ export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath
   }
 }
 
-async function ensureLocalSourceWatchers(context: PackageContext) {
+async function ensureLocalSourceWatchers(context: PackageContext, expectedEpoch: number) {
   const configuredPaths = await getConfiguredLocalSourcePaths(context.workspaceRoot, true)
+  const contextKey = context.pkgPath || context.cwd
+  const isContextLive = () => registryEpoch === expectedEpoch
+    && contexts.get(contextKey)?.generation === context.generation
+  if (!isContextLive())
+    return
   const rootPrefix = `${path.resolve(context.workspaceRoot)}\0`
   for (const [key, entry] of localSourceWatchers) {
     if (key.startsWith(rootPrefix) && !configuredPaths.some(sourcePath => key === `${rootPrefix}${sourcePath}`)) {
@@ -705,6 +736,8 @@ async function ensureLocalSourceWatchers(context: PackageContext) {
     }
   }
   for (const sourcePath of configuredPaths) {
+    if (!isContextLive())
+      return
     const key = `${path.resolve(context.workspaceRoot)}\0${sourcePath}`
     if (localSourceWatchers.has(key))
       continue
@@ -723,7 +756,7 @@ async function ensureLocalSourceWatchers(context: PackageContext) {
 }
 
 function startTrackedContextEnhancements(context: PackageContext, expectedEpoch: number) {
-  void ensureLocalSourceWatchers(context).catch(error => logger.error(`local source watcher setup failed: ${String(error)}`))
+  void ensureLocalSourceWatchers(context, expectedEpoch).catch(error => logger.error(`local source watcher setup failed: ${String(error)}`))
   const refreshKey = getSourceRefreshKey('custom', context)
   if (sourceRefreshes.has(refreshKey))
     return
@@ -1215,13 +1248,19 @@ export function invalidatePackageContext(cwdOrPkg: string) {
       affectedPackages.add(pkgPath)
   }
 
+  const affectedWorkspaceRoots = new Set<string>()
   for (const pkgPath of affectedPackages) {
     nextGeneration(pkgPath)
+    const workspaceRoot = contexts.get(pkgPath)?.workspaceRoot
+    if (workspaceRoot)
+      affectedWorkspaceRoots.add(workspaceRoot)
     contexts.delete(pkgPath)
     contextLoads.delete(pkgPath)
     disposePackageWatcher(pkgPath)
     removeRootPackageSubscriber(pkgPath)
   }
+  for (const workspaceRoot of affectedWorkspaceRoots)
+    disposeUnusedWorkspaceResources(workspaceRoot)
   for (const [documentPath, packagePath] of documentPackageCache) {
     if (packagePath && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg)))
       documentPackageCache.delete(documentPath)

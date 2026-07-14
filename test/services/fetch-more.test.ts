@@ -387,6 +387,21 @@ describe('fetch service additional tests (mocked)', () => {
     await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
   })
 
+  it('rejects dangerous keys returned by an approved legacy adapter', async () => {
+    allowLegacyAdapters = false
+    remoteUris = ['https://fake/prototype.cjs']
+    const script = `module.exports = { UnsafeProps: () => JSON.parse('{"__proto__":{"polluted":true}}') }`
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(script)
+    const mod = await import('../../src/services/fetch')
+    const sourceId = mod.getRemoteSourceIdentity(remoteUris[0]).id
+    legacyAdapterAllowlist = [mod.getLegacyAdapterApproval(sourceId, script)]
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow(/Unsafe adapter key/)
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
+  })
+
   it('rechecks remote npm legacy approval against the exact downloaded bytes', async () => {
     allowLegacyAdapters = false
     remoteNpmUris = [{ name: '@common-intellisense/approved', resource: 'index.cjs' }]
@@ -405,6 +420,18 @@ describe('fetch service additional tests (mocked)', () => {
     vi.mocked(fetchNpm.fetchAndExtractPackage).mockResolvedValue(changed)
     mod.clearFetchCaches()
     await expect(mod.fetchFromRemoteNpmUrls()).rejects.toThrow('Executable adapter blocked')
+  })
+
+  it('blocks workspace-local adapters in Restricted Mode', async () => {
+    const mod = await import('../../src/services/fetch')
+    const originalTrust = vscode.workspace.isTrusted
+    ;(vscode.workspace as any).isTrusted = false
+    try {
+      await expect(mod.resolveLocalAdapterFile('/workspace', './manifest.json')).resolves.toBeUndefined()
+    }
+    finally {
+      ;(vscode.workspace as any).isTrusted = originalTrust
+    }
   })
 
   it('blocks executable remote adapters in Restricted Mode but accepts data manifests', async () => {

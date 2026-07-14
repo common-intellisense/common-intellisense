@@ -6,6 +6,19 @@ function acceptsString(items: any, value: string) {
 }
 
 describe('package configuration schema', () => {
+  it('accepts both legacy arrays and package-scoped object values', () => {
+    const schema = (packageJson as any).contributes.configuration.properties['common-intellisense.ui']
+    const [legacyArray, scopedObject] = schema.oneOf
+
+    expect(legacyArray).toMatchObject({ type: 'array' })
+    expect(scopedObject).toMatchObject({
+      type: 'object',
+      additionalProperties: { type: 'array' },
+    })
+    expect(legacyArray.items).toBeDefined()
+    expect(scopedObject.additionalProperties.items).toEqual(legacyArray.items)
+  })
+
   it('recommends canonical UI names while accepting alias-derived selections', () => {
     const schema = (packageJson as any).contributes.configuration.properties['common-intellisense.ui']
     const arrayItems = schema.oneOf[0].items

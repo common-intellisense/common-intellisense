@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { cacheMap, clearUICache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../../src/services/ui-cache'
+import { cacheMap, clearUICache, disposeRootPackageCache, disposeRootWatchers, getCacheMap, pkgUIConfigMap, rootPkgCache, urlCache } from '../../src/services/ui-cache'
 
 describe('ui-cache service', () => {
   it('clears disposed watcher handles so rebuilds can register them again', () => {
@@ -13,6 +13,21 @@ describe('ui-cache service', () => {
     expect(stopRoot).toHaveBeenCalledOnce()
     expect(stopWorkspace).toHaveBeenCalledOnce()
     expect(rootPkgCache.get('r')).toMatchObject({ stopRoot: undefined, stopWorkspace: undefined })
+  })
+
+  it('disposes and removes one unused workspace root cache', () => {
+    rootPkgCache.clear()
+    const stopRoot = vi.fn()
+    const stopWorkspace = vi.fn()
+    rootPkgCache.set('/workspace-a', { rootPkgPath: '/workspace-a/package.json', rootPkg: {}, isMonorepo: true, stopRoot, stopWorkspace })
+    rootPkgCache.set('/workspace-b', { rootPkgPath: '/workspace-b/package.json', rootPkg: {}, isMonorepo: true })
+
+    disposeRootPackageCache('/workspace-a')
+
+    expect(stopRoot).toHaveBeenCalledOnce()
+    expect(stopWorkspace).toHaveBeenCalledOnce()
+    expect(rootPkgCache.has('/workspace-a')).toBe(false)
+    expect(rootPkgCache.has('/workspace-b')).toBe(true)
   })
 
   it('exports cache maps and clearUICache clears them', () => {

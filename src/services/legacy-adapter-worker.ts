@@ -53,7 +53,7 @@ try {
   })
   new vm.Script(workerData.script, { filename: workerData.source }).runInContext(context, { timeout: workerData.vmTimeout })
   new vm.Script(
-    "(() => { const blocked = new Set(['__proto__', 'prototype', 'constructor', 'then']); const keys = Object.keys(module.exports).filter(key => !blocked.has(key)); if (keys.length > __maxExports) throw new Error('Legacy adapter has too many exports'); for (const key of keys) { const value = module.exports[key]; const data = typeof value === 'function' ? value(key.endsWith('Components') ? __localeZh : undefined) : value; __emit(key, JSON.stringify(data)); } })()",
+    "(() => { const blocked = new Set(['__proto__', 'prototype', 'constructor', 'then']); const keys = Object.keys(module.exports).filter(key => !blocked.has(key)); if (keys.length > __maxExports) throw new Error('Legacy adapter has too many exports'); for (const key of keys) { const value = module.exports[key]; const data = typeof value === 'function' ? value(key.endsWith('Components') ? __localeZh : undefined) : value; if (data && (typeof data === 'object' || typeof data === 'function') && typeof data.then === 'function') throw new Error('Async legacy adapter exports are not supported'); __emit(key, JSON.stringify(data)); } })()",
   ).runInContext(context, { timeout: workerData.vmTimeout })
   parentPort.postMessage({ type: 'done' })
 }

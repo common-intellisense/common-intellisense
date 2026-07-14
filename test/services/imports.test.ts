@@ -52,6 +52,51 @@ describe('import transforms', () => {
     expect(output).toContain('import DefaultThing, { Existing as Alias, Button } from "ui"')
   })
 
+  it('adds bindings to empty named imports', () => {
+    const singleLine = `import {} from 'ui'\n`
+    const multiline = `import {\n} from 'ui'\n`
+
+    expect(applyEdits(singleLine, createImportEdits(singleLine, 'ui', ['Input'], 'specifier'))).toBe(`import { Input } from 'ui'\n`)
+    expect(applyEdits(multiline, createImportEdits(multiline, 'ui', ['Input'], 'specifier'))).toBe(`import {\n  Input,\n} from 'ui'\n`)
+  })
+
+  it('preserves multiline named-import comments and formatting when adding bindings', () => {
+    const code = `import {
+  // required for compatibility
+  Button,
+} from 'ui'
+`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Input'], 'specifier'))
+
+    expect(output).toBe(`import {
+  // required for compatibility
+  Button,
+  Input,
+} from 'ui'
+`)
+  })
+
+  it('keeps trailing line comments attached to the existing binding', () => {
+    const code = `import {
+  Button // primary control
+} from 'ui'
+`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Input'], 'specifier'))
+
+    expect(output).toBe(`import {
+  Button, // primary control
+  Input,
+} from 'ui'
+`)
+  })
+
+  it('preserves mixed-import aliases and block comments when adding bindings', () => {
+    const code = `import DefaultThing, { Existing as Alias /* keep */ } from 'ui';\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'specifier'))
+
+    expect(output).toBe(`import DefaultThing, { Existing as Alias /* keep */, Button } from 'ui';\n`)
+  })
+
   it('promotes a declaration-level type-only import to runtime', () => {
     const code = `import type { Button, ButtonProps } from "ui"\n'use client'\nexport default () => <Button />\n`
     const output = applyEdits(code, createImportEdits(code, 'ui', ['Button']))

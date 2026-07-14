@@ -171,15 +171,39 @@ export function createImportEdits(code: string, source: string, dependencies: st
   if (importWay === 'specifier') {
     const editable = runtimeMatching.find(node => node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings))
     if (editable) {
-      const clause = editable.importClause!
-      const bindings = clause.namedBindings as ts.NamedImports
-      const named = [
-        ...bindings.elements.map(element => element.getText(sourceFile)),
-        ...missing,
-      ]
-      const prefix = clause.name ? `${clause.name.text}, ` : ''
-      const text = `import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
-      return finish([{ start: script.offset + editable.getStart(sourceFile), end: script.offset + editable.end, text }], [...existing, ...missing])
+      const bindings = editable.importClause!.namedBindings as ts.NamedImports
+      const bindingStart = bindings.getStart(sourceFile)
+      const bindingText = script.code.slice(bindingStart, bindings.end)
+      const multiline = bindingText.includes('\n')
+      if (multiline) {
+        const closingBrace = bindings.end - 1
+        const closingLineStart = script.code.lastIndexOf('\n', closingBrace - 1) + 1
+        const last = bindings.elements.at(-1)
+        const indentation = last
+          ? script.code.slice(script.code.lastIndexOf('\n', last.getStart(sourceFile) - 1) + 1, last.getStart(sourceFile)).match(/^\s*/)?.[0] || '  '
+          : `${script.code.slice(closingLineStart, closingBrace)}  `
+        const edits: ImportEdit[] = [{
+          start: script.offset + closingLineStart,
+          end: script.offset + closingLineStart,
+          text: `${indentation}${missing.join(`,\n${indentation}`)},\n`,
+        }]
+        // Insert the comma immediately after the last specifier so a trailing line
+        // comment remains attached to that specifier instead of the new binding.
+        if (last && !bindings.elements.hasTrailingComma) {
+          edits.push({
+            start: script.offset + last.end,
+            end: script.offset + last.end,
+            text: ',',
+          })
+        }
+        return finish(edits, [...existing, ...missing])
+      }
+      let insertion = bindings.end - 1
+      while (insertion > bindingStart && /\s/.test(script.code[insertion - 1]))
+        insertion--
+      const prefix = bindings.elements.length === 0 ? ' ' : bindings.elements.hasTrailingComma ? ' ' : ', '
+      const suffix = bindings.elements.length === 0 ? ' ' : ''
+      return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${prefix}${missing.join(', ')}${suffix}` }], [...existing, ...missing])
     }
 
     const defaultOnly = runtimeMatching.find(node => node.importClause?.name && !node.importClause.namedBindings)

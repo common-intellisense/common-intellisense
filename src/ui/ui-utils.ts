@@ -28,12 +28,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-export function normalizePackageRecordConfiguration(raw: unknown, pkgPath?: string): Record<string, string> {
+function getPackageScopedValue(raw: Record<string, unknown>, pkgPath?: string, workspaceRoot?: string) {
+  if (!pkgPath)
+    return
+  if (Object.prototype.hasOwnProperty.call(raw, pkgPath))
+    return raw[pkgPath]
+  if (!workspaceRoot)
+    return
+
+  for (const [configuredPath, value] of Object.entries(raw)) {
+    const relativePath = configuredPath.startsWith('${workspaceFolder}/')
+      ? configuredPath.slice('${workspaceFolder}/'.length)
+      : configuredPath.startsWith('./')
+        ? configuredPath.slice(2)
+        : undefined
+    if (relativePath && resolve(workspaceRoot, relativePath) === resolve(pkgPath))
+      return value
+  }
+}
+
+export function normalizePackageRecordConfiguration(raw: unknown, pkgPath?: string, workspaceRoot?: string): Record<string, string> {
   if (!isRecord(raw))
     return {}
 
-  if (pkgPath && Object.prototype.hasOwnProperty.call(raw, pkgPath)) {
-    const scoped = raw[pkgPath]
+  const scoped = getPackageScopedValue(raw, pkgPath, workspaceRoot)
+  if (scoped !== undefined) {
     if (isRecord(scoped))
       return Object.fromEntries(Object.entries(scoped).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
     return {}
@@ -48,30 +67,32 @@ export function normalizePackageRecordConfiguration(raw: unknown, pkgPath?: stri
 }
 
 /** @description 获取组件别名配置，支持按 package.json 路径区分的配置映射 */
-export function getAlias(pkgPath?: string): Record<string, string> {
-  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.alias'), pkgPath)
+export function getAlias(pkgPath?: string, workspaceRoot?: string): Record<string, string> {
+  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.alias'), pkgPath, workspaceRoot)
 }
 
 /** @description 获取组件前缀配置，支持按 package.json 路径区分的配置映射 */
-export function getPrefix(pkgPath?: string): Record<string, string> {
-  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.prefix'), pkgPath)
+export function getPrefix(pkgPath?: string, workspaceRoot?: string): Record<string, string> {
+  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.prefix'), pkgPath, workspaceRoot)
 }
 
 /** @description 获取运行组件配置，支持按 package.json 路径区分的配置映射 */
-export function normalizeSelectedUIs(raw: unknown, pkgPath?: string): string[] {
+export function normalizeSelectedUIs(raw: unknown, pkgPath?: string, workspaceRoot?: string): string[] {
   if (Array.isArray(raw))
     return raw.filter((value): value is string => typeof value === 'string')
-  if (pkgPath && isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, pkgPath)) {
-    const scoped = raw[pkgPath]
-    return Array.isArray(scoped)
-      ? scoped.filter((value): value is string => typeof value === 'string')
-      : ['auto']
+  if (isRecord(raw)) {
+    const scoped = getPackageScopedValue(raw, pkgPath, workspaceRoot)
+    if (scoped !== undefined) {
+      return Array.isArray(scoped)
+        ? scoped.filter((value): value is string => typeof value === 'string')
+        : ['auto']
+    }
   }
   return ['auto']
 }
 
-export function getSelectedUIs(pkgPath?: string): string[] {
-  return normalizeSelectedUIs(getConfiguration('common-intellisense.ui'), pkgPath)
+export function getSelectedUIs(pkgPath?: string, workspaceRoot?: string): string[] {
+  return normalizeSelectedUIs(getConfiguration('common-intellisense.ui'), pkgPath, workspaceRoot)
 }
 
 const uiImportedNames = new WeakMap<Record<string, string>, Record<string, string>>()

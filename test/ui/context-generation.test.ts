@@ -1,14 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock } = vi.hoisted(() => ({
+const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock } = vi.hoisted(() => ({
   findUpMock: vi.fn(),
   fetchMock: vi.fn(),
   localFetchMock: vi.fn(async (_root?: string) => ({})),
   remoteFetchMock: vi.fn(async () => ({})),
   npmFetchMock: vi.fn(async () => ({})),
+  resolveLocalAdapterFileMock: vi.fn(),
+  getConfigurationMock: vi.fn<(key: string) => unknown>(() => null),
+  watchFileMock: vi.fn(() => () => {}),
 }))
 
 vi.mock('find-up', () => ({ findUp: findUpMock }))
+vi.mock('@vscode-use/utils', () => ({
+  createLog: () => ({ info: vi.fn(), error: vi.fn() }),
+  getConfiguration: getConfigurationMock,
+  getCurrentFileUrl: vi.fn(),
+  getRootPath: () => '/workspace',
+  watchFile: watchFileMock,
+}))
 vi.mock('node:fs/promises', () => ({
   default: {
     readFile: vi.fn(async () => JSON.stringify({ dependencies: { antd: '^5.0.0' } })),
@@ -18,6 +28,7 @@ vi.mock('node:fs/promises', () => ({
 }))
 vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchMock,
+  resolveLocalAdapterFile: resolveLocalAdapterFileMock,
   fetchLocalSourceResults: async (root?: string) => [{ id: 'local:test', status: 'success', value: await localFetchMock(root) }],
   fetchRemoteNpmSourceResults: async () => [{ id: 'npm:test', status: 'success', value: await npmFetchMock() }],
   fetchRemoteUrlSourceResults: async () => {
@@ -42,6 +53,9 @@ describe('package context generations', () => {
     localFetchMock.mockReset().mockResolvedValue({})
     remoteFetchMock.mockReset().mockResolvedValue({})
     npmFetchMock.mockReset().mockResolvedValue({})
+    resolveLocalAdapterFileMock.mockReset().mockImplementation(async (root: string, uri: string) => `${root}/${uri}`)
+    getConfigurationMock.mockReset().mockReturnValue(null)
+    watchFileMock.mockReset().mockImplementation(() => () => {})
   })
 
   it('does not let a context started before global invalidation commit later', async () => {
@@ -511,7 +525,43 @@ describe('package context generations', () => {
       mod.releaseDocumentContext(documentPath)
     }
 
-    expect(mod.getContextRegistryStats()).toMatchObject({ contexts: 20, documents: 0 })
+    expect(mod.getContextRegistryStats()).toMatchObject({ contexts: 20, documents: 0, rootWorkspaces: 20 })
+  })
+
+  it('does not install a local-source watcher after its context is invalidated', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    getConfigurationMock.mockImplementation((key: string) => key === 'common-intellisense.localUris' ? ['adapter.js'] : null)
+    let resolveAdapter!: (value: string) => void
+    resolveLocalAdapterFileMock.mockReturnValue(new Promise<string>((resolve) => { resolveAdapter = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(resolveLocalAdapterFileMock).toHaveBeenCalled())
+    mod.invalidatePackageContext(documentPath)
+    resolveAdapter('/workspace/adapter.js')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(watchFileMock).not.toHaveBeenCalledWith('/workspace/adapter.js', expect.anything())
+    expect(mod.getContextRegistryStats().localWatchers).toBe(0)
+  })
+
+  it('retains shared workspace resources until its last context is removed', async () => {
+    findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/pkg-a/')
+      ? '/workspace/pkg-a/package.json'
+      : '/workspace/pkg-b/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+
+    await mod.ensureContextForPath('/workspace/pkg-a/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    await mod.ensureContextForPath('/workspace/pkg-b/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(1)
+
+    mod.invalidatePackageContext('/workspace/pkg-a/src/App.tsx')
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(1)
+    mod.invalidatePackageContext('/workspace/pkg-b/src/App.tsx')
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(0)
   })
 
   it('backs off an initial undefined official result and retries after 30 seconds', async () => {

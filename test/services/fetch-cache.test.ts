@@ -85,6 +85,32 @@ describe('persistent fetch cache', () => {
     expect(renameMock).not.toHaveBeenCalled()
   })
 
+  it('serializes concurrent cache writes', async () => {
+    vi.resetModules()
+    let releaseFirst!: () => void
+    writeFileMock.mockReset()
+    renameMock.mockReset()
+    writeFileMock
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { releaseFirst = resolve }))
+      .mockResolvedValueOnce(undefined)
+    renameMock.mockResolvedValue(undefined)
+    const mod = await import('../../src/services/fetch')
+    mod.configureCacheStorage('/tmp/cache')
+    mod.cacheFetch.set('first', 'one')
+
+    const first = mod.writeLocalCache()
+    await vi.waitFor(() => expect(writeFileMock).toHaveBeenCalledTimes(1))
+    mod.cacheFetch.set('second', 'two')
+    const second = mod.writeLocalCache()
+    expect(writeFileMock).toHaveBeenCalledTimes(1)
+
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(writeFileMock).toHaveBeenCalledTimes(2)
+    expect(renameMock).toHaveBeenCalledTimes(2)
+    expect(writeFileMock.mock.calls[1][1]).toContain('["second","two"]')
+  })
+
   it('bounds cache entries and keeps recently read values', async () => {
     vi.resetModules()
     const mod = await import('../../src/services/fetch')

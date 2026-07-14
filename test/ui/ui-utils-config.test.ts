@@ -18,6 +18,22 @@ describe('package-scoped UI configuration', () => {
     }, '/workspace/a/package.json')).toEqual({ antd: 'a-' })
   })
 
+  it('resolves documented workspace-relative package keys', () => {
+    const packagePath = '/workspace/packages/a/package.json'
+    expect(normalizeSelectedUIs({
+      '${workspaceFolder}/packages/a/package.json': ['antd5'],
+    }, packagePath, '/workspace')).toEqual(['antd5'])
+    expect(normalizeSelectedUIs({
+      './packages/a/package.json': ['elementPlus2'],
+    }, packagePath, '/workspace')).toEqual(['elementPlus2'])
+    expect(normalizePackageRecordConfiguration({
+      '${workspaceFolder}/packages/a/package.json': { antd: 'a-' },
+    }, packagePath, '/workspace')).toEqual({ antd: 'a-' })
+    expect(normalizeSelectedUIs({
+      './packages/a/package.json': ['antd5'],
+    }, '/other/packages/a/package.json', '/workspace')).toEqual(['auto'])
+  })
+
   it('does not infer an SFC from a JSX script element', () => {
     const deps = getUiDeps(`
       import { Button } from 'antd'

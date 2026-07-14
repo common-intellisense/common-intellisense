@@ -20,6 +20,18 @@ export function removeRootPackageSubscriber(packagePath: string) {
     value.subscribers?.delete(packagePath)
 }
 
+export function disposeRootPackageCache(workspaceRoot: string) {
+  const value = rootPkgCache.get(workspaceRoot)
+  if (!value)
+    return
+  try { value.stopRoot?.() }
+  catch {}
+  try { value.stopWorkspace?.() }
+  catch {}
+  value.subscribers?.clear()
+  rootPkgCache.delete(workspaceRoot)
+}
+
 export function invalidateRootPackageCacheForManifest(manifestPath: string) {
   for (const [rootPath, value] of rootPkgCache) {
     if (value.rootPkgPath !== manifestPath)

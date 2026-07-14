@@ -458,7 +458,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       const rawCfg = getConfiguration('common-intellisense.ui') as any
-      const selectedForPackage = getSelectedUIs(packageContext.pkgPath) || []
+      const selectedForPackage = getSelectedUIs(packageContext.pkgPath, packageContext.workspaceRoot) || []
       const options: ({ label: string, picked?: boolean })[] = currentPkgUiNames.map((label: string) => selectedForPackage.includes(label) ? { label, picked: true } : { label })
 
       const data = await createSelect(options, {
