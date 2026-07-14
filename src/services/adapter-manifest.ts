@@ -146,13 +146,12 @@ function normalizeProp(prop: PlainRecord, path: string) {
     invalid(`${path}.related`)
   if (Array.isArray(prop.value) && prop.value.some(item => typeof item !== 'string'))
     invalid(`${path}.value`)
-  if (prop.typeDetail !== undefined)
-    normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`)
+  const typeDetail = normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`)
   for (const [key, value] of Object.entries(prop)) {
     if (key.startsWith('$') && typeof value !== 'string')
       invalid(`${path}.${key}`)
   }
-  return { ...prop, typeDetail: normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`) }
+  return { ...prop, typeDetail }
 }
 
 function normalizeComponent(value: unknown, path: string) {

@@ -12,20 +12,37 @@ export function createAdapterVmContext(sandbox: vm.Context) {
   })
 }
 
-/** Execute and serialize every adapter export under one aggregate timeout. */
-export function runAdapterExports(context: vm.Context, timeout: number) {
+const defaultMaxSerializedResultSize = 8 * 1024 * 1024
+
+/**
+ * Execute and serialize every adapter export under one aggregate timeout.
+ * Production legacy adapters use the bounded Worker path; this compatibility
+ * helper retains its own aggregate cap so future callers cannot bypass it.
+ */
+export function runAdapterExports(context: vm.Context, timeout: number, maxSerializedResultSize = defaultMaxSerializedResultSize) {
+  if (!Number.isSafeInteger(maxSerializedResultSize) || maxSerializedResultSize <= 0)
+    throw new TypeError('Invalid adapter result size limit')
+
   // Derive all inputs inside the timed evaluation. Writing properties onto a
   // contextified object after adapter initialization could invoke an attacker-
   // controlled setter outside VM timeout accounting.
-  return new vm.Script(`(() => {
+  const source = `(() => {
     const output = []
-    const blocked = new Set(['__proto__', 'prototype', 'constructor'])
+    const blocked = new Set(['__proto__', 'prototype', 'constructor', 'then'])
+    let serializedSize = 0
     for (const key of Object.keys(module.exports)) {
       if (blocked.has(key)) continue
       const value = module.exports[key]
       const data = typeof value === 'function' ? value(key.endsWith('Components') ? __localeZh : undefined) : value
-      output.push([key, JSON.stringify(data)])
+      const json = JSON.stringify(data)
+      if (typeof json !== 'string') throw new Error('Adapter export is not JSON serializable')
+      serializedSize += key.length + json.length
+      if (serializedSize > ${maxSerializedResultSize}) throw new Error('Adapter results exceed the serialized size limit')
+      output.push([key, json])
     }
-    return JSON.stringify(output)
-  })()`).runInContext(context, { timeout }) as unknown
+    const serialized = JSON.stringify(output)
+    if (serialized.length > ${maxSerializedResultSize}) throw new Error('Adapter results exceed the serialized size limit')
+    return serialized
+  })()`
+  return new vm.Script(source).runInContext(context, { timeout }) as unknown
 }

@@ -55,7 +55,7 @@ function runAggregateFixture() {
       const sandbox = { module: { exports: {} }, exports: {} }
       sandbox.exports = sandbox.module.exports
       const context = createAdapterVmContext(sandbox)
-      new vm.Script("module.exports = { a: () => { const end = Date.now() + 70; while (Date.now() < end) {} }, b: () => { const end = Date.now() + 70; while (Date.now() < end) {} } }").runInContext(context, { timeout: 100 })
+      new vm.Script("module.exports = { a: () => { const end = Date.now() + 70; while (Date.now() < end) {} return {} }, b: () => { const end = Date.now() + 70; while (Date.now() < end) {} return {} } }").runInContext(context, { timeout: 100 })
       try {
         runAdapterExports(context, 100)
         process.stdout.write('NOT_TIMED_OUT')
@@ -118,6 +118,30 @@ function runIteratorFixture() {
   }
 }
 
+function runSizeLimitFixture() {
+  const { directory, filename } = compileHelper()
+  try {
+    const fixture = String.raw`
+      const vm = require('node:vm')
+      const { createAdapterVmContext, runAdapterExports } = require(process.argv[1])
+      const sandbox = { module: { exports: {} }, exports: {}, __localeZh: false }
+      sandbox.exports = sandbox.module.exports
+      const context = createAdapterVmContext(sandbox)
+      new vm.Script("module.exports.ok = () => ({ value: 'x'.repeat(256) })").runInContext(context, { timeout: 100 })
+      try {
+        runAdapterExports(context, 100, 128)
+        process.stdout.write('NOT_LIMITED')
+      } catch (error) {
+        process.stdout.write(String(error && error.message || error))
+      }
+    `
+    return execFileSync(process.execPath, ['-e', fixture, filename], { encoding: 'utf8', timeout: 3000 })
+  }
+  finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
 function runObjectKeysFixture() {
   const { directory, filename } = compileHelper()
   try {
@@ -165,5 +189,9 @@ describe('legacy adapter VM microtasks', () => {
 
   it('keeps poisoned Object.keys results inside the aggregate timeout', () => {
     expect(runObjectKeysFixture()).toBe('TIMEOUT')
+  })
+
+  it('rejects oversized serialized output before returning it to the host', () => {
+    expect(runSizeLimitFixture()).toContain('serialized size limit')
   })
 })

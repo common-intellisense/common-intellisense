@@ -387,6 +387,49 @@ describe('fetch service additional tests (mocked)', () => {
     await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
   })
 
+  it('rechecks remote npm legacy approval against the exact downloaded bytes', async () => {
+    allowLegacyAdapters = false
+    remoteNpmUris = [{ name: '@common-intellisense/approved', resource: 'index.cjs' }]
+    const fetchNpm = await import('@simon_he/fetch-npm')
+    const first = 'module.exports = { ApprovedProps: () => ({ value: 1 }) }'
+    const changed = 'module.exports = { ApprovedProps: () => ({ value: 2 }) }'
+    vi.mocked(fetchNpm.fetchAndExtractPackage).mockResolvedValue(first)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteNpmUrls()).rejects.toThrow('Executable adapter blocked')
+    legacyAdapterAllowlist = [mod.getLegacyAdapterApproval('npm:@common-intellisense/approved::index.cjs', first)]
+    mod.clearFetchCaches()
+    await expect(mod.fetchFromRemoteNpmUrls()).resolves.toHaveProperty('ApprovedProps')
+
+    vi.mocked(fetchNpm.fetchAndExtractPackage).mockResolvedValue(changed)
+    mod.clearFetchCaches()
+    await expect(mod.fetchFromRemoteNpmUrls()).rejects.toThrow('Executable adapter blocked')
+  })
+
+  it('blocks executable remote adapters in Restricted Mode but accepts data manifests', async () => {
+    allowLegacyAdapters = true
+    const ofetchMod = await import('ofetch')
+    const mod = await import('../../src/services/fetch')
+    const originalTrust = vscode.workspace.isTrusted
+    ;(vscode.workspace as any).isTrusted = false
+    try {
+      vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { UnsafeProps: () => ({ value: 1 }) }')
+      mod.clearFetchCaches()
+      await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
+
+      vi.mocked(ofetchMod.ofetch).mockResolvedValue(JSON.stringify({
+        schemaVersion: 1,
+        exports: { SafeProps: { uiName: 'safe', lib: 'safe', map: [] } },
+      }))
+      mod.clearFetchCaches()
+      await expect(mod.fetchFromRemoteUrls()).resolves.toHaveProperty('SafeProps')
+    }
+    finally {
+      ;(vscode.workspace as any).isTrusted = originalTrust
+    }
+  })
+
   it('loads data-only manifests while legacy mode is disabled', async () => {
     allowLegacyAdapters = false
     const ofetchMod = await import('ofetch')
@@ -547,6 +590,18 @@ describe('fetch service additional tests (mocked)', () => {
 
     await expect(mod.fetchFromRemoteUrls()).resolves.toEqual({})
     expect(executionSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps nullable metadata compatible on the legacy adapter path', async () => {
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(
+      'module.exports = { LegacyProps: () => ({ uiName: "legacy", lib: "legacy", map: [{ name: "Button", slots: [{ name: "default", description: null }] }] }) }',
+    )
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteUrls()
+    expect(result.LegacyProps()[0].slots[0].description).toBeNull()
   })
 
   it('rejects an oversized legacy export before parsing its inner JSON', async () => {
