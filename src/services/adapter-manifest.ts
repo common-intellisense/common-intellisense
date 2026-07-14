@@ -4,7 +4,8 @@ const maxComponentsPerLibrary = 5_000
 const maxComponentMembers = 1_000
 const maxAggregateComponents = 10_000
 const maxDomainStringLength = 100_000
-const reservedComponentNames = new Set(['__proto__', 'prototype', 'constructor', 'then', 'icons'])
+const unsafeObjectKeys = new Set(['__proto__', 'prototype', 'constructor', 'then'])
+const reservedComponentNames = new Set([...unsafeObjectKeys, 'icons'])
 
 function isPlainRecord(value: unknown): value is PlainRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -15,6 +16,18 @@ function isPlainRecord(value: unknown): value is PlainRecord {
 
 function invalid(path: string): never {
   throw new TypeError(`Invalid adapter manifest field: ${path}`)
+}
+
+function cloneSafeRecord(record: PlainRecord, path: string, overrides: PlainRecord = {}) {
+  const clone: PlainRecord = Object.create(null)
+  for (const [key, value] of Object.entries(record)) {
+    if (unsafeObjectKeys.has(key))
+      invalid(`${path}.${key}`)
+    clone[key] = value
+  }
+  for (const [key, value] of Object.entries(overrides))
+    clone[key] = value
+  return clone
 }
 
 function requireNonEmptyString(value: unknown, path: string): string {
@@ -54,7 +67,7 @@ function normalizeParams(value: unknown, path: string) {
       invalid(`${path}[${index}]`)
     for (const key of ['name', 'description', 'description_zh', 'type', 'default'])
       validateOptionalString(entry, key, `${path}[${index}]`)
-    return { ...entry }
+    return cloneSafeRecord(entry, `${path}[${index}]`)
   })
 }
 
@@ -63,8 +76,10 @@ function normalizeTypeDetail(value: unknown, path: string) {
     return undefined
   if (!isPlainRecord(value))
     invalid(path)
-  const normalized: PlainRecord = {}
+  const normalized: PlainRecord = Object.create(null)
   for (const [key, detail] of Object.entries(value)) {
+    if (unsafeObjectKeys.has(key))
+      invalid(`${path}.${key}`)
     if (typeof detail === 'string') {
       normalized[key] = detail
       continue
@@ -77,7 +92,7 @@ function normalizeTypeDetail(value: unknown, path: string) {
       for (const field of ['name', 'description', 'description_zh', 'type', 'params', 'value'])
         validateOptionalString(entry, field, `${path}.${key}[${index}]`)
       validateOptionalBoolean(entry, 'optional', `${path}.${key}[${index}]`)
-      return { ...entry }
+      return cloneSafeRecord(entry, `${path}.${key}[${index}]`)
     })
   }
   return normalized
@@ -96,7 +111,7 @@ function normalizeSuggestions(value: unknown, path: string) {
     requireNonEmptyString(entry.name, `${path}[${index}].name`)
     validateOptionalString(entry, 'description', `${path}[${index}]`)
     validateOptionalString(entry, 'description_zh', `${path}[${index}]`)
-    return { ...entry }
+    return cloneSafeRecord(entry, `${path}[${index}]`)
   })
 }
 
@@ -118,7 +133,7 @@ function normalizeNamedArray(value: unknown, path: string, eventEntries = false)
       validateOptionalBoolean(entry, 'required', entryPath)
     const params = normalizeParams(entry.params, `${entryPath}.params`)
     if (!eventEntries)
-      return { ...entry, params }
+      return cloneSafeRecord(entry, entryPath, { params })
     // Events are consumed directly by snippet generation. Clone only the public
     // event contract so unknown manifest fields cannot silently activate future
     // reducer behavior.
@@ -151,7 +166,7 @@ function normalizeProp(prop: PlainRecord, path: string) {
     if (key.startsWith('$') && typeof value !== 'string')
       invalid(`${path}.${key}`)
   }
-  return { ...prop, typeDetail }
+  return cloneSafeRecord(prop, path, { typeDetail })
 }
 
 function normalizeComponent(value: unknown, path: string) {
@@ -172,8 +187,7 @@ function normalizeComponent(value: unknown, path: string) {
       invalid(`${path}.props.${name}`)
     props[name] = normalizeProp(prop, `${path}.props.${name}`)
   }
-  return {
-    ...value,
+  return cloneSafeRecord(value, path, {
     props,
     events: normalizeNamedArray(value.events, `${path}.events`, true),
     methods: normalizeNamedArray(value.methods, `${path}.methods`),
@@ -181,7 +195,7 @@ function normalizeComponent(value: unknown, path: string) {
     exposed: normalizeNamedArray(value.exposed, `${path}.exposed`),
     suggestions: normalizeSuggestions(value.suggestions, `${path}.suggestions`),
     typeDetail: normalizeTypeDetail(value.typeDetail, `${path}.typeDetail`),
-  }
+  })
 }
 
 function isSafeDirectiveValue(value: unknown) {
@@ -214,9 +228,9 @@ function normalizeDirectives(value: unknown, path: string) {
         if (param[key] !== undefined && !isSafeDirectiveValue(param[key]))
           invalid(`${paramPath}.${key}`)
       }
-      return { ...param }
+      return cloneSafeRecord(param, paramPath)
     })
-    return { ...directive, params }
+    return cloneSafeRecord(directive, directivePath, { params })
   })
 }
 
@@ -241,7 +255,7 @@ function normalizeComponentsExport(value: PlainRecord, path: string) {
       invalid(`${path}.map[${index}][2]`)
     return [normalizedComponent, ...entry.slice(1)]
   })
-  return { ...value, map, directives: normalizeDirectives(value.directives, `${path}.directives`) }
+  return cloneSafeRecord(value, path, { map, directives: normalizeDirectives(value.directives, `${path}.directives`) })
 }
 
 function normalizePropsExport(value: PlainRecord, path: string) {
@@ -251,12 +265,12 @@ function normalizePropsExport(value: PlainRecord, path: string) {
     validateOptionalString(value, key, path)
   if (!Array.isArray(value.map) || value.map.length > maxComponentsPerLibrary)
     invalid(`${path}.map`)
-  return { ...value, map: value.map.map((component, index) => normalizeComponent(component, `${path}.map[${index}]`)) }
+  return cloneSafeRecord(value, path, { map: value.map.map((component, index) => normalizeComponent(component, `${path}.map[${index}]`)) })
 }
 
 /** Validate and clone data-only adapter exports before reducer closures are created. */
 export function normalizeAdapterManifestExports(exportsData: Record<string, unknown>, source: string) {
-  const normalized: Record<string, unknown> = {}
+  const normalized: Record<string, unknown> = Object.create(null)
   let aggregateComponents = 0
   for (const [key, value] of Object.entries(exportsData)) {
     if (['__proto__', 'prototype', 'constructor', 'then'].includes(key))

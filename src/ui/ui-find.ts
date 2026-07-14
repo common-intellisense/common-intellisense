@@ -126,7 +126,6 @@ function getSourceRefreshKey(kind: 'custom' | 'official', context: PackageContex
 let registryEpoch = 0
 let volatileSnapshotSequence = 0
 let officialSourceSignatureSequence = 0
-let activeContext: PackageContext | undefined
 const contextInvalidationListeners = new Set<(packagePaths?: string[]) => void>()
 const contextUpdateListeners = new Set<(context: PackageContext) => void>()
 
@@ -183,7 +182,6 @@ function nextGeneration(key: string) {
 }
 
 function applyContext(context: PackageContext) {
-  activeContext = context
   cacheMap.clear()
   for (const [key, value] of context.cacheMap)
     cacheMap.set(key, value)
@@ -660,8 +658,6 @@ export async function resetCustomSourcesForApprovalChange() {
       customSourceSnapshots: new Map(),
     }
     contexts.set(contextKey, reset)
-    if (activeContext?.pkgPath === current.pkgPath)
-      applyContext(reset)
     notifyContextUpdated(reset)
     startTrackedContextEnhancements(reset, expectedEpoch)
   }
@@ -1256,7 +1252,6 @@ export function invalidateContexts() {
   pkgUIConfigMap.clear()
   clearPackageVersionCache()
   clearTypeCache()
-  activeContext = undefined
   notifyContextInvalidated()
 }
 
@@ -1273,18 +1268,6 @@ export function disposeUIWatchers() {
     catch {}
   }
   localSourceWatchers.clear()
-}
-
-export function getCurrentPkgUiNames() {
-  return activeContext?.currentPkgUiNames || null
-}
-
-export function getOptionsComponents() {
-  return activeContext?.optionsComponents || emptyOptions()
-}
-
-export function getUiCompletions() {
-  return activeContext?.uiCompletions || null
 }
 
 export function deactivateUICache() {

@@ -222,8 +222,20 @@ function isLegacyAdapterApproved(sourceId: string, content: string) {
   return configuration.emergency || configuration.allowlist.includes(getLegacyAdapterApproval(sourceId, content))
 }
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value))
+    return `[${value.map(stableStringify).join(',')}]`
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+    return `{${entries.join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
+}
+
 function getSourceTaskKey(kind: string, configuration: unknown, workspaceRoot?: string) {
-  return JSON.stringify({
+  return stableStringify({
     kind,
     root: workspaceRoot || getRootPath() || '',
     configuration,

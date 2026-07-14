@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { fetchOfficial, watchFileMock } = vi.hoisted(() => ({
-  fetchOfficial: vi.fn(async () => ({})),
+  fetchOfficial: vi.fn(async (_tag?: string, _options?: any) => ({})),
   watchFileMock: vi.fn(() => () => {}),
 }))
 
@@ -49,6 +49,7 @@ vi.mock('../../src/type-extract/cache', () => ({ clearTypeCache: vi.fn() }))
 describe('multi-root package contexts', () => {
   beforeEach(() => {
     vi.resetModules()
+    fetchOfficial.mockReset().mockResolvedValue({})
     watchFileMock.mockClear()
   })
 
@@ -64,6 +65,32 @@ describe('multi-root package contexts', () => {
     expect(b?.workspaceRoot).toBe('/workspace-b')
     expect(a?.uiNames).toEqual(['antd5'])
     expect(b?.uiNames).toEqual(['elementPlus2'])
+  })
+
+  it('keeps document contexts isolated when workspace A finishes after workspace B', async () => {
+    let releaseA!: () => void
+    const waitForA = new Promise<void>((resolve) => { releaseA = resolve })
+    fetchOfficial.mockImplementation(async (_tag?: string, options?: any) => {
+      if (options.uiName === 'antd5')
+        await waitForA
+      const componentName = options.uiName === 'antd5' ? 'AButton' : 'BButton'
+      return {
+        [options.uiName]: async () => ({ [componentName]: { name: componentName } }),
+      }
+    })
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = {} as any
+    const loadingA = mod.ensureContextForPath('/workspace-a/packages/app/src/App.tsx', extensionContext, () => {}, false, '/workspace-a')
+    const contextB = await mod.ensureContextForPath('/workspace-b/packages/app/src/App.tsx', extensionContext, () => {}, false, '/workspace-b')
+    releaseA()
+    const contextA = await loadingA
+    const currentB = await mod.ensureContextForPath('/workspace-b/packages/app/src/App.tsx', extensionContext, () => {}, false, '/workspace-b')
+
+    expect(contextA?.uiCompletions).toHaveProperty('AButton')
+    expect(contextA?.uiCompletions).not.toHaveProperty('BButton')
+    expect(contextB?.uiCompletions).toHaveProperty('BButton')
+    expect(currentB?.uiCompletions).toHaveProperty('BButton')
+    expect(currentB?.uiCompletions).not.toHaveProperty('AButton')
   })
   it('recomputes monorepo state from true to false', async () => {
     const fs = await import('node:fs/promises')

@@ -30,6 +30,38 @@ describe('data-only adapter manifest validation', () => {
     expect(() => normalizeAdapterManifestExports({ then: { uiName: 'then', lib: 'demo', map: [] } }, 'fixture')).toThrow('Unsafe adapter export key')
   })
 
+  it.each(['__proto__', 'prototype', 'constructor', 'then'])('rejects unsafe nested object key %s without polluting prototypes', (key) => {
+    const manifest = JSON.parse(JSON.stringify({
+      demo: {
+        uiName: 'demo',
+        lib: 'demo',
+        map: [{ name: 'Demo', suggestions: [{ name: 'Other' }] }],
+      },
+    }))
+    Object.defineProperty(manifest.demo.map[0].suggestions[0], key, {
+      value: { polluted: true },
+      enumerable: true,
+    })
+
+    expect(() => normalizeAdapterManifestExports(manifest, 'fixture')).toThrow(/Invalid adapter manifest field/)
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
+  })
+
+  it.each(['__proto__', 'prototype', 'constructor', 'then'])('rejects unsafe typeDetail key %s', (key) => {
+    const typeDetail = Object.create(null)
+    typeDetail[key] = [{ name: 'unsafe' }]
+    const manifest = {
+      demo: {
+        uiName: 'demo',
+        lib: 'demo',
+        map: [{ name: 'Demo', typeDetail }],
+      },
+    }
+
+    expect(() => normalizeAdapterManifestExports(manifest, 'fixture')).toThrow(/Invalid adapter manifest field/)
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
+  })
+
   it('validates and clones component directives', () => {
     const exportsData = normalizeAdapterManifestExports({
       demoComponents: {
