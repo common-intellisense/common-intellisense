@@ -106,6 +106,8 @@ export function createImportEdits(code: string, source: string, dependencies: st
       const promotedName = importWay === 'default'
         ? promotion.clause.name!.text
         : (promotion.clause.namedBindings as ts.NamespaceImport).name.text
+      if (collectRuntimeBindingConflicts(sourceFile, promotion.declaration).has(promotedName))
+        return []
       const additional = names.filter(name => name !== promotedName && !existing.has(name) && !occupied.has(name))
       const sourceText = JSON.stringify(source)
       const preserved: string[] = []
@@ -228,6 +230,47 @@ function findTypeOnlyPromotions(imports: ts.ImportDeclaration[], names: string[]
       promotions.push({ declaration, elements: [...bindings.elements], promotedNames })
   }
   return promotions
+}
+
+function collectRuntimeBindingConflicts(sourceFile: ts.SourceFile, ignoredImport: ts.ImportDeclaration) {
+  const result = new Set<string>()
+  const addBindingName = (name: ts.BindingName) => {
+    if (ts.isIdentifier(name)) {
+      result.add(name.text)
+      return
+    }
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element))
+        addBindingName(element.name)
+    }
+  }
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      if (statement === ignoredImport || statement.importClause?.isTypeOnly)
+        continue
+      const clause = statement.importClause
+      if (clause?.name)
+        result.add(clause.name.text)
+      const bindings = clause?.namedBindings
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        result.add(bindings.name.text)
+      }
+      else if (bindings) {
+        for (const element of bindings.elements) {
+          if (!element.isTypeOnly)
+            result.add(element.name.text)
+        }
+      }
+    }
+    else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations)
+        addBindingName(declaration.name)
+    }
+    else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement)) && statement.name) {
+      result.add(statement.name.text)
+    }
+  }
+  return result
 }
 
 function collectSpecifierConflicts(sourceFile: ts.SourceFile, ignoredImports: Set<ts.ImportDeclaration>) {

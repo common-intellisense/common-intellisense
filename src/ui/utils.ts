@@ -1285,15 +1285,14 @@ async function getSuggestionsTemplateStr(content: any, componentByName: Map<stri
       return `$${++index}`
     const suggestion = componentByName.get(normalizeSuggestionLookupName(suggestionName))
     const suggestionTag = renderComponentTag(suggestionName, framework, isSeperatorByHyphen)
-    const [childRequiredProps, _index] = await getRequireProp(suggestion, index, framework, parent)
 
     if (suggestion) {
       if (tags.has(suggestionTag))
-        return `$${_index + 1}`
-      return getTemplateStr(componentByName, suggestion, _index, framework, isSeperatorByHyphen, parent, tags)
+        return `$${index + 1}`
+      return getTemplateStr(componentByName, suggestion, index, framework, isSeperatorByHyphen, parent, tags)
     }
     tags.add(suggestionTag)
-    return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index + 1}>$${_index + 2}</${suggestionTag}>\n`
+    return `\n  <${suggestionTag}$${index + 1}>$${index + 2}</${suggestionTag}>\n`
   }
   return `$${++index}`
 }

@@ -23,6 +23,16 @@ export function supportsSlotAnalysis(document: Pick<vscode.TextDocument, 'langua
   return document.languageId === 'vue' || document.uri.fsPath?.endsWith('.vine.ts') === true
 }
 
+export function getHoverPropName(result: { propName?: unknown, props?: Array<{ name?: unknown, arg?: { content?: unknown } }> }) {
+  if (result.propName !== true)
+    return typeof result.propName === 'string' ? result.propName : undefined
+
+  const firstProp = result.props?.[0]
+  const directiveName = firstProp?.name === 'on' ? 'on' : 'bind'
+  const directive = result.props?.find(prop => prop.name === directiveName)
+  return typeof directive?.arg?.content === 'string' ? directive.arg.content : undefined
+}
+
 interface DocumentAnalysisCacheEntry {
   uri: string
   version: number
@@ -302,22 +312,6 @@ export async function activate(context: vscode.ExtensionContext) {
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
   const initialEditor = vscode.window.activeTextEditor
   const slotTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  const packageManifestWatcher = vscode.workspace.createFileSystemWatcher?.('**/package.json')
-  if (packageManifestWatcher) {
-    const invalidateManifest = (uri: vscode.Uri) => {
-      const manifestPath = uri.fsPath
-      const segments = manifestPath.split(/[\\/]+/)
-      if (segments.some(segment => ['node_modules', 'dist', 'build', '.cache'].includes(segment)) || isExcluded(manifestPath))
-        return
-      handlePackageManifestLifecycle(manifestPath)
-      invalidateRootPackageCacheForManifest(manifestPath)
-    }
-    context.subscriptions.push(
-      packageManifestWatcher,
-      packageManifestWatcher.onDidCreate(invalidateManifest),
-      packageManifestWatcher.onDidDelete(invalidateManifest),
-    )
-  }
   const ensureDocumentContext = (document: vscode.TextDocument, cleanCache = false) => ensureContextForPath(
     getDocumentPath(document),
     context,
@@ -353,6 +347,37 @@ export async function activate(context: vscode.ExtensionContext) {
         : await ensureDocumentContext(document)
       await analyzeDocumentSlots(document, packageContext)
     }))
+  }
+  const packageManifestWatcher = vscode.workspace.createFileSystemWatcher?.('**/package.json')
+  if (packageManifestWatcher) {
+    const invalidateManifest = (uri: vscode.Uri) => {
+      const manifestPath = uri.fsPath
+      const segments = manifestPath.split(/[\\/]+/)
+      if (segments.some(segment => ['node_modules', 'dist', 'build', '.cache'].includes(segment)) || isExcluded(manifestPath))
+        return
+      const affected = handlePackageManifestLifecycle(manifestPath)
+      invalidateRootPackageCacheForManifest(manifestPath)
+      const documentPaths = new Set(affected.documentPaths)
+      for (const editor of vscode.window.visibleTextEditors) {
+        const { document } = editor
+        if (!documentPaths.has(getDocumentPath(document)))
+          continue
+        clearDocumentAnalysis(document.uri)
+        clearLocalDocumentAnalysis(document.uri)
+        void ensureDocumentContext(document)
+          .then((packageContext) => {
+            if (document.isClosed || !vscode.window.visibleTextEditors.includes(editor))
+              return
+            return analyzeDocumentSlots(document, packageContext)
+          })
+          .catch(error => logger.error(`Package manifest refresh failed: ${String(error)}`))
+      }
+    }
+    context.subscriptions.push(
+      packageManifestWatcher,
+      packageManifestWatcher.onDidCreate(invalidateManifest),
+      packageManifestWatcher.onDidDelete(invalidateManifest),
+    )
   }
 
   context.subscriptions.push(onPackageContextsInvalidated(packagePaths => packagePaths?.length
@@ -1064,9 +1089,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return
         }
         // 这个实现有些问题,要从底层去修改 propName 上的信息,才能拿到准确的数据
-        const findBind = () => result.props.find((p: any) => p.name === 'bind')
-        const findOn = () => result.props.find((p: any) => p.name === 'on')
-        const propName = result.propName === true ? result.props[0].name === 'on' ? findOn()?.arg.content : findBind()?.arg.content : result.propName
+        const propName = getHoverPropName(result)
 
         if (typeof propName !== 'string')
           return

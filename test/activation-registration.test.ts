@@ -32,6 +32,9 @@ const mocks = vi.hoisted(() => {
     contextUpdatedListener: undefined as undefined | ((context: any) => void),
     textChangeListener: undefined as undefined | ((event: any) => void),
     closeListener: undefined as undefined | ((document: any) => void),
+    manifestCreateListener: undefined as undefined | ((uri: any) => void),
+    manifestDeleteListener: undefined as undefined | ((uri: any) => void),
+    handlePackageManifestLifecycle: vi.fn(() => ({ packagePaths: [] as string[], documentPaths: [] as string[] })),
   }
 })
 
@@ -47,6 +50,7 @@ vi.mock('../src/ui/ui-find', () => ({
   getContextForDocumentPath: mocks.getDocumentContext,
   getContextForPackagePath: mocks.getPackageContext,
   getCurrentPkgUiNames: vi.fn(),
+  handlePackageManifestLifecycle: mocks.handlePackageManifestLifecycle,
   invalidateContexts: vi.fn(),
   onPackageContextsInvalidated: vi.fn(() => ({ dispose: vi.fn() })),
   onPackageContextUpdated: vi.fn((listener: (context: any) => void) => {
@@ -56,6 +60,9 @@ vi.mock('../src/ui/ui-find', () => ({
   resolvePackagePathForDocument: mocks.resolvePackagePath,
   releaseDocumentContext: vi.fn(),
   logger: { info: vi.fn(), error: vi.fn() },
+}))
+vi.mock('../src/services/ui-cache', () => ({
+  invalidateRootPackageCacheForManifest: vi.fn(),
 }))
 vi.mock('../src/parser', () => ({
   clearDocumentAnalysesForPackages: mocks.clearDocumentAnalysesForPackages,
@@ -114,6 +121,17 @@ vi.mock('vscode', () => {
       visibleTextEditors: [],
     },
     workspace: {
+      createFileSystemWatcher: vi.fn(() => ({
+        dispose: vi.fn(),
+        onDidCreate: vi.fn((listener: (uri: any) => void) => {
+          mocks.manifestCreateListener = listener
+          return { dispose: vi.fn() }
+        }),
+        onDidDelete: vi.fn((listener: (uri: any) => void) => {
+          mocks.manifestDeleteListener = listener
+          return { dispose: vi.fn() }
+        }),
+      })),
       openTextDocument: mocks.openTextDocument,
       applyEdit: mocks.applyEdit,
       getWorkspaceFolder: vi.fn(() => ({ uri: { fsPath: '/workspace' } })),
@@ -147,6 +165,9 @@ describe('activation registration', () => {
     mocks.contextUpdatedListener = undefined
     mocks.textChangeListener = undefined
     mocks.closeListener = undefined
+    mocks.manifestCreateListener = undefined
+    mocks.manifestDeleteListener = undefined
+    mocks.handlePackageManifestLifecycle.mockReset().mockReturnValue({ packagePaths: [], documentPaths: [] })
     mocks.createSelect.mockClear().mockResolvedValue([])
     mocks.setConfiguration.mockClear()
     mocks.uiConfiguration = undefined
@@ -175,6 +196,42 @@ describe('activation registration', () => {
     })
     await vi.waitFor(() => expect(mocks.resolvePackagePath).toHaveBeenCalled())
     expect(mocks.detectSlots).not.toHaveBeenCalled()
+    ;(vscode.window.visibleTextEditors as any).length = 0
+  })
+
+  it('clears and rebuilds visible slot analysis after a nearer package manifest appears', async () => {
+    const document = {
+      languageId: 'vue',
+      version: 1,
+      isClosed: false,
+      uri: { fsPath: '/workspace/packages/child/App.vue', toString: () => 'file:///workspace/packages/child/App.vue' },
+      getText: () => '<template />',
+    }
+    const childContext = {
+      pkgPath: '/workspace/packages/child/package.json',
+      generation: 2,
+      revision: 1,
+      uiCompletions: {},
+      optionsComponents: { prefix: [] },
+    }
+    const vscode = await import('vscode')
+    ;(vscode.window.visibleTextEditors as any).push({ document })
+    mocks.handlePackageManifestLifecycle.mockReturnValue({ packagePaths: [], documentPaths: [document.uri.fsPath] })
+    mocks.ensureContext.mockResolvedValue(childContext)
+
+    const { activate } = await import('../src/index')
+    const context = { globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any
+    await activate(context)
+    mocks.manifestCreateListener?.({ fsPath: '/workspace/packages/child/package.json' })
+
+    await vi.waitFor(() => expect(mocks.detectSlots).toHaveBeenCalled())
+    expect(mocks.clearDocumentAnalysis).toHaveBeenCalledWith(document.uri)
+    expect(mocks.ensureContext).toHaveBeenCalledWith(document.uri.fsPath, context, mocks.detectSlots, false, '/workspace')
+    expect(mocks.detectSlots).toHaveBeenCalledWith(document, {}, {}, [], expect.objectContaining({
+      packagePath: childContext.pkgPath,
+      contextGeneration: 2,
+      contextRevision: 1,
+    }), expect.objectContaining({ currentDocumentPath: document.uri.fsPath }))
     ;(vscode.window.visibleTextEditors as any).length = 0
   })
 

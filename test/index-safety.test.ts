@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDependencyScopeOffset, getRefMembers, getRefVariableNames, hasComponentTag, hasRenderedComponentTag, selectScopedCompletions, supportsSlotAnalysis } from '../src/index'
+import { getDependencyScopeOffset, getHoverPropName, getRefMembers, getRefVariableNames, hasComponentTag, hasRenderedComponentTag, selectScopedCompletions, supportsSlotAnalysis } from '../src/index'
 
 describe('provider safety helpers', () => {
   it('limits slot analysis to Vue and Vine documents', () => {
@@ -8,6 +8,14 @@ describe('provider safety helpers', () => {
     expect(supportsSlotAnalysis(document('typescript', '/App.vine.ts'))).toBe(true)
     expect(supportsSlotAnalysis(document('typescriptreact', '/App.tsx'))).toBe(false)
     expect(supportsSlotAnalysis(document('svelte', '/App.svelte'))).toBe(false)
+  })
+
+  it('safely resolves hover names for Vue directives without static arguments', () => {
+    expect(getHoverPropName({ propName: true, props: [{ name: 'on' }] })).toBeUndefined()
+    expect(getHoverPropName({ propName: true, props: [{ name: 'bind' }] })).toBeUndefined()
+    expect(getHoverPropName({ propName: true, props: [{ name: 'on', arg: { content: 'event' } }] })).toBe('event')
+    expect(getHoverPropName({ propName: true, props: [{ name: 'bind', arg: { content: 'name' } }] })).toBe('name')
+    expect(getHoverPropName({ propName: 'disabled', props: [] })).toBe('disabled')
   })
 
   it('merges Vue script dependencies for template results and scopes script results', () => {

@@ -257,6 +257,18 @@ describe('utils reducer regressions', () => {
     expect(parentCompletion.documentation.value).not.toContain('[object Object]')
   })
 
+  it('computes required props once for resolved suggestion children', async () => {
+    const { componentsReducer } = await import('../../src/ui/utils')
+    const parent = { name: 'Parent', suggestions: ['Child'], props: { parentProp: { required: true, type: 'string' } } }
+    const child = { name: 'Child', props: { childProp: { required: true, type: 'string' } } }
+    const [config] = componentsReducer({ lib: 'fixture-lib', map: [[parent, 'Parent'], [child, 'Child']] as any })
+    const [completion] = await Promise.all(config.data()) as any[]
+
+    expect(completion.snippet.match(/childProp=/g)).toHaveLength(1)
+    const tabStops = [...completion.snippet.matchAll(/\$\{?(\d+)/g)].map(match => Number(match[1]))
+    expect(new Set(tabStops)).toEqual(new Set(Array.from({ length: Math.max(...tabStops) }, (_, index) => index + 1)))
+  })
+
   it('keeps snippet tab stops for missing, invalid, and circular suggestions', async () => {
     const { componentsReducer } = await import('../../src/ui/utils')
     const cases = [

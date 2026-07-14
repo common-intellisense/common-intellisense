@@ -133,6 +133,24 @@ const view = [Button, Input]
     expect(output).not.toContain('import type * as UI')
   })
 
+  it('does not promote a type-only default import over an existing value binding', () => {
+    const code = `import type Button from "ui"\nconst Button = LocalButton\n`
+    expect(createImportEdits(code, 'ui', ['Button'], 'default')).toEqual([])
+  })
+
+  it('does not promote a type-only namespace import over an existing value binding', () => {
+    const code = `import type * as UI from "ui"\nconst UI = createLocalUI()\n`
+    expect(createImportEdits(code, 'ui', ['UI'], 'as default')).toEqual([])
+  })
+
+  it('allows promotion when only mergeable type declarations use the same name', () => {
+    for (const declaration of ['interface Button { local: true }', 'namespace Button {}']) {
+      const code = `import type Button from "ui"\n${declaration}\n`
+      const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'default'))
+      expect(output).toContain('import Button from "ui"')
+    }
+  })
+
   it('promotes a type-only default while preserving named types', () => {
     const code = `import type Button, { ButtonProps } from "ui"\nexport default () => <Button />\n`
     const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'default'))
