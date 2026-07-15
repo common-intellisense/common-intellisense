@@ -494,16 +494,26 @@ function canCreateVueScript(code: string) {
     && !errors.some((error: any) => String(error?.message || error).includes('<script setup> cannot use the "src" attribute'))
 }
 
+function isVueComponentFactory(expression: ts.LeftHandSideExpression) {
+  return ts.isIdentifier(expression)
+    && (expression.text === 'defineComponent' || expression.text === 'defineNuxtComponent')
+}
+
 function getVueRegistrationEdits(sourceFile: ts.SourceFile, script: ScriptRegion, names: string[]): ImportEdit[] | null {
   const assignment = sourceFile.statements.find(ts.isExportAssignment)
   if (!assignment || assignment.isExportEquals)
     return null
   let object: ts.ObjectLiteralExpression | undefined
-  if (ts.isObjectLiteralExpression(assignment.expression))
+  if (ts.isObjectLiteralExpression(assignment.expression)) {
     object = assignment.expression
-  else if (ts.isCallExpression(assignment.expression) && assignment.expression.arguments[0] && ts.isObjectLiteralExpression(assignment.expression.arguments[0]))
+  }
+  else if (ts.isCallExpression(assignment.expression)
+    && isVueComponentFactory(assignment.expression.expression)
+    && assignment.expression.arguments[0]
+    && ts.isObjectLiteralExpression(assignment.expression.arguments[0])) {
     object = assignment.expression.arguments[0]
-  if (!object)
+  }
+  if (!object || object.properties.some(ts.isSpreadAssignment))
     return null
 
   const getStaticPropertyName = (name: ts.PropertyName | undefined) => {

@@ -4,6 +4,7 @@ import { isHTMLTag, isSVGTag } from '@vue/shared'
 export function isNativeTag(tag: string | undefined) {
   if (!tag)
     return false
-  const normalized = tag.toLowerCase()
-  return isHTMLTag(normalized) || isSVGTag(normalized)
+  if (tag !== tag.toLowerCase())
+    return false
+  return isHTMLTag(tag) || isSVGTag(tag)
 }

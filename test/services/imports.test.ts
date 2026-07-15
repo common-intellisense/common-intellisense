@@ -308,12 +308,22 @@ const Button = {}
     expect(output).not.toContain('<script setup')
   })
 
-  it('registers into an existing defineComponent components option', () => {
-    const vue = `<template><Button /></template>\n<script>\nexport default defineComponent({ components: { Existing } })\n</script>\n`
+  it.each(['defineComponent', 'defineNuxtComponent'])('registers into an existing %s components option', (factory) => {
+    const vue = `<template><Button /></template>\n<script>\nexport default ${factory}({ components: { Existing } })\n</script>\n`
     const output = applyEdits(vue, createImportEdits(vue, 'ui', ['Button'], 'specifier', true))
     expect(output).toContain('import { Button } from "ui"')
     expect(output).toContain('components: { Existing , Button }')
     expect(output).not.toContain('<script setup')
+  })
+
+  it.each([
+    'export default { ...options }',
+    'export default defineComponent({ ...options })',
+    'export default defineNuxtComponent({ components: {}, ...options })',
+    'export default factory({ components: {} })',
+  ])('declines unsafe Vue component registration for %s', (declaration) => {
+    const vue = `<script>\n${declaration}\n</script>\n`
+    expect(createImportEdits(vue, 'ui', ['Button'], 'specifier', true)).toEqual([])
   })
 
   it('preserves trailing commas when extending an Options API components object', () => {
