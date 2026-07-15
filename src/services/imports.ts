@@ -106,7 +106,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
       const promotedName = importWay === 'default'
         ? promotion.clause.name!.text
         : (promotion.clause.namedBindings as ts.NamespaceImport).name.text
-      if (collectRuntimeBindingConflicts(sourceFile, promotion.declaration).has(promotedName))
+      if (collectRuntimeBindingConflicts(sourceFile, promotion.declaration, importWay === 'default').has(promotedName))
         return []
       const additional = names.filter(name => name !== promotedName && !existing.has(name) && !occupied.has(name))
       const sourceText = JSON.stringify(source)
@@ -256,7 +256,7 @@ function findTypeOnlyPromotions(imports: ts.ImportDeclaration[], names: string[]
   return promotions
 }
 
-function collectRuntimeBindingConflicts(sourceFile: ts.SourceFile, ignoredImport: ts.ImportDeclaration) {
+function collectRuntimeBindingConflicts(sourceFile: ts.SourceFile, ignoredImport: ts.ImportDeclaration, allowNamespaceMerge: boolean) {
   const result = new Set<string>()
   const addBindingName = (name: ts.BindingName) => {
     if (ts.isIdentifier(name)) {
@@ -290,7 +290,12 @@ function collectRuntimeBindingConflicts(sourceFile: ts.SourceFile, ignoredImport
       for (const declaration of statement.declarationList.declarations)
         addBindingName(declaration.name)
     }
-    else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement)) && statement.name) {
+    else if ((ts.isFunctionDeclaration(statement)
+      || ts.isClassDeclaration(statement)
+      || ts.isEnumDeclaration(statement)
+      || ts.isInterfaceDeclaration(statement)
+      || ts.isTypeAliasDeclaration(statement)
+      || (!allowNamespaceMerge && ts.isModuleDeclaration(statement))) && statement.name) {
       result.add(statement.name.text)
     }
   }
@@ -330,7 +335,12 @@ function collectSpecifierConflicts(sourceFile: ts.SourceFile, ignoredImports: Se
       for (const declaration of statement.declarationList.declarations)
         addBindingName(declaration.name)
     }
-    else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name) {
+    else if ((ts.isFunctionDeclaration(statement)
+      || ts.isClassDeclaration(statement)
+      || ts.isEnumDeclaration(statement)
+      || ts.isModuleDeclaration(statement)
+      || ts.isInterfaceDeclaration(statement)
+      || ts.isTypeAliasDeclaration(statement)) && statement.name) {
       result.add(statement.name.text)
     }
   }
@@ -387,7 +397,12 @@ function collectTopLevelBindings(sourceFile: ts.SourceFile) {
       for (const declaration of statement.declarationList.declarations)
         addBindingName(declaration.name)
     }
-    else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name) {
+    else if ((ts.isFunctionDeclaration(statement)
+      || ts.isClassDeclaration(statement)
+      || ts.isEnumDeclaration(statement)
+      || ts.isModuleDeclaration(statement)
+      || ts.isInterfaceDeclaration(statement)
+      || ts.isTypeAliasDeclaration(statement)) && statement.name) {
       result.add(statement.name.text)
     }
   }

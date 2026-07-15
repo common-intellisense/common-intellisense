@@ -188,12 +188,46 @@ const view = [Button, Input]
     expect(createImportEdits(code, 'ui', ['UI'], 'as default')).toEqual([])
   })
 
-  it('allows promotion when only mergeable type declarations use the same name', () => {
-    for (const declaration of ['interface Button { local: true }', 'namespace Button {}']) {
+  it('does not promote a type-only default import over type declarations', () => {
+    for (const declaration of ['interface Button { local: true }', 'type Button = string', 'enum Button { Local }']) {
       const code = `import type Button from "ui"\n${declaration}\n`
-      const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'default'))
-      expect(output).toContain('import Button from "ui"')
+      expect(createImportEdits(code, 'ui', ['Button'], 'default')).toEqual([])
     }
+  })
+
+  it('allows a default import to merge with a namespace declaration', () => {
+    const code = `import type Button from "ui"\nnamespace Button {}\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'default'))
+    expect(output).toContain('import Button from "ui"')
+  })
+
+  it('does not promote type-only named imports over declarations', () => {
+    for (const declaration of ['interface Button { local: true }', 'type Button = string', 'enum Button { Local }', 'namespace Button {}']) {
+      const code = `import type { Button } from "ui"\n${declaration}\n`
+      expect(createImportEdits(code, 'ui', ['Button'], 'specifier')).toEqual([])
+    }
+  })
+
+  it('does not promote runtime imports over interface, type, or enum declarations', () => {
+    for (const importWay of ['default', 'specifier'] as const) {
+      for (const declaration of ['interface Button { local: true }', 'type Button = string', 'enum Button { Local }']) {
+        const code = `${declaration}\n`
+        expect(createImportEdits(code, 'ui', ['Button'], importWay)).toEqual([])
+      }
+    }
+  })
+
+  it('does not promote a type-only namespace import over a namespace declaration', () => {
+    const code = `import type * as UI from "ui"\nnamespace UI {}\n`
+    expect(createImportEdits(code, 'ui', ['UI'], 'as default')).toEqual([])
+  })
+
+  it('resolves unoccupied imports when another requested binding conflicts', () => {
+    const code = `interface Button { local: true }\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button', 'Input'], 'specifier'))
+
+    expect(output).toContain('import { Input } from "ui"')
+    expect(output).not.toContain('import { Button, Input } from "ui"')
   })
 
   it('promotes a type-only default while preserving named types', () => {
