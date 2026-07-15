@@ -10,12 +10,10 @@ describe('provider safety helpers', () => {
     expect(supportsSlotAnalysis(document('svelte', '/App.svelte'))).toBe(false)
   })
 
-  it('safely resolves hover names for Vue directives without static arguments', () => {
-    expect(getHoverPropName({ propName: true, props: [{ name: 'on' }] })).toBeUndefined()
-    expect(getHoverPropName({ propName: true, props: [{ name: 'bind' }] })).toBeUndefined()
-    expect(getHoverPropName({ propName: true, props: [{ name: 'on', arg: { content: 'event' } }] })).toBe('event')
-    expect(getHoverPropName({ propName: true, props: [{ name: 'bind', arg: { content: 'name' } }] })).toBe('name')
-    expect(getHoverPropName({ propName: 'disabled', props: [] })).toBe('disabled')
+  it('safely resolves hover names for Vue directives', () => {
+    expect(getHoverPropName({ propName: true })).toBeUndefined()
+    expect(getHoverPropName({ propName: undefined })).toBeUndefined()
+    expect(getHoverPropName({ propName: 'disabled' })).toBe('disabled')
   })
 
   it('merges Vue script dependencies for template results and scopes script results', () => {

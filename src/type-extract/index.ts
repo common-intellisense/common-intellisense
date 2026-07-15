@@ -2,14 +2,16 @@ import { existsSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { createRequire } from 'node:module'
 import process from 'node:process'
 import * as ts from 'typescript'
 import { getRootPath } from '@vscode-use/utils'
 import type { Component, EventItem, PropsItem, typeDetail, typeDetailItem } from '../ui/ui-type'
 import { componentsReducer, propsReducer } from '../ui/utils'
 import { fixedTagName } from '../ui/ui-utils'
+import { resolvePackageManifest } from '../services/package-manifest'
 import { typeCache } from './cache'
+
+type TypeExtractResult = Record<string, () => any>
 
 interface TypeExtractOptions {
   pkgName: string
@@ -44,7 +46,11 @@ const MAX_INLINE_TYPE_LENGTH = 240
 const MAX_INLINE_UNION_MEMBERS = 6
 const RESOLVE_EXTENSIONS = ['.d.ts', '.ts', '.tsx', '.js', '.mjs', '.cjs']
 
-export async function fetchFromTypes(options: TypeExtractOptions) {
+export function fetchFromTypes(options: TypeExtractOptions): Promise<TypeExtractResult | undefined> {
+  return fetchFromTypesInternal(options, 0, typeCache.getEpoch())
+}
+
+async function fetchFromTypesInternal(options: TypeExtractOptions, attempt: number, cacheEpoch: number): Promise<TypeExtractResult | undefined> {
   const { pkgName, uiName } = options
   if (!pkgName || !uiName)
     return
@@ -61,15 +67,9 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
         : options.resolveFrom
     }
   }
-  const requireBase = path.resolve(basePath, 'package.json')
-  const require = createRequire(requireBase)
-  let pkgJsonPath = ''
-  try {
-    pkgJsonPath = require.resolve(`${pkgName}/package.json`)
-  }
-  catch {
+  const pkgJsonPath = await resolvePackageManifest(pkgName, basePath)
+  if (!pkgJsonPath)
     return
-  }
 
   const pkgRoot = path.dirname(pkgJsonPath)
   const pkgRootReal = await fsp.realpath(pkgRoot)
@@ -93,11 +93,10 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
     return cached
 
   const pending = typeCache.getInFlight(cacheKey)
-  if (pending)
+  if (pending && attempt === 0)
     return pending
 
-  const cacheEpoch = typeCache.getEpoch()
-  const promise = (async () => {
+  const promise: Promise<TypeExtractResult | undefined> = (async () => {
     const rootNames = [
       typeEntry,
       ...(await pathExists(globalDts) ? [globalDts] : []),
@@ -155,8 +154,12 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
     const finalCacheKey = `${snapshotKey}::${finalSignature}::${uiName}`
     const checker = program.getTypeChecker()
     const components = collectComponents(program, checker, pkgRoot, typeEntry)
-    if (!components.length)
-      return
+    if (!components.length) {
+      const filesChangedDuringBuild = sourceChangedDuringRead || await didRecordedSourcesChange(sourceHashes)
+      return filesChangedDuringBuild && attempt < 1
+        ? fetchFromTypesInternal(options, attempt + 1, cacheEpoch)
+        : undefined
+    }
 
     const reactLikeCount = components.filter(c => c.reactLike).length
     const isReact = reactLikeCount > 0 && reactLikeCount >= Math.ceil(components.length / 2)
@@ -182,7 +185,9 @@ export async function fetchFromTypes(options: TypeExtractOptions) {
       [`${uiName}Raw`]: () => rawComponents,
     }
     const filesChangedDuringBuild = sourceChangedDuringRead || await didRecordedSourcesChange(sourceHashes)
-    if (typeCache.getEpoch() === cacheEpoch && !filesChangedDuringBuild) {
+    if (filesChangedDuringBuild)
+      return attempt < 1 ? fetchFromTypesInternal(options, attempt + 1, cacheEpoch) : undefined
+    if (typeCache.getEpoch() === cacheEpoch) {
       typeCache.setSnapshot(snapshotKey, packageSourceFiles)
       typeCache.set(finalCacheKey, result)
     }

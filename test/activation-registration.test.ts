@@ -173,6 +173,24 @@ describe('activation registration', () => {
     mocks.uiConfiguration = undefined
   })
 
+  it('routes context-required completions to the import command', async () => {
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    const registration = (mocks.registerCompletion.mock.calls as any[][]).find(call => typeof call[2] === 'function')
+    const postProcess = registration?.[2] as ((item: any) => any) | undefined
+    expect(postProcess).toBeTypeOf('function')
+    if (!postProcess)
+      throw new Error('completion post-processor was not registered')
+    for (const params of [
+      { isReact: false, requiresImport: true },
+      { isReact: true },
+    ]) {
+      const item = postProcess({ params, snippet: '<Button />', loc: {} })
+      expect(item.command.command).toBe('common-intellisense.import')
+    }
+  })
+
   it('does not analyze a nested document with its parent package context', async () => {
     const nestedDocument = {
       languageId: 'vue',

@@ -146,6 +146,7 @@ describe('utils reducer regressions', () => {
     })) as any[]
     expect(tsxButton.snippet).toContain('<Button')
     expect(tsxButton.params.data.name).toBe('Button')
+    expect(tsxButton.params.requiresImport).toBe(true)
 
     const [templateButton] = await Promise.all(unprefixed.data(undefined, {
       languageId: 'vue',
@@ -155,6 +156,25 @@ describe('utils reducer regressions', () => {
       uri: 'file:///Demo.vue',
     })) as any[]
     expect(templateButton.snippet).toContain('<el-button')
+    expect(templateButton.params.requiresImport).toBe(true)
+
+    const [templateDirect] = await Promise.all(components.data(undefined, {
+      languageId: 'vue',
+      hostFramework: 'vue',
+      syntax: 'template',
+      framework: 'vue',
+      uri: 'file:///Demo.vue',
+    })) as any[]
+    expect(templateDirect.params.requiresImport).toBe(false)
+
+    const [svelteButton] = await Promise.all(components.data(undefined, {
+      languageId: 'svelte',
+      hostFramework: 'svelte',
+      syntax: 'template',
+      framework: 'svelte',
+      uri: 'file:///Demo.svelte',
+    })) as any[]
+    expect(svelteButton.params.requiresImport).toBe(true)
   })
 
   it('uses the same Svelte event names for optional and required snippets', async () => {

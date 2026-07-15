@@ -114,6 +114,11 @@ const localSourceWatchers = new Map<string, { stop: () => void, timer?: ReturnTy
 const officialSourceTTL = 10 * 60 * 1000
 const customSourceTTL = 5 * 60 * 1000
 const sourceRetryDelays = [30_000, 2 * 60_000, 5 * 60_000]
+const legacySelectionAliases: Record<string, string> = {
+  nextui2: 'nextUi2',
+  nuxtui2: 'nuxtUi2',
+  arkUi4: 'arkVue4',
+}
 
 function getRetryDelay(failureCount: number) {
   return sourceRetryDelays[Math.min(Math.max(failureCount - 1, 0), sourceRetryDelays.length - 1)]
@@ -559,13 +564,15 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     formatToPkg.set(formatName, { pkgName: uiName, version: major, installedVersion, adapterMajor: major })
     selectionToAdapter.set(formatName, formatName)
     selectionToAdapter.set(selectionName, formatName)
+    if (declaredName === '@dcloudio/uni-ui')
+      selectionToAdapter.set('dcloudioUniUi', formatName)
     availableNames.push(formatName)
     adapterSources.set(formatName, [...(adapterSources.get(formatName) || []), declaredName, uiName])
   }
 
   const hasExplicitSelection = Array.isArray(selectedUIs) && !selectedUIs.includes('auto')
   const selected = hasExplicitSelection
-    ? selectedUIs.map(item => selectionToAdapter.get(item)).filter((item): item is string => !!item)
+    ? selectedUIs.map(item => selectionToAdapter.get(legacySelectionAliases[item] || item)).filter((item): item is string => !!item)
     : []
   const uiNames = hasExplicitSelection ? [...new Set(selected)] : availableNames
 
@@ -1110,12 +1117,12 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
   const pkg = await findUp('package.json', { cwd })
   if (!pkg)
     return
-  const alias = getAlias(pkg) || {}
   const pkgDir = path.dirname(pkg)
   let rootPkgPath = ''
   let rootPkg: any = null
   let isMonorepo = false
   const rootPath = workspaceRoot || getRootPath()
+  const alias = getAlias(pkg, rootPath) || {}
   if (rootPath) {
     const cached = rootPkgCache.get(rootPath)
     if (cached) {

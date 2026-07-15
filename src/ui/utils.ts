@@ -157,6 +157,8 @@ export interface FixParams {
   prefix: string
   dynamicLib: string
   importWay: string
+  requiresImport?: boolean
+  registerVueComponent?: boolean
   renderedTag?: string
   document?: DocumentEditIdentity
 }
@@ -796,6 +798,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             data: content,
             lib,
             isReact,
+            requiresImport: context?.syntax === 'jsx' || context?.hostFramework === 'svelte' || isReact,
             prefix,
             dynamicLib: itemDynamicLib || '',
             importWay: itemImportWay || 'specifier',
@@ -849,6 +852,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             data: { ...(content as any), name: (content as any).name?.slice(prefix.length) },
             lib,
             isReact: true,
+            requiresImport: true,
             prefix,
             dynamicLib: itemDynamicLib,
             importWay: itemImportWay,
@@ -906,6 +910,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         data: content,
         lib,
         isReact,
+        requiresImport: context?.syntax === 'jsx' || context?.hostFramework === 'svelte' || isReact,
         prefix,
         dynamicLib: itemDynamicLib,
         importWay: itemImportWay,

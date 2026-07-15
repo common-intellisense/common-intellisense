@@ -95,6 +95,18 @@ export interface OptionProps extends Omit<DefaultOptionType, 'label'> {
 import type { OptionProps } from './Option.js'
 export declare const SelectOption: (props: OptionProps) => any
 `)
+    const exportsRoot = path.join(tempRoot, 'node_modules', 'mock-exports-ui')
+    await fsp.mkdir(exportsRoot, { recursive: true })
+    await fsp.writeFile(path.join(exportsRoot, 'package.json'), JSON.stringify({
+      name: 'mock-exports-ui',
+      version: '1.0.0',
+      types: './index.d.ts',
+      exports: { '.': { types: './index.d.ts' } },
+    }))
+    await fsp.writeFile(path.join(exportsRoot, 'index.d.ts'), `
+export interface ExportButtonProps { disabled?: boolean }
+export declare const ExportButton: (props: ExportButtonProps) => any
+`)
     process.chdir(tempRoot)
   })
 
@@ -209,6 +221,14 @@ export declare const BazCard: DefineSetupFnComponent<BazProps, BazEmits>
     expect(first).toBeDefined()
     expect(second).toBeDefined()
     expect(first).toBe(second)
+  })
+
+  it('extracts types when package exports do not expose package.json', async () => {
+    const mod = await import('../../src/type-extract')
+    const result = await mod.fetchFromTypes({ pkgName: 'mock-exports-ui', uiName: 'mockExports1' })
+
+    expect(result).toBeDefined()
+    expect(result!.mockExports1Components().map((entry: any) => entry[0].name)).toContain('ExportButton')
   })
 
   it('resolves fallback module extensions for option props', async () => {

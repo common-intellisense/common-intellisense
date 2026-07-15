@@ -17,7 +17,7 @@ vi.mock('@vscode-use/utils', () => ({
   getLocale: () => 'en',
   getRootPath: () => '/repo',
   getConfiguration: (key: string) => key === 'common-intellisense.alias'
-    ? { '/repo/packages/a/package.json': { '@acme/ui': 'antd5' } }
+    ? { '${workspaceFolder}/packages/a/package.json': { '@acme/ui': 'antd5' } }
     : null,
   watchFile: () => () => {},
 }))
@@ -29,7 +29,7 @@ vi.mock('../../src/services/package-version', () => ({
 describe('package-scoped alias discovery', () => {
   it('detects a non-built-in dependency through the package alias map', async () => {
     const { findPkgUI } = await import('../../src/ui/ui-find')
-    const result = await findPkgUI('/repo/packages/a/src/App.vue')
+    const result = await findPkgUI('/repo/packages/a/src/App.vue', undefined, '/repo')
 
     expect(result?.uis).toEqual([['@acme/ui', '5.0.0']])
     expect(resolveVersion).toHaveBeenCalledWith('@acme/ui', '/repo/packages/a')

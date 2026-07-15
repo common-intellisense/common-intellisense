@@ -260,7 +260,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
           if ((prop.name === 'bind' || prop.name === 'on') && prop.exp && isInPosition(prop.exp.loc, position)) {
             return {
               tag,
-              propName: prop.exp?.content !== undefined,
+              propName: prop.arg?.isStatic === false ? undefined : prop.arg?.content,
               props,
               type: 'props',
               isInTemplate: true,

@@ -30,6 +30,19 @@ describe('package-version service', () => {
     await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.7')
   })
 
+  it('resolves packages whose exports do not expose package.json', async () => {
+    const pkgDir = path.join(tempDir, 'node_modules', 'export-locked-ui')
+    await fsp.mkdir(path.join(pkgDir, 'dist'), { recursive: true })
+    await fsp.writeFile(path.join(pkgDir, 'package.json'), JSON.stringify({
+      name: 'export-locked-ui',
+      version: '2.3.0',
+      exports: { '.': './dist/index.js' },
+    }))
+    await fsp.writeFile(path.join(pkgDir, 'dist', 'index.js'), 'module.exports = {}')
+
+    await expect(resolveInstalledPackageVersion('export-locked-ui', tempDir)).resolves.toBe('2.3.0')
+  })
+
   it('resolves npm aliases by their consuming dependency key', async () => {
     const pkgDir = path.join(tempDir, 'node_modules', 'antd')
     await fsp.mkdir(pkgDir, { recursive: true })

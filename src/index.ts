@@ -23,14 +23,8 @@ export function supportsSlotAnalysis(document: Pick<vscode.TextDocument, 'langua
   return document.languageId === 'vue' || document.uri.fsPath?.endsWith('.vine.ts') === true
 }
 
-export function getHoverPropName(result: { propName?: unknown, props?: Array<{ name?: unknown, arg?: { content?: unknown } }> }) {
-  if (result.propName !== true)
-    return typeof result.propName === 'string' ? result.propName : undefined
-
-  const firstProp = result.props?.[0]
-  const directiveName = firstProp?.name === 'on' ? 'on' : 'bind'
-  const directive = result.props?.find(prop => prop.name === directiveName)
-  return typeof directive?.arg?.content === 'string' ? directive.arg.content : undefined
+export function getHoverPropName(result: { propName?: unknown }) {
+  return typeof result.propName === 'string' ? result.propName : undefined
 }
 
 interface DocumentAnalysisCacheEntry {
@@ -698,7 +692,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const optionsComponents = packageContext.optionsComponents
     const componentsPrefix = optionsComponents.prefix
     const UiCompletions = packageContext.uiCompletions
-    const alias = getAlias(packageContext.pkgPath) || {}
+    const alias = getAlias(packageContext.pkgPath, packageContext.workspaceRoot) || {}
     const lineText = document.lineAt(position.line).text
     const p = position
     const preText = lineText.slice(0, position.character)
@@ -966,7 +960,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   }, (item: SubCompletionItem) => {
     if (!item.command) {
-      if (item.params?.isReact) {
+      if (item.params?.requiresImport ?? item.params?.isReact) {
         item.command = {
           title: 'common-intellisense-import',
           command: 'common-intellisense.import',
@@ -1003,7 +997,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const optionsComponents = packageContext.optionsComponents
       const componentsPrefix = optionsComponents.prefix
       const UiCompletions = packageContext.uiCompletions
-      const alias = getAlias(packageContext.pkgPath) || {}
+      const alias = getAlias(packageContext.pkgPath, packageContext.workspaceRoot) || {}
       const currentFileUrl = getDocumentPath(document)
       if (isExcluded(currentFileUrl))
         return
