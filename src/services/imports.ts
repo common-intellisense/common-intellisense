@@ -145,20 +145,36 @@ export function createImportEdits(code: string, source: string, dependencies: st
     if (promotions.length) {
       const promoted = new Set(promotions.flatMap(promotion => promotion.promotedNames))
       const additional = requested.filter(name => !promoted.has(name))
-      const edits = promotions.map((promotion, index) => {
-        const named = promotion.elements.map((element) => {
-          const text = getImportSpecifierText(element)
-          const isTypeOnly = promotion.declaration.importClause?.isTypeOnly || element.isTypeOnly
-          return isTypeOnly && !promotion.promotedNames.includes(element.name.text) ? `type ${text}` : text
-        })
-        if (index === 0)
-          named.push(...additional)
+      const edits: ImportEdit[] = []
+      for (const promotion of promotions) {
         const clause = promotion.declaration.importClause!
-        const prefix = !clause.isTypeOnly && clause.name ? `${clause.name.text}, ` : ''
-        const preservedTypeDefault = clause.isTypeOnly && clause.name ? `import type ${clause.name.text} from ${JSON.stringify(source)}\n` : ''
-        const text = `${preservedTypeDefault}import ${prefix}{ ${named.join(', ')} } from ${JSON.stringify(source)}`
-        return { start: script.offset + promotion.declaration.getStart(sourceFile), end: script.offset + promotion.declaration.end, text }
-      })
+        if (clause.isTypeOnly) {
+          const removal = getTypeKeywordRemovalEdit(script, sourceFile, clause)
+          if (!removal)
+            return []
+          edits.push(removal)
+          for (const element of promotion.elements) {
+            if (!promotion.promotedNames.includes(element.name.text)) {
+              const start = script.offset + element.getStart(sourceFile)
+              edits.push({ start, end: start, text: 'type ' })
+            }
+          }
+        }
+        else {
+          for (const element of promotion.elements) {
+            if (!promotion.promotedNames.includes(element.name.text))
+              continue
+            const removal = getTypeKeywordRemovalEdit(script, sourceFile, element)
+            if (!removal)
+              return []
+            edits.push(removal)
+          }
+        }
+      }
+      if (additional.length) {
+        const bindings = promotions[0].declaration.importClause!.namedBindings as ts.NamedImports
+        edits.push(...getNamedImportInsertionEdits(script, sourceFile, bindings, additional))
+      }
       return finish(edits, [...existing, ...promoted, ...additional])
     }
   }
@@ -171,38 +187,7 @@ export function createImportEdits(code: string, source: string, dependencies: st
     const editable = runtimeMatching.find(node => node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings))
     if (editable) {
       const bindings = editable.importClause!.namedBindings as ts.NamedImports
-      const bindingStart = bindings.getStart(sourceFile)
-      const bindingText = script.code.slice(bindingStart, bindings.end)
-      const multiline = bindingText.includes('\n')
-      if (multiline) {
-        const closingBrace = bindings.end - 1
-        const closingLineStart = script.code.lastIndexOf('\n', closingBrace - 1) + 1
-        const last = bindings.elements.at(-1)
-        const indentation = last
-          ? script.code.slice(script.code.lastIndexOf('\n', last.getStart(sourceFile) - 1) + 1, last.getStart(sourceFile)).match(/^\s*/)?.[0] || '  '
-          : `${script.code.slice(closingLineStart, closingBrace)}  `
-        const edits: ImportEdit[] = [{
-          start: script.offset + closingLineStart,
-          end: script.offset + closingLineStart,
-          text: `${indentation}${missing.join(`,\n${indentation}`)},\n`,
-        }]
-        // Insert the comma immediately after the last specifier so a trailing line
-        // comment remains attached to that specifier instead of the new binding.
-        if (last && !bindings.elements.hasTrailingComma) {
-          edits.push({
-            start: script.offset + last.end,
-            end: script.offset + last.end,
-            text: ',',
-          })
-        }
-        return finish(edits, [...existing, ...missing])
-      }
-      let insertion = bindings.end - 1
-      while (insertion > bindingStart && /\s/.test(script.code[insertion - 1]))
-        insertion--
-      const prefix = bindings.elements.length === 0 ? ' ' : bindings.elements.hasTrailingComma ? ' ' : ', '
-      const suffix = bindings.elements.length === 0 ? ' ' : ''
-      return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${prefix}${missing.join(', ')}${suffix}` }], [...existing, ...missing])
+      return finish(getNamedImportInsertionEdits(script, sourceFile, bindings, missing), [...existing, ...missing])
     }
 
     const defaultOnly = runtimeMatching.find(node => node.importClause?.name && !node.importClause.namedBindings)
@@ -225,17 +210,49 @@ export function createImportEdits(code: string, source: string, dependencies: st
   return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }], [...existing, ...missing])
 }
 
-function getTypeKeywordRemovalEdit(script: ScriptRegion, sourceFile: ts.SourceFile, clause: ts.ImportClause): ImportEdit | null {
+function getNamedImportInsertionEdits(script: ScriptRegion, sourceFile: ts.SourceFile, bindings: ts.NamedImports, names: string[]): ImportEdit[] {
+  if (!names.length)
+    return []
+  const bindingStart = bindings.getStart(sourceFile)
+  const bindingText = script.code.slice(bindingStart, bindings.end)
+  if (bindingText.includes('\n')) {
+    const closingBrace = bindings.end - 1
+    const closingLineStart = script.code.lastIndexOf('\n', closingBrace - 1) + 1
+    const last = bindings.elements.at(-1)
+    const indentation = last
+      ? script.code.slice(script.code.lastIndexOf('\n', last.getStart(sourceFile) - 1) + 1, last.getStart(sourceFile)).match(/^\s*/)?.[0] || '  '
+      : `${script.code.slice(closingLineStart, closingBrace)}  `
+    const edits: ImportEdit[] = [{
+      start: script.offset + closingLineStart,
+      end: script.offset + closingLineStart,
+      text: `${indentation}${names.join(`,\n${indentation}`)},\n`,
+    }]
+    if (last && !bindings.elements.hasTrailingComma) {
+      edits.push({
+        start: script.offset + last.end,
+        end: script.offset + last.end,
+        text: ',',
+      })
+    }
+    return edits
+  }
+  let insertion = bindings.end - 1
+  while (insertion > bindingStart && /\s/.test(script.code[insertion - 1]))
+    insertion--
+  const prefix = bindings.elements.length === 0 ? ' ' : bindings.elements.hasTrailingComma ? ' ' : ', '
+  const suffix = bindings.elements.length === 0 ? ' ' : ''
+  return [{ start: script.offset + insertion, end: script.offset + insertion, text: `${prefix}${names.join(', ')}${suffix}` }]
+}
+
+function getTypeKeywordRemovalEdit(script: ScriptRegion, sourceFile: ts.SourceFile, clause: ts.ImportClause | ts.ImportSpecifier): ImportEdit | null {
   const typeKeyword = clause.getChildren(sourceFile).find(node => node.kind === ts.SyntaxKind.TypeKeyword)
   if (!typeKeyword)
     return null
 
-  const nextToken = clause.getChildren(sourceFile).find(node => node.getStart(sourceFile) >= typeKeyword.end)
-  const trailingTrivia = nextToken ? script.code.slice(typeKeyword.end, nextToken.getStart(sourceFile)) : ''
-  const end = nextToken && /^\s*$/.test(trailingTrivia) ? nextToken.getStart(sourceFile) : typeKeyword.end
+  const trailingWhitespace = script.code.slice(typeKeyword.end).match(/^[ \t]*/)?.[0] || ''
   return {
     start: script.offset + typeKeyword.getStart(sourceFile),
-    end: script.offset + end,
+    end: script.offset + typeKeyword.end + trailingWhitespace.length,
     text: '',
   }
 }
@@ -259,7 +276,7 @@ function findTypeOnlyPromotions(imports: ts.ImportDeclaration[], names: string[]
   for (const declaration of imports) {
     const clause = declaration.importClause
     const bindings = clause?.namedBindings
-    if (!clause || !bindings || !ts.isNamedImports(bindings))
+    if (!clause || !bindings || !ts.isNamedImports(bindings) || (clause.isTypeOnly && clause.name))
       continue
     const promotedNames = bindings.elements
       .filter(element => requested.has(element.name.text) && (clause.isTypeOnly || element.isTypeOnly))
@@ -359,10 +376,6 @@ function collectSpecifierConflicts(sourceFile: ts.SourceFile, ignoredImports: Se
     }
   }
   return result
-}
-
-function getImportSpecifierText(element: ts.ImportSpecifier) {
-  return element.propertyName ? `${element.propertyName.text} as ${element.name.text}` : element.name.text
 }
 
 function getPrologueInsertion(sourceFile: ts.SourceFile, code: string) {

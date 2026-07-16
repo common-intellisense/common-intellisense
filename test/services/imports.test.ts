@@ -114,6 +114,49 @@ describe('import transforms', () => {
     expect(output).not.toContain('type Button as X')
   })
 
+  it('preserves named import attributes, comments, formatting, and unrelated type specifiers', () => {
+    const code = `import {
+  type /* keep-before */ Button /* keep-after */,
+  type Input,
+  Existing,
+} from "ui" with { type: "json" };
+`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button']))
+
+    expect(output).toBe(`import {
+  /* keep-before */ Button /* keep-after */,
+  type Input,
+  Existing,
+} from "ui" with { type: "json" };
+`)
+  })
+
+  it('preserves assert clauses when promoting a named type specifier', () => {
+    const code = `import { type Button, type Input } from 'ui' assert { type: 'json' };\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button']))
+
+    expect(output).toBe(`import { Button, type Input } from 'ui' assert { type: 'json' };\n`)
+  })
+
+  it('promotes one declaration-level type binding without rewriting its declaration', () => {
+    const code = `import type { Button, Input } from "ui" with { type: "json" };\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button']))
+
+    expect(output).toBe(`import { Button, type Input } from "ui" with { type: "json" };\n`)
+  })
+
+  it('preserves line breaks after declaration and specifier type keywords', () => {
+    const declaration = `import type\n{ Button, Input } from "ui";\n`
+    expect(applyEdits(declaration, createImportEdits(declaration, 'ui', ['Button']))).toBe(
+      `import \n{ Button, type Input } from "ui";\n`,
+    )
+
+    const inline = `import { type\nButton, type Input } from "ui";\n`
+    expect(applyEdits(inline, createImportEdits(inline, 'ui', ['Button']))).toBe(
+      `import { \nButton, type Input } from "ui";\n`,
+    )
+  })
+
   it('promotes requested bindings across multiple type-only declarations', () => {
     const code = `#!/usr/bin/env node
 'use client'

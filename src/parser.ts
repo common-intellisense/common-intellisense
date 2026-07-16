@@ -1387,6 +1387,16 @@ function findDynamicImportSource(node: any): string | null {
   return null
 }
 
+function forEachRuntimeImportSpecifier(declaration: any, callback: (specifier: any, source: string) => void) {
+  if (declaration?.type !== 'ImportDeclaration' || declaration.importKind === 'type' || typeof declaration.source?.value !== 'string')
+    return
+  for (const specifier of declaration.specifiers || []) {
+    if (specifier.type === 'ImportSpecifier' && specifier.importKind === 'type')
+      continue
+    callback(specifier, declaration.source.value)
+  }
+}
+
 function parseImportDepsBlock(content: string, lang?: string) {
   const deps: Record<string, string> = {}
   if (!content.trim())
@@ -1398,9 +1408,9 @@ function parseImportDepsBlock(content: string, lang?: string) {
     })
     traverse(ast as any, {
       ImportDeclaration(p: any) {
-        const source = p.node.source.value
-        for (const specifier of p.node.specifiers || [])
+        forEachRuntimeImportSpecifier(p.node, (specifier, source) => {
           deps[specifier.local.name] = source
+        })
       },
       VariableDeclarator(p: any) {
         const id = p.node.id
@@ -1766,17 +1776,15 @@ function createWrapperImportIndex(code: string): Map<string, WrapperImport> {
   try {
     const ast = babelParse(code, { sourceType: 'module', plugins: ['typescript', 'jsx'] }) as any
     for (const node of ast.program?.body || []) {
-      if (node.type !== 'ImportDeclaration' || typeof node.source?.value !== 'string')
-        continue
-      for (const specifier of node.specifiers || []) {
+      forEachRuntimeImportSpecifier(node, (specifier, source) => {
         const localName = specifier.local?.name
         if (!localName)
-          continue
+          return
         const importedName = specifier.type === 'ImportSpecifier'
           ? (specifier.imported?.name || specifier.imported?.value)
           : specifier.type === 'ImportNamespaceSpecifier' ? '*' : 'default'
-        imports.set(localName, { localName, importedName: String(importedName), source: node.source.value })
-      }
+        imports.set(localName, { localName, importedName: String(importedName), source })
+      })
     }
   }
   catch {}

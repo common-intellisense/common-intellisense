@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeAdapterManifestExports } from '../../src/services/adapter-manifest'
-import { propsReducer } from '../../src/ui/utils'
+import { componentsReducer, propsReducer } from '../../src/ui/utils'
 
 describe('data-only adapter manifest validation', () => {
   it('accepts valid component and props exports', () => {
@@ -11,7 +11,7 @@ describe('data-only adapter manifest validation', () => {
         lib: 'demo',
         map: [{
           name: 'Demo',
-          props: { disabled: { type: 'boolean', required: false, default: false } },
+          props: { disabled: { type: 'boolean', required: false, default: false }, size: { value: ['small', 'large'] } },
           events: [{ name: 'change', required: false, ignored: 'not-public' }],
           methods: [{ name: 'focus' }],
           exposed: [{ name: 'focus' }],
@@ -23,6 +23,7 @@ describe('data-only adapter manifest validation', () => {
     expect(exportsData.demo.map[0].props.disabled.type).toBe('boolean')
     expect(exportsData.demoComponents.map[0][0]).toBe('Demo')
     expect(exportsData.demo.map[0].events[0].required).toBe(false)
+    expect(exportsData.demo.map[0].props.size.value).toEqual(['small', 'large'])
     expect(exportsData.demo.map[0].events[0].ignored).toBeUndefined()
   })
 
@@ -82,6 +83,24 @@ describe('data-only adapter manifest validation', () => {
     expect(reduced.A.completions[0]({ languageId: 'vue', framework: 'vue', syntax: 'template', uri: '' })).toBeTruthy()
   })
 
+  it('limits data-only component manifests before eager completion rendering', async () => {
+    const makeMap = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => [`${prefix}${index}`, `${prefix} ${index}`])
+    const boundary = normalizeAdapterManifestExports({
+      demoComponents: { lib: 'demo', map: makeMap(500, 'Demo') },
+    }, 'fixture') as any
+    const [provider] = componentsReducer(boundary.demoComponents)
+
+    expect(await Promise.all(provider.data(undefined, { languageId: 'vue', framework: 'vue', uri: '' }))).toHaveLength(500)
+    expect(() => normalizeAdapterManifestExports({
+      demoComponents: { lib: 'demo', map: makeMap(501, 'Demo') },
+    }, 'fixture')).toThrow(/Invalid adapter manifest field/)
+    expect(() => normalizeAdapterManifestExports({
+      firstComponents: { lib: 'first', map: makeMap(500, 'First') },
+      secondComponents: { lib: 'second', map: makeMap(500, 'Second') },
+      thirdComponents: { lib: 'third', map: makeMap(1, 'Third') },
+    }, 'fixture')).toThrow(/Invalid adapter manifest field/)
+  })
+
   it.each([
     ...['__proto__', 'prototype', 'constructor', 'then', 'icons'].map(name => ({ uiName: 'demo', lib: 'demo', map: [{ name }] })),
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { disabled: null } }] },
@@ -89,6 +108,13 @@ describe('data-only adapter manifest validation', () => {
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', exposed: [{ name: 'focus', version: 3 }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', suggestions: [{ name: 42 }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { related: [42] } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { value: { unexpected: true } } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { value: [1, 2] } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { value: 1 } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { value: null } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', suggestions: Array.from({ length: 251 }, (_, index) => `Item${index}`) }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { related: Array.from({ length: 251 }, (_, index) => `prop${index}`) } } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', typeDetail: { options: Array.from({ length: 251 }, (_, index) => ({ name: `item${index}` })) } }] },
     { lib: 'demo', directives: {}, map: [['Demo', 'Demo']] },
     { lib: 'demo', directives: [{ name: 'loading', params: [{ name: 'delay' }] }], map: [['Demo', 'Demo']] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { ':': { type: 'string' } } }] },

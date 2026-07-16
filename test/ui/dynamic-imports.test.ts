@@ -21,6 +21,7 @@ const wrapperIdentityFiles = [
   ['DefaultSubpathButton.tsx', `import Button from 'antd/es/button'\nexport default () => <Button />`],
   ['NamespaceButton.tsx', `import * as UI from '@vendor/ui'\nexport default () => <UI.Button />`],
   ['UnknownButton.tsx', `import { Button } from '@unknown/ui'\nexport default () => <Button />`],
+  ['TypeOnlyButton.tsx', `import type { Button } from '@unknown/ui'\nexport default () => <Button />`],
   ['VueAliasButton.vue', `<script setup>import { Button as BaseButton } from '@vendor/ui'</script><template><BaseButton /></template>`],
 ] as const
 
@@ -222,5 +223,6 @@ export default {}
     for (const name of ['BareAliasButton.tsx', 'DefaultSubpathButton.tsx'])
       await expect(resolve(name)).resolves.toMatchObject({ component: antd })
     await expect(resolve('UnknownButton.tsx')).resolves.toMatchObject({ component: undefined })
+    await expect(resolve('TypeOnlyButton.tsx')).resolves.toMatchObject({ component: wrong })
   })
 })

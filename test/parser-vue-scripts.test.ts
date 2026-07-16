@@ -136,6 +136,16 @@ const AsyncButton = defineAsyncComponent(() => import('./AsyncButton.vue'))
     })
   })
 
+  it('ignores declaration-level and mixed type-only imports in component dependencies', () => {
+    const code = `<script setup lang="ts">
+import type { Button } from './types'
+import type DefaultType from './default-type'
+import { type Input, Card } from './mixed'
+</script>`
+
+    expect(getImportDeps(code)).toEqual({ Card: './mixed' })
+  })
+
   it('uses either active block and aggregates refs from both blocks', () => {
     const code = `<script>
 const normalRef = ref()

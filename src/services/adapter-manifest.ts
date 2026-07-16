@@ -1,9 +1,9 @@
 type PlainRecord = Record<string, unknown>
 
-const maxComponentsPerLibrary = 5_000
-const maxComponentMembers = 1_000
-const maxAggregateComponents = 10_000
-const maxDomainStringLength = 100_000
+const maxComponentsPerLibrary = 500
+const maxComponentMembers = 250
+const maxAggregateComponents = 1_000
+const maxDomainStringLength = 10_000
 const unsafeObjectKeys = new Set(['__proto__', 'prototype', 'constructor', 'then'])
 const reservedComponentNames = new Set([...unsafeObjectKeys, 'icons'])
 
@@ -76,6 +76,8 @@ function normalizeTypeDetail(value: unknown, path: string) {
     return undefined
   if (!isPlainRecord(value))
     invalid(path)
+  if (Object.keys(value).length > maxComponentMembers)
+    invalid(path)
   const normalized: PlainRecord = Object.create(null)
   for (const [key, detail] of Object.entries(value)) {
     if (unsafeObjectKeys.has(key))
@@ -84,7 +86,7 @@ function normalizeTypeDetail(value: unknown, path: string) {
       normalized[key] = detail
       continue
     }
-    if (!Array.isArray(detail))
+    if (!Array.isArray(detail) || detail.length > maxComponentMembers)
       invalid(`${path}.${key}`)
     normalized[key] = detail.map((entry, index) => {
       if (!isPlainRecord(entry))
@@ -101,7 +103,7 @@ function normalizeTypeDetail(value: unknown, path: string) {
 function normalizeSuggestions(value: unknown, path: string) {
   if (value === undefined)
     return []
-  if (!Array.isArray(value))
+  if (!Array.isArray(value) || value.length > maxComponentMembers)
     invalid(path)
   return value.map((entry, index) => {
     if (typeof entry === 'string')
@@ -157,10 +159,22 @@ function normalizeProp(prop: PlainRecord, path: string) {
     validateOptionalString(prop, key, path)
   for (const key of ['required', 'foreach'])
     validateOptionalBoolean(prop, key, path)
-  if (prop.related !== undefined && (!Array.isArray(prop.related) || prop.related.some(item => typeof item !== 'string')))
+  if (prop.related !== undefined && (!Array.isArray(prop.related)
+    || prop.related.length > maxComponentMembers
+    || prop.related.some(item => typeof item !== 'string' || item.length > maxDomainStringLength))) {
     invalid(`${path}.related`)
-  if (Array.isArray(prop.value) && prop.value.some(item => typeof item !== 'string'))
-    invalid(`${path}.value`)
+  }
+  if (prop.value !== undefined) {
+    if (typeof prop.value === 'string') {
+      if (prop.value.length > maxDomainStringLength)
+        invalid(`${path}.value`)
+    }
+    else if (!Array.isArray(prop.value)
+      || prop.value.length > maxComponentMembers
+      || prop.value.some(item => typeof item !== 'string' || item.length > maxDomainStringLength)) {
+      invalid(`${path}.value`)
+    }
+  }
   const typeDetail = normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`)
   for (const [key, value] of Object.entries(prop)) {
     if (key.startsWith('$') && typeof value !== 'string')
