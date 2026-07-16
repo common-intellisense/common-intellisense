@@ -42,6 +42,8 @@ export interface CompletionRenderContext {
   contextRevision?: number
   sourceId?: string
   sourceSignature?: string
+  /** Template-only prefix override; import/export names remain unchanged. */
+  renderedPrefix?: string
 }
 export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
 
@@ -67,13 +69,20 @@ function getSyntaxFramework(context: CompletionRenderContext | undefined, fallba
   return context?.framework || fallback
 }
 
-export function renderComponentTag(componentName: string, framework: CompletionFramework, isSeparatedByHyphen: boolean) {
+export function renderComponentTag(componentName: string, framework: CompletionFramework, isSeparatedByHyphen: boolean, adapterPrefix = '', renderedPrefix?: string) {
   const usesVueTemplateSyntax = framework === 'vue' || framework === 'vine'
-  return usesVueTemplateSyntax && isSeparatedByHyphen ? hyphenate(componentName) : componentName
+  if (!usesVueTemplateSyntax || renderedPrefix === undefined)
+    return usesVueTemplateSyntax && isSeparatedByHyphen ? hyphenate(componentName) : componentName
+
+  const baseName = adapterPrefix && componentName.toLowerCase().startsWith(adapterPrefix.toLowerCase())
+    ? componentName.slice(adapterPrefix.length)
+    : componentName
+  const renderedName = `${renderedPrefix}${baseName}`
+  return isSeparatedByHyphen ? hyphenate(renderedName) : renderedName
 }
 
 function getRenderedTagFromSnippet(snippet: string) {
-  return snippet.trimStart().match(/^<([^\s/>$]+)/)?.[1]
+  return snippet.trimStart().match(/^<([^\s/>$]+)(?=[$\s/>])/)?.[1]
 }
 
 export function renderSvelteEventPropName(event: { name: string, kind?: 'dom' | 'component' }) {
@@ -774,8 +783,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             itemDynamicLib = content.dynamicLib || dynamicLib
             itemImportWay = content.importWay || importWay
 
-            const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen)
-            snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
+            const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen, prefix, context?.renderedPrefix)
+            snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent, new Set(), prefix, context?.renderedPrefix)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
@@ -832,8 +841,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
             itemImportWay = content.importWay || importWay
             const importName = content.name.slice(prefix.length)
             const renderedName = framework === 'react' ? importName : content.name
-            snippet = await getTemplateStr(componentByName, { ...content, name: renderedName }, 0, framework, isSeperatorByHyphen, parent)
-            _content = `${renderComponentTag(renderedName, framework, isSeperatorByHyphen)}  ${content.tag || detail}`
+            snippet = await getTemplateStr(componentByName, { ...content, name: renderedName }, 0, framework, isSeperatorByHyphen, parent, new Set(), prefix, context?.renderedPrefix)
+            _content = `${renderComponentTag(renderedName, framework, isSeperatorByHyphen, prefix, context?.renderedPrefix)}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
           else {
@@ -887,8 +896,8 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       if (typeof content === 'object') {
         itemDynamicLib = content.dynamicLib || dynamicLib
         itemImportWay = content.importWay || importWay
-        snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent)
-        const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen)
+        snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent, new Set(), prefix, context?.renderedPrefix)
+        const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen, prefix, context?.renderedPrefix)
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
       }
@@ -922,6 +931,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
         dynamicLib: itemDynamicLib,
         importWay: itemImportWay,
         registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
+        renderedTag: getRenderedTagFromSnippet(snippet),
         document: getCompletionDocumentIdentity(context),
       }
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -1275,8 +1285,8 @@ export function generateScriptNames(name: string): [string[], string] {
 }
 
 // 防止递归出现重复tag
-async function getTemplateStr(componentByName: Map<string, Component>, content: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
-  const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen)
+async function getTemplateStr(componentByName: Map<string, Component>, content: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>(), adapterPrefix = '', renderedPrefix?: string): Promise<string> {
+  const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen, adapterPrefix, renderedPrefix)
   if (tags.has(tag))
     return `$${++index}`
 
@@ -1284,21 +1294,21 @@ async function getTemplateStr(componentByName: Map<string, Component>, content: 
   tags.add(tag)
 
   const isFirst = tags.size > 1
-  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, componentByName, __index, framework, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
+  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, componentByName, __index, framework, isSeperatorByHyphen, parent, tags, adapterPrefix, renderedPrefix)}</${tag}>${isFirst ? '\n' : ''}`
 }
 
-async function getSuggestionsTemplateStr(content: any, componentByName: Map<string, Component>, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
+async function getSuggestionsTemplateStr(content: any, componentByName: Map<string, Component>, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>, adapterPrefix = '', renderedPrefix?: string) {
   if (content.suggestions?.length) {
     const suggestionName = normalizeSuggestionName(content.suggestions[0])
     if (!suggestionName)
       return `$${++index}`
     const suggestion = componentByName.get(normalizeSuggestionLookupName(suggestionName))
-    const suggestionTag = renderComponentTag(suggestionName, framework, isSeperatorByHyphen)
+    const suggestionTag = renderComponentTag(suggestionName, framework, isSeperatorByHyphen, adapterPrefix, renderedPrefix)
 
     if (suggestion) {
       if (tags.has(suggestionTag))
         return `$${index + 1}`
-      return getTemplateStr(componentByName, suggestion, index, framework, isSeperatorByHyphen, parent, tags)
+      return getTemplateStr(componentByName, suggestion, index, framework, isSeperatorByHyphen, parent, tags, adapterPrefix, renderedPrefix)
     }
     tags.add(suggestionTag)
     return `\n  <${suggestionTag}$${index + 1}>$${index + 2}</${suggestionTag}>\n`

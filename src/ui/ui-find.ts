@@ -1,5 +1,6 @@
 import type * as vscode from 'vscode'
 import type { OptionsComponents, PropsConfig, Uis } from './types'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -69,6 +70,9 @@ export interface PackageContext {
   sourceSignatures: Map<string, string>
   officialModel: ContextModel
   customSourceSnapshots: CustomSourceSnapshots
+  manifestSignature?: string
+  rootManifestPath?: string
+  rootManifestSignature?: string
 }
 
 const contexts = new Map<string, PackageContext>()
@@ -201,6 +205,18 @@ function getContextKey(workspaceRoot: string, pkgPath: string) {
 
 function getContextKeyForContext(context: Pick<PackageContext, 'pkgPath' | 'workspaceRoot'>) {
   return getContextKey(context.workspaceRoot, context.pkgPath)
+}
+
+async function getManifestSignature(pkgPath: string) {
+  return createHash('sha256').update(await fsp.readFile(pkgPath, 'utf8')).digest('hex')
+}
+
+async function isManifestSnapshotCurrent(context: PackageContext) {
+  if (context.manifestSignature !== await getManifestSignature(context.pkgPath))
+    return false
+  if (context.rootManifestPath && context.rootManifestSignature !== await getManifestSignature(context.rootManifestPath))
+    return false
+  return true
 }
 
 function nextGeneration(key: string) {
@@ -454,8 +470,14 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
     return existing
   }
   const loading = contextLoads.get(contextKey)
-  if (loading)
-    return loading.task
+  if (loading) {
+    const context = await loading.task
+    if (context && contexts.get(contextKey) === context && generations.get(contextKey) === context.generation) {
+      documentPackageCache.set(cwd, pkgPath)
+      documentContextCache.set(cwd, contextKey)
+    }
+    return context
+  }
 
   const epoch = registryEpoch
   const generation = nextGeneration(contextKey)
@@ -466,20 +488,44 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   load.workspaceRoot = resolvedWorkspaceRoot
   load.task = (async () => {
     try {
-      const context = await buildContext(cwd, extensionContext, detectSlots, generation, resolvedWorkspaceRoot)
-      if (!context || registryEpoch !== epoch || generations.get(contextKey) !== generation)
-        return
-      const onChange = () => {
-        invalidatePackageContext(contextKey, true)
-        void ensureContextForPath(cwd, extensionContext, detectSlots, false, resolvedWorkspaceRoot)
-          .catch(error => logger.error(`Failed to rebuild package context: ${String(error)}`))
-      }
-      registerPackageWatchers(contextKey, context, onChange)
-      if (registryEpoch !== epoch || generations.get(contextKey) !== generation) {
+      let context = await buildContext(cwd, extensionContext, detectSlots, generation, resolvedWorkspaceRoot)
+      let manifestBuildAttempts = 1
+      while (context) {
+        if (registryEpoch !== epoch || generations.get(contextKey) !== generation)
+          return
+        const onChange = () => {
+          invalidatePackageContext(contextKey, true)
+          void ensureContextForPath(cwd, extensionContext, detectSlots, false, resolvedWorkspaceRoot)
+            .catch(error => logger.error(`Failed to rebuild package context: ${String(error)}`))
+        }
+        registerPackageWatchers(contextKey, context, onChange)
+        let manifestSnapshotCurrent: boolean
+        try {
+          manifestSnapshotCurrent = await isManifestSnapshotCurrent(context)
+        }
+        catch (error) {
+          disposePackageWatcher(contextKey, context.pkgPath)
+          removeRootPackageSubscriber(contextKey)
+          throw error
+        }
+        if (registryEpoch !== epoch || generations.get(contextKey) !== generation) {
+          disposePackageWatcher(contextKey, context.pkgPath)
+          removeRootPackageSubscriber(contextKey)
+          return
+        }
+        if (manifestSnapshotCurrent)
+          break
         disposePackageWatcher(contextKey, context.pkgPath)
         removeRootPackageSubscriber(contextKey)
-        return
+        urlCache.delete(cwd)
+        clearPackageVersionCache()
+        clearTypeCache()
+        if (manifestBuildAttempts++ >= 3)
+          throw new Error(`Package manifest kept changing while loading: ${context.pkgPath}`)
+        context = await buildContext(cwd, extensionContext, detectSlots, generation, resolvedWorkspaceRoot, true)
       }
+      if (!context || registryEpoch !== epoch || generations.get(contextKey) !== generation)
+        return
       touchContext(contextKey, context)
       documentPackageCache.set(cwd, context.pkgPath)
       documentContextCache.set(cwd, contextKey)
@@ -608,6 +654,9 @@ async function buildContext(cwd: string, extensionContext: vscode.ExtensionConte
     pkgPath: pkg,
     workspaceRoot,
   }, cwd, generation)
+  context.manifestSignature = discovered.manifestSignature
+  context.rootManifestPath = discovered.rootManifestPath
+  context.rootManifestSignature = discovered.rootManifestSignature
   logger.info(`findUI: ${uis.map(ui => ui.join('@')).join(' | ')}`)
   return context
 }
@@ -1135,8 +1184,9 @@ async function publishContextEnhancement(context: PackageContext, expectedEpoch:
 export function mergeComponents(target: OptionsComponents, components: any[], userPrefix: Record<string, string>, originNames: string[], fallbackName: string, sourceId = fallbackName, completionSourceId?: string, sourceSignature?: string) {
   for (const component of components) {
     let { prefix, data, directives, lib } = component
-    if (userPrefix?.[lib])
-      prefix = userPrefix[lib]
+    const renderedPrefix = Object.prototype.hasOwnProperty.call(userPrefix || {}, lib) ? userPrefix[lib] : undefined
+    if (renderedPrefix !== undefined)
+      prefix = renderedPrefix
     const providerKey = `${sourceId}\0${lib}\0${prefix}`
     target.providerKeys ||= new Set()
     if (target.providerKeys.has(providerKey))
@@ -1147,7 +1197,11 @@ export function mergeComponents(target: OptionsComponents, components: any[], us
     if (!target.prefix.includes(prefix))
       target.prefix.push(prefix)
     const providers = Array.isArray(data) ? data : [data]
-    target.data.push(...providers.map((provider: any) => (parent: any, context: any) => provider(parent, completionSourceId ? { ...context, sourceId: completionSourceId, sourceSignature } : context)))
+    target.data.push(...providers.map((provider: any) => (parent: any, context: any) => provider(parent, {
+      ...context,
+      ...(renderedPrefix !== undefined ? { renderedPrefix } : {}),
+      ...(completionSourceId ? { sourceId: completionSourceId, sourceSignature } : {}),
+    })))
     target.directivesMap[fallbackName] = directives
   }
 }
@@ -1258,6 +1312,7 @@ export async function findPkgUI(cwd?: string, _onChange?: () => void, workspaceR
   const pkgDir = path.dirname(pkg)
   let rootPkgPath = ''
   let rootPkg: any = null
+  let rootManifestSignature: string | undefined
   let isMonorepo = false
   const rootPath = workspaceRoot || getRootPath()
   const alias = getAlias(pkg, rootPath) || {}
@@ -1269,7 +1324,9 @@ export async function findPkgUI(cwd?: string, _onChange?: () => void, workspaceR
       // Re-read the small manifest so dependency changes cannot reuse stale data.
       if (rootPkgPath && rootPkgPath !== pkg) {
         try {
-          rootPkg = JSON.parse(await fsp.readFile(rootPkgPath, 'utf8'))
+          const rootManifestText = await fsp.readFile(rootPkgPath, 'utf8')
+          rootManifestSignature = createHash('sha256').update(rootManifestText).digest('hex')
+          rootPkg = JSON.parse(rootManifestText)
           isMonorepo = await computeMonorepoState(rootPath, rootPkg)
           cached.rootPkg = rootPkg
           cached.isMonorepo = isMonorepo
@@ -1286,7 +1343,9 @@ export async function findPkgUI(cwd?: string, _onChange?: () => void, workspaceR
       rootPkgPath = path.resolve(rootPath, 'package.json')
       if (rootPkgPath !== pkg) {
         try {
-          rootPkg = JSON.parse(await fsp.readFile(rootPkgPath, 'utf8'))
+          const rootManifestText = await fsp.readFile(rootPkgPath, 'utf8')
+          rootManifestSignature = createHash('sha256').update(rootManifestText).digest('hex')
+          rootPkg = JSON.parse(rootManifestText)
           isMonorepo = await computeMonorepoState(rootPath, rootPkg)
         }
         catch {}
@@ -1295,7 +1354,9 @@ export async function findPkgUI(cwd?: string, _onChange?: () => void, workspaceR
     }
   }
 
-  const manifest = JSON.parse(await fsp.readFile(pkg, 'utf8'))
+  const manifestText = await fsp.readFile(pkg, 'utf8')
+  const manifestSignature = createHash('sha256').update(manifestText).digest('hex')
+  const manifest = JSON.parse(manifestText)
   const dependencyRootPkg = isMonorepo ? rootPkg : null
   const { localDependencies, dependencies: deps } = collectDependencyScopes(manifest, dependencyRootPkg)
   const aliasUiNames = Object.keys(alias)
@@ -1320,7 +1381,14 @@ export async function findPkgUI(cwd?: string, _onChange?: () => void, workspaceR
     }
     result.push([key, version])
   }
-  return { pkg, uis: result }
+  return {
+    pkg,
+    uis: result,
+    manifestSignature,
+    ...(dependencyRootPkg && rootManifestSignature
+      ? { rootManifestPath: rootPkgPath, rootManifestSignature }
+      : {}),
+  }
 }
 
 function isSameOrWithin(target: string, parent: string) {

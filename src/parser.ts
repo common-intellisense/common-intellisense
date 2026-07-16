@@ -102,8 +102,8 @@ export function parser(code: string, position: vscode.Position, documentContext:
       return
     if (!result.refs?.length || !result.template)
       return result
-    const refsMap = findRefs(result.template, result.refs)
-    return Object.assign(result, { refsMap })
+    const templateRefsMap = findRefs(result.template, result.refs)
+    return Object.assign(result, { refsMap: { ...templateRefsMap, ...(result.refsMap || {}) } })
   }
   if (['javascript', 'javascriptreact', 'typescript', 'typescriptreact'].includes(languageId || '') || /^(?:ts|js|jsx|tsx)$/.test(suffix || ''))
     return parserJSX(code, position)
@@ -112,6 +112,21 @@ export function parser(code: string, position: vscode.Position, documentContext:
     return parserSvelte(code, position)
 
   return true
+}
+
+function collectJsxRefMap(code: string) {
+  const sourceFile = ts.createSourceFile('vue-script.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const refsMap: Record<string, string> = {}
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const ref = node.attributes.properties.find(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(sourceFile) === 'ref')
+      if (ref && ts.isJsxAttribute(ref) && ref.initializer && ts.isJsxExpression(ref.initializer) && ref.initializer.expression && ts.isIdentifier(ref.initializer.expression))
+        refsMap[ref.initializer.expression.text] = node.tagName.getText(sourceFile)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return refsMap
 }
 
 function collectVueTemplateRefs(scripts: Array<{ content?: string } | null | undefined>) {
@@ -140,8 +155,10 @@ export function transformVue(code: string, position: vscode.Position, offset = 0
   const activeScriptLang = activeScript?.lang?.toLowerCase()
   if (activeScript && (activeScriptLang === 'tsx' || activeScriptLang === 'jsx')) {
     const relativeOffset = Math.max(0, Math.min(cursorOffset - activeScript.loc.start.offset, activeScript.content.length))
-    const result = parserJSX(activeScript.content, getSourcePosition(activeScript.content, relativeOffset))
+    const result = parserJSX(activeScript.content, getSourcePosition(activeScript.content, relativeOffset)) || { type: 'script', refsMap: {}, refs: [] }
     if (result) {
+      result.refsMap = { ...collectJsxRefMap(activeScript.content), ...(result.refsMap || {}) }
+      result.refs = [...(result.refs || []), ...collectVueTemplateRefs([activeScript])]
       result.loc = activeScript.loc
       result.template = template
       result.hostFramework = 'vue'

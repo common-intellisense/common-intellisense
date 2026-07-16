@@ -15,7 +15,6 @@ import { createFakeProgress, getConfiguration, getLocale, getRootPath, message }
 import { componentsReducer, propsReducer } from '../ui/utils'
 import { logger } from '../ui/ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
-import { getPrefix } from '../ui/ui-utils'
 import { fetchFromTypes } from '../type-extract'
 import { normalizeAdapterManifestExports } from './adapter-manifest'
 import { runLegacyAdapterInWorker } from './legacy-adapter-worker'
@@ -436,11 +435,15 @@ export function validateLegacyAdapterLimits(keys: string[], resultSizes: number[
   return totalResultSize
 }
 
+function assertAdapterInputSize(content: string, source: string) {
+  if (Buffer.byteLength(content, 'utf8') > maxRemoteScriptSize)
+    throw new Error(`Adapter is too large: ${source}`)
+}
+
 async function evaluateAdapter(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean) {
   if (typeof scriptContent !== 'string')
     throw new Error(`Adapter is empty: ${source}`)
-  if (scriptContent.length > maxRemoteScriptSize)
-    throw new Error(`Adapter is too large: ${source}`)
+  assertAdapterInputSize(scriptContent, source)
   // Normalize one UTF-8 BOM for parsing/evaluation. Source signatures remain
   // based on the original bytes, so adding or removing a BOM still invalidates.
   const normalizedContent = scriptContent.charCodeAt(0) === 0xFEFF ? scriptContent.slice(1) : scriptContent
@@ -753,9 +756,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
           }
           const data = exportsData[key]
           if (key.endsWith('Components')) {
-            const lib = key.slice(0, -'Components'.length)
             result[key] = (runtimeOptions?: AdapterRuntimeOptions) => {
-              const userPrefix = getPrefix?.() as Record<string, string> | undefined
               const reducerOptions = data && typeof data === 'object' && !Array.isArray(data)
                 ? {
                     ...(data as any),
@@ -763,13 +764,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
                     adapterMajor: runtimeOptions?.adapterMajor ?? options?.adapterMajor,
                   }
                 : data as any
-              let components = componentsReducer(reducerOptions)
-
-              if (userPrefix && userPrefix[lib]) {
-                const customPrefix = userPrefix[lib]
-                components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
-              }
-              return components
+              return componentsReducer(reducerOptions)
             }
           }
           else {
@@ -1129,8 +1124,9 @@ async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSo
   if (needsRefresh) {
     try {
       const fetched = await fetchRemoteText(requestUri)
-      if (typeof fetched !== 'string' || fetched.length > maxRemoteScriptSize)
+      if (typeof fetched !== 'string')
         throw new Error(`Remote adapter is invalid or too large: ${displayName}`)
+      assertAdapterInputSize(fetched, displayName)
       if (sourceEpoch !== epoch)
         throw new Error(`Remote adapter configuration changed while loading: ${displayName}`)
       // Evaluate the exact bytes before they become the last-known-good cache.
@@ -1321,9 +1317,11 @@ async function loadLocalSource(configuredUri: string, epoch: number, workspaceRo
   if (!uri)
     throw new Error(`Skipped unsafe local adapter: ${configuredUri}`)
   const realUri = await fsp.realpath(uri)
-  const scriptContent = await fsp.readFile(realUri, 'utf8')
-  if (scriptContent.length > maxRemoteScriptSize)
+  const stat = await fsp.stat(realUri)
+  if (stat.size > maxRemoteScriptSize)
     throw new Error(`Local adapter is too large: ${uri}`)
+  const scriptContent = await fsp.readFile(realUri, 'utf8')
+  assertAdapterInputSize(scriptContent, uri)
   const signature = createHash('sha256').update(scriptContent).digest('hex')
   // Always re-check the current source/digest approval before reusing executable
   // output. A configuration change must not inherit code authorized earlier.

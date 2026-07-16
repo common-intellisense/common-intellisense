@@ -3,7 +3,7 @@ import { clearPackageVersionCache } from './package-version'
 
 export const cacheMap = new Map<string, ComponentsConfig | PropsConfig>()
 export const pkgUIConfigMap = new Map<string, { propsConfig: PropsConfig, componentsConfig: ComponentsConfig }>()
-export const urlCache = new Map<string, { uis: Uis, pkg: string }>()
+export const urlCache = new Map<string, { uis: Uis, pkg: string, manifestSignature?: string, rootManifestPath?: string, rootManifestSignature?: string }>()
 export interface RootPackageCacheEntry {
   rootPkgPath: string
   rootPkg: any

@@ -1,9 +1,11 @@
 import vm from 'node:vm'
+import fsp from 'node:fs/promises'
 import * as vscode from 'vscode'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let remoteUris: string[] = ['https://fake/remote.js']
 let remoteNpmUris: ({ name: string, resource?: string } | string)[] = [{ name: '@common-intellisense/button', resource: undefined }]
+let localUris: string[] = []
 let trustedHosts: string[] = ['fake']
 let allowLegacyAdapters = true
 let legacyAdapterAllowlist: string[] = []
@@ -26,7 +28,13 @@ async function useMockRemoteRequester(mod: typeof import('../../src/services/fet
 
 // This test file isolates different mocked behaviors from the other fetch.test.ts
 vi.mock('node:fs', () => ({ existsSync: () => false }))
-vi.mock('node:fs/promises', () => ({ readFile: vi.fn(async () => '{}') }))
+vi.mock('node:fs/promises', () => ({
+  default: {
+    readFile: vi.fn(async () => '{}'),
+    realpath: vi.fn(async (value: string) => value),
+    stat: vi.fn(async () => ({ isFile: () => true, size: 2 })),
+  },
+}))
 vi.mock('@simon_he/fetch-npm', () => ({ fetchAndExtractPackage: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
 vi.mock('@simon_he/latest-version', () => ({ latestVersion: vi.fn(async () => '2.0.0') }))
 vi.mock('@simon_he/fetch-npm-cjs', () => ({ fetchFromCjsForCommonIntellisense: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
@@ -40,7 +48,7 @@ vi.mock('@vscode-use/utils', () => ({
     if (k === 'common-intellisense.remoteUris')
       return remoteUris
     if (k === 'common-intellisense.localUris')
-      return []
+      return localUris
     if (k === 'common-intellisense.remoteNpmUris')
       return remoteNpmUris
     if (k === 'common-intellisense.trustedHosts')
@@ -70,9 +78,13 @@ describe('fetch service additional tests (mocked)', () => {
     vi.clearAllMocks()
     remoteUris = ['https://fake/remote.js']
     remoteNpmUris = [{ name: '@common-intellisense/button', resource: undefined }]
+    localUris = []
     trustedHosts = ['fake']
     allowLegacyAdapters = true
     legacyAdapterAllowlist = []
+    vi.mocked(fsp.readFile).mockReset().mockResolvedValue('{}')
+    vi.mocked(fsp.realpath).mockReset().mockImplementation(async value => String(value))
+    vi.mocked(fsp.stat).mockReset().mockResolvedValue({ isFile: () => true, size: 2 } as any)
     fetchFromTypesMock.mockReset()
   })
 
@@ -134,6 +146,32 @@ describe('fetch service additional tests (mocked)', () => {
     expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({ dist: 'dist/alternate.json' }))
     expect(mod.cacheFetch.has('@common-intellisense/button@2.0.0::dist/manifest.json')).toBe(true)
     expect(mod.cacheFetch.has('@common-intellisense/button@2.0.0::dist/alternate.json')).toBe(true)
+  })
+
+  it('rejects npm adapters that exceed the UTF-8 byte budget', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    const oversized = '你'.repeat(3 * 1024 * 1024)
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue(oversized)
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockResolvedValue(oversized)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteNpmUrls()).rejects.toThrow('too large')
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue('module.exports = { ButtonComponents: () => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }')
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockResolvedValue('module.exports = { ButtonComponents: () => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }')
+  })
+
+  it('rejects oversized local adapters before reading their contents', async () => {
+    localUris = ['./oversized.js']
+    vi.mocked(fsp.stat).mockResolvedValue({ isFile: () => true, size: 8 * 1024 * 1024 + 1 } as any)
+    const readFile = vi.mocked(fsp.readFile)
+    readFile.mockClear()
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromLocalUris('/workspace')).rejects.toThrow('too large')
+    expect(readFile).not.toHaveBeenCalled()
   })
 
   it('fetchFromRemoteNpmUrls handles configured npm packages', async () => {

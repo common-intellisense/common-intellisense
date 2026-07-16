@@ -48,6 +48,35 @@ const button = <ElButton ref={buttonRef} size="small" />
     expect(tag.template).toBeDefined()
   })
 
+  it.each([
+    ['script setup', 'tsx', 'ref()', 'dialog'],
+    ['script', 'tsx', `useTemplateRef('dialog-el')`, 'dialog-el'],
+    ['script setup', 'jsx', 'ref()', 'dialog'],
+  ])('maps Vue template refs from a %s lang=%s block using %s', (block, lang, initializer, templateRef) => {
+    const code = `<template><ElDialog ref="${templateRef}" /></template>
+<script${block === 'script setup' ? ' setup' : ''} lang="${lang}">
+const dialog = ${initializer}
+dialog.value.
+</script>`
+    const result = parseAt(code, 'dialog.value.') as any
+
+    expect(result).toMatchObject({ type: 'script', vueBlock: block === 'script setup' ? 'scriptSetup' : 'script', blockLang: lang })
+    expect(result.refsMap).toMatchObject({ dialog: 'ElDialog' })
+  })
+
+  it('merges refs from the Vue template and JSX render tree', () => {
+    const code = `<template><ElDialog ref="dialog" /></template>
+<script setup lang="tsx">
+const dialog = ref()
+const buttonRef = ref()
+const view = <ElButton ref={buttonRef} />
+dialog.value.
+</script>`
+    const result = parseAt(code, 'dialog.value.') as any
+
+    expect(result.refsMap).toMatchObject({ dialog: 'ElDialog', buttonRef: 'ElButton' })
+  })
+
   it('keeps template slot analysis when a TSX script is also present', async () => {
     clearDocumentAnalysis()
     const code = `<template><UiTable /></template>\n<script setup lang="tsx">const icon = <UiIcon /></script>`

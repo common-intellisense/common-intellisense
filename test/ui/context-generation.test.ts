@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock, resolveInstalledVersionMock } = vi.hoisted(() => ({
+const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock, resolveInstalledVersionMock, readFileMock } = vi.hoisted(() => ({
   findUpMock: vi.fn(),
   fetchMock: vi.fn(),
   localFetchMock: vi.fn(async (_root?: string) => ({})),
@@ -10,6 +10,7 @@ const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, re
   getConfigurationMock: vi.fn<(key: string) => unknown>(() => null),
   watchFileMock: vi.fn(() => () => {}),
   resolveInstalledVersionMock: vi.fn(async () => '5.0.0'),
+  readFileMock: vi.fn<(filePath?: string) => Promise<string>>(async () => JSON.stringify({ dependencies: { antd: '^5.0.0' } })),
 }))
 
 vi.mock('find-up', () => ({ findUp: findUpMock }))
@@ -22,7 +23,7 @@ vi.mock('@vscode-use/utils', () => ({
 }))
 vi.mock('node:fs/promises', () => ({
   default: {
-    readFile: vi.fn(async () => JSON.stringify({ dependencies: { antd: '^5.0.0' } })),
+    readFile: readFileMock,
     writeFile: vi.fn(),
     access: vi.fn(),
   },
@@ -58,6 +59,7 @@ describe('package context generations', () => {
     getConfigurationMock.mockReset().mockReturnValue(null)
     watchFileMock.mockReset().mockImplementation(() => () => {})
     resolveInstalledVersionMock.mockReset().mockResolvedValue('5.0.0')
+    readFileMock.mockReset().mockResolvedValue(JSON.stringify({ dependencies: { antd: '^5.0.0' } }))
   })
 
   it('does not let a context started before global invalidation commit later', async () => {
@@ -126,6 +128,76 @@ describe('package context generations', () => {
     resolveSecond({})
     await expect(second).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
     expect(mod.getContextForDocumentPath(documentPath)?.pkgPath).toBe('/workspace/package.json')
+  })
+
+  it('registers every document that joins an in-flight package load', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveFetch!: (value: any) => void
+    fetchMock.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const firstDocument = '/workspace/src/A.tsx'
+    const secondDocument = '/workspace/src/B.tsx'
+
+    const first = mod.ensureContextForPath(firstDocument, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    const second = mod.ensureContextForPath(secondDocument, {} as any, () => {}, false, '/workspace')
+    resolveFetch({})
+    const [firstContext, secondContext] = await Promise.all([first, second])
+
+    expect(secondContext).toBe(firstContext)
+    expect(mod.getContextForDocumentPath(firstDocument)).toBe(firstContext)
+    expect(mod.getContextForDocumentPath(secondDocument)).toBe(firstContext)
+  })
+
+  it('rebuilds when package.json changes before the first context commits', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    resolveInstalledVersionMock.mockResolvedValue(undefined as any)
+    let manifest = JSON.stringify({ dependencies: { antd: '^4.0.0' } })
+    readFileMock.mockImplementation(async () => manifest)
+    let resolveFirst!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const pending = mod.ensureContextForPath('/workspace/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    manifest = JSON.stringify({ dependencies: { antd: '^5.0.0' } })
+    resolveFirst({})
+    const context = await pending
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toBe('antd4')
+    expect(fetchMock.mock.calls[1][0]).toBe('antd5')
+    expect(context?.uiNames).toEqual(['antd5'])
+    expect(mod.getContextRegistryStats().watchers).toBe(1)
+  })
+
+  it('rebuilds when a monorepo root package.json changes before the first context commits', async () => {
+    const rootManifestPath = '/workspace/package.json'
+    const leafManifestPath = '/workspace/packages/app/package.json'
+    findUpMock.mockResolvedValue(leafManifestPath)
+    resolveInstalledVersionMock.mockResolvedValue(undefined as any)
+    let rootManifest = JSON.stringify({ workspaces: ['packages/*'], dependencies: { antd: '^4.0.0' } })
+    const leafManifest = JSON.stringify({ name: 'app' })
+    readFileMock.mockImplementation(async (filePath: any) => filePath === rootManifestPath ? rootManifest : leafManifest)
+    let resolveFirst!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const pending = mod.ensureContextForPath('/workspace/packages/app/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    rootManifest = JSON.stringify({ workspaces: ['packages/*'], dependencies: { antd: '^5.0.0' } })
+    resolveFirst({})
+    const context = await pending
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toBe('antd4')
+    expect(fetchMock.mock.calls[1][0]).toBe('antd5')
+    expect(context?.uiNames).toEqual(['antd5'])
+    expect(mod.getContextRegistryStats().watchers).toBe(1)
   })
 
   it('does not register package watchers after an in-flight load is invalidated', async () => {

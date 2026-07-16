@@ -24,8 +24,10 @@ describe('native tag isolation', () => {
       ElOption: { marker: 'option' },
       ElDialog: { marker: 'dialog' },
       UiPath: { marker: 'path' },
+      UiForeignObject: { marker: 'foreignObject' },
+      UiLinearGradient: { marker: 'linearGradient' },
     }
-    const tags = ['select', 'option', 'textarea', 'nav', 'dialog', 'details', 'summary', 'svg', 'path']
+    const tags = ['select', 'option', 'textarea', 'nav', 'dialog', 'details', 'summary', 'svg', 'path', 'foreignObject', 'linearGradient']
     const children = tags.map((tag, index) => ({ tag, loc: index + 1, children: [] }))
     expect(await findUiTag(children, completions)).toEqual([])
   })
