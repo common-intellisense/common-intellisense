@@ -8,7 +8,6 @@ import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCach
 import type { ComponentSourceScope } from './services/component-resolver'
 import { findComponentSourceScope, isLocalModuleSource, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
 import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
-import { getNodeOffsetRange } from './services/node-range'
 import { isNativeTag } from './services/native-tags'
 import { invalidateRootPackageCacheForManifest } from './services/ui-cache'
 import { prettierType } from './prettier-type'
@@ -25,6 +24,12 @@ export function supportsSlotAnalysis(document: Pick<vscode.TextDocument, 'langua
 
 export function getHoverPropName(result: { propName?: unknown }) {
   return typeof result.propName === 'string' ? result.propName : undefined
+}
+
+export function unwrapLiteral(value: string) {
+  const normalized = value.trim()
+  const match = /^(['"`])([\s\S]*)\1$/.exec(normalized)
+  return match ? match[2] : normalized
 }
 
 interface DocumentAnalysisCacheEntry {
@@ -580,7 +585,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   // 监听pkg变化
-  context.subscriptions.push(registerCommand('common-intellisense.slots', async (child, name, offset, detail, editIdentity) => {
+  context.subscriptions.push(registerCommand('common-intellisense.slots', async (target, name, detail, editIdentity) => {
     if (!getIsShowSlots() || !editIdentity?.uri || typeof editIdentity.version !== 'number')
       return
     const uri = vscode.Uri.parse(editIdentity.uri)
@@ -598,44 +603,31 @@ export async function activate(context: vscode.ExtensionContext) {
       || packageContext.revision !== editIdentity.contextRevision) {
       return
     }
-    if (!child?.children)
+    if (!Number.isInteger(target?.start) || !Number.isInteger(target?.end))
       return
 
-    let lastChild = [...child.children].reverse().find((c: any) => c.type !== 2)
-    let slotName = `#${name}`
-    if (child.range)
-      slotName = `v-slot:${name}`
+    let slotName = isVineDocument ? `#${name}` : `v-slot:${name}`
     if (detail.params)
       slotName += '="slotProps"'
     const workspaceEdit = new vscode.WorkspaceEdit()
     const insertAt = (at: number, text: string) => workspaceEdit.insert(uri, document.positionAt(at), text)
     const replaceAt = (start: number, end: number, text: string) => workspaceEdit.replace(uri, new vscode.Range(document.positionAt(start), document.positionAt(end)), text)
 
-    if (lastChild) {
-      if (isVineDocument && lastChild.codegenNode)
-        lastChild = lastChild.codegenNode
-      const lastRange = getNodeOffsetRange(lastChild, offset)
-      if (!lastRange)
-        return
-      insertAt(lastRange.end, `
+    if (Number.isInteger(target.lastChildEnd)) {
+      insertAt(target.lastChildEnd, `
 <template ${slotName}></template>`)
     }
     else {
-      const childRange = getNodeOffsetRange(child, offset)
-      if (!childRange)
-        return
-      const nodeText = document.getText().slice(childRange.start, childRange.end)
-      const tag = child.tag || nodeText.match(/^<\s*([\w.$:-]+)/)?.[1]
+      const nodeText = document.getText().slice(target.start, target.end)
+      const tag = target.tag || nodeText.match(/^<\s*([\w.$:-]+)/)?.[1]
       if (!tag)
         return
-      const empty = ' '.repeat(Math.max((child.loc?.start?.column || 1) - 1, 0))
-      const isSelfClosing = child.isSelfClosing || child.openingElement?.selfClosing
-      if (isSelfClosing) {
+      const empty = ' '.repeat(Math.max((target.column || 1) - 1, 0))
+      if (target.selfClosing) {
         const closeIndex = nodeText.lastIndexOf('/>')
         if (closeIndex < 0)
           return
-        const closeStart = childRange.start + closeIndex
-        replaceAt(closeStart, childRange.end, `>
+        replaceAt(target.start + closeIndex, target.end, `>
   <template ${slotName}></template>
 </${tag}>`)
       }
@@ -643,8 +635,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const closeIndex = nodeText.lastIndexOf('</')
         if (closeIndex < 0)
           return
-        const sameLine = child.loc?.start?.line === child.loc?.end?.line
-        insertAt(childRange.start + closeIndex, `${sameLine ? '\n' : empty}  <template ${slotName}></template>
+        insertAt(target.start + closeIndex, `${target.sameLine ? '\n' : empty}  <template ${slotName}></template>
 `)
       }
     }
@@ -870,10 +861,10 @@ export async function activate(context: vscode.ExtensionContext) {
               : new RegExp(`^:?${escapedPropName}`)
             return reg.test(item.label)
           }).forEach((item: any) => {
-            item.propType?.split('/').forEach((p: string) => {
+            item.propType?.split('/').map(unwrapLiteral).filter(Boolean).forEach((value: string) => {
               r.push(createCompletionItem({
-                content: p.trim(),
-                snippet: p.trim().replace(/'`/g, ''),
+                content: value,
+                snippet: value,
                 documentation: item.documentation,
                 sortText: '0',
                 preselect: true,

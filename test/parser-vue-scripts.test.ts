@@ -72,7 +72,7 @@ const button = <ElButton ref={buttonRef} size="small" />
   it.each([
     ['tsx', 'script'],
     ['jsx', 'script setup'],
-  ])('analyzes slots in render-only Vue %s blocks', async (lang, block) => {
+  ])('does not analyze Vue %s render blocks for template-only Slot CodeLens', async (lang, block) => {
     clearDocumentAnalysis()
     const code = `<${block} lang="${lang}">const view = <MyComponent /></${block}>`
     const document = {
@@ -86,8 +86,7 @@ const button = <ElButton ref={buttonRef} size="small" />
       contextGeneration: 1,
       contextRevision: 1,
     })
-    const groups = getDocumentSlotAnalysis(document.uri)?.children || []
-    expect(groups.some((group: any) => group.offset > 0 && group.children.some((entry: any) => entry.child.openingElement?.name?.name === 'MyComponent'))).toBe(true)
+    expect(getDocumentSlotAnalysis(document.uri)?.children).toEqual([])
   })
 
   it('parses local imports per block and lets setup bindings win in template scope', () => {

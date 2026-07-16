@@ -699,6 +699,7 @@ export function propsReducer(options: PropsOptions) {
 }
 export type Directives = {
   name: string
+  version?: string
   description: string
   description_zh: string
   documentation?: string
@@ -724,6 +725,8 @@ export interface ComponentOptions {
   dynamicLib?: string
   importWay?: 'as default' | 'default' | 'specifier'
   directives?: Directives
+  installedVersion?: string
+  adapterMajor?: string
 }
 
 export interface ComponentsConfigItem {
@@ -738,12 +741,13 @@ export interface ComponentsConfigItem {
 
 export type ComponentsConfig = ComponentsConfigItem[]
 export function componentsReducer(options: ComponentOptions): ComponentsConfig {
-  const { map: inputMap, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
+  const { map: inputMap, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives, installedVersion, adapterMajor } = options
   const map = (inputMap as [Component | string, string, string?][]).map(([content, detail, demo]) => [
     typeof content === 'string' ? { name: content } : content,
     detail,
     demo,
-  ] as [Component, string, string?])
+  ] as [Component, string, string?]).filter(([component]) => isVisibleForVersion(component, installedVersion, adapterMajor))
+  const visibleDirectives = directives?.filter(directive => isVisibleForVersion(directive, installedVersion, adapterMajor))
   // Suggestions are resolved while rendering every component completion. Build the
   // immutable lookup once so a manifest with N suggestions does not scan N rows
   // for every rendered item.
@@ -754,7 +758,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
     return [
       {
         prefix,
-        directives,
+        directives: visibleDirectives,
         lib,
         data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
           const framework = getSyntaxFramework(context, 'vue')
@@ -811,7 +815,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       },
       {
         prefix: '',
-        directives,
+        directives: visibleDirectives,
         lib,
         data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
           const framework = getSyntaxFramework(context, 'vue')
@@ -868,7 +872,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
   }
   return [{
     prefix,
-    directives,
+    directives: visibleDirectives,
     lib,
     data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
       const framework = getSyntaxFramework(context, 'react')

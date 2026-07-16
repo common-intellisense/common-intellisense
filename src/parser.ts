@@ -8,7 +8,7 @@ import { parse as babelParse } from '@babel/parser'
 import traverse from '@babel/traverse'
 import ts from 'typescript'
 import { parse as tsParser } from '@typescript-eslint/typescript-estree'
-import { createRange, getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getPosition, getRootPath, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
+import { getActiveText, getActiveTextEditor, getCurrentFileUrl, getLocale, getPosition, getRootPath, isInPosition, registerCodeLensProvider } from '@vscode-use/utils'
 // @ts-expect-error no problem
 import { parse } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import {
@@ -63,24 +63,6 @@ function getVueSfcParseResult(code: string) {
 
 function getJsxAst(code: string) {
   return getCached(jsxAstCache, code, () => tsParser(code, { jsx: true, loc: true, range: true }))
-}
-
-function collectJsxElements(node: any, result: any[]) {
-  if (!node || typeof node !== 'object')
-    return
-  if (node.type === 'JSXElement')
-    result.push(node)
-  for (const [key, value] of Object.entries(node)) {
-    if (key === 'parent' || key === 'loc' || key === 'range')
-      continue
-    if (Array.isArray(value)) {
-      for (const child of value)
-        collectJsxElements(child, result)
-    }
-    else {
-      collectJsxElements(value, result)
-    }
-  }
 }
 
 function getSvelteHtml(code: string) {
@@ -218,15 +200,20 @@ export function transformVine(vineFileCtx: VineFileCtx, position: vscode.Positio
   }
 }
 
-function dfs(children: any, parent: any, position: vscode.Position, offset = 0, cursorOffset?: number) {
+function getTemplateParent(parent: any, ancestor?: any) {
+  return {
+    tag: parent?.tag || 'template',
+    props: parent?.props || [],
+    parent: ancestor,
+  }
+}
+
+function dfs(children: any, parent: any, position: vscode.Position, offset = 0, cursorOffset?: number, parentContext = getTemplateParent(parent)) {
   for (const child of children) {
     const { loc, tag, props, children } = child
     if (!isInPosition(loc, position, offset))
       continue
 
-    if (parent) {
-      child.parent = parent
-    }
     if (tag) {
       const isTag = isInPosition({
         start: loc.start,
@@ -242,11 +229,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
           props,
           type: 'tag',
           isInTemplate: true,
-          parent: {
-            tag: parent.tag ? parent.tag : 'template',
-            props: parent.props || [],
-            parent: parent.parent,
-          },
+          parent: parentContext,
           template: parent,
         }
       }
@@ -265,11 +248,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
               type: 'props',
               isInTemplate: true,
               isValue: prop.exp?.content !== undefined,
-              parent: {
-                tag: parent.tag ? parent.tag : 'template',
-                props: parent.props || [],
-                parent: parent.parent,
-              },
+              parent: parentContext,
               isDynamic: prop.name === 'bind',
               isDynamicArgument: prop.arg?.isStatic === false,
               isEvent: prop.name === 'on',
@@ -301,11 +280,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
               isDynamicArgument: prop.arg?.isStatic === false,
               isEvent,
               isValue: prop.value?.content !== undefined || prop.exp?.content !== undefined,
-              parent: {
-                tag: parent.tag ? parent.tag : 'template',
-                props: parent.props || [],
-                parent: parent.parent,
-              },
+              parent: parentContext,
               template: parent,
             }
           }
@@ -313,7 +288,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
       }
     }
     if (children && children.length) {
-      const result = dfs(children, child, position, offset, cursorOffset) as any
+      const result = dfs(children, child, position, offset, cursorOffset, getTemplateParent(child, parentContext)) as any
       if (result)
         return result
     }
@@ -325,11 +300,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
         tag,
         props,
         isInTemplate: true,
-        parent: {
-          tag: parent.tag ? parent.tag : 'template',
-          props: parent.props || [],
-          parent: parent.parent,
-        },
+        parent: parentContext,
         template: parent,
       }
     }
@@ -338,11 +309,7 @@ function dfs(children: any, parent: any, position: vscode.Position, offset = 0, 
         type: 'text',
         isInTemplate: true,
         props,
-        parent: {
-          tag: parent.tag ? parent.tag : 'template',
-          props: parent.props || [],
-          parent: parent.parent,
-        },
+        parent: parentContext,
         template: parent,
       }
     }
@@ -448,23 +415,17 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
       }
     }
     const openingElementName = getJsxElementName(openingElement?.name) || (typeof child.name === 'string' ? child.name : undefined)
-    if (openingElementName)
-      child.name = openingElementName
 
     if (!isInPosition(loc, position))
       continue
-
-    if (parent)
-      child.parent = parent
 
     if (type === 'JSXElement' || type === 'Element' || type === 'InlineComponent' || (type === 'ReturnStatement' && argument && (argument.type === 'JSXElement' || argument.type === 'JSXFragment')))
       isInTemplate = true
 
     if (openingElement && openingElement.attributes.length) {
       for (const prop of openingElement.attributes) {
-        if (!prop.loc)
-          prop.loc = convertPositionToLoc(prop, code)
-        if (isInPosition(prop.loc, position)) {
+        const propLoc = prop.loc || convertPositionToLoc(prop, code)
+        if (isInPosition(propLoc, position)) {
           if (prop.type === 'JSXSpreadAttribute' || prop.type === 'Spread') {
             return {
               tag: openingElementName,
@@ -556,14 +517,16 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
       children = [children]
 
     if (children && children.length) {
-      const p = ['JSXElement', 'Element', 'InlineComponent'].includes(child.type) ? { ...child, name: openingElementName, props: openingElement?.attributes || [] } : null
+      const p = ['JSXElement', 'Element', 'InlineComponent'].includes(child.type)
+        ? { name: openingElementName, tag: openingElementName, props: openingElement?.attributes || [], parent }
+        : parent
       const result = jsxDfs(children, p, position, code) as any
       if (result)
         return result
     }
 
     if ((type === 'JSXElement' || type === 'Element' || type === 'InlineComponent') && openingElement && isInPosition(openingElement.loc || loc, position)) {
-      const target = openingElement.attributes.find((item: any) => isInPosition(item.loc, position))
+      const target = openingElement.attributes.find((item: any) => isInPosition(item.loc || convertPositionToLoc(item, code), position))
       if (target) {
         return {
           type: 'props',
@@ -587,7 +550,7 @@ function jsxDfs(children: any, parent: any, position: vscode.Position, code: str
         start: loc.start,
         end: {
           line: loc.start.line,
-          column: loc.start.column + (child.name || '').length,
+          column: loc.start.column + (openingElementName || '').length,
         },
       }, position)
       return {
@@ -989,6 +952,33 @@ export function commitDocumentSlotAnalysis(request: SlotAnalysisRequest, childre
   return true
 }
 
+export interface SlotEditTarget {
+  start: number
+  end: number
+  lastChildEnd?: number
+  tag?: string
+  selfClosing: boolean
+  column: number
+  sameLine: boolean
+}
+
+function createSlotEditTarget(child: any, offset: number, isVineDocument: boolean): SlotEditTarget | undefined {
+  const range = getNodeOffsetRange(child, offset)
+  if (!range)
+    return
+  let lastChild = [...(child.children || [])].reverse().find((candidate: any) => candidate.type !== 2)
+  if (isVineDocument && lastChild?.codegenNode)
+    lastChild = lastChild.codegenNode
+  return {
+    ...range,
+    lastChildEnd: lastChild ? getNodeOffsetRange(lastChild, offset)?.end : undefined,
+    tag: child.tag,
+    selfClosing: !!(child.isSelfClosing || child.openingElement?.selfClosing),
+    column: child.loc?.start?.column || 1,
+    sameLine: child.loc?.start?.line === child.loc?.end?.line,
+  }
+}
+
 export interface SlotSourceContext {
   cacheMap: Map<string, any>
   sourceScopes: Map<string, ComponentSourceScope>
@@ -1042,11 +1032,13 @@ export function registerCodeLensProviderFn() {
       const positionAt = (offset: number) => typeof document.positionAt === 'function'
         ? document.positionAt(offset)
         : getPosition(offset, documentCode ??= document.getText()).position
-      children.forEach((child: any) => {
-        const offset = child.offset
-        child.children.forEach((m: any) => {
+      children.forEach((analysisChild: any) => {
+        const offset = analysisChild.offset
+        analysisChild.children.forEach((m: any) => {
           const { child, slots } = m
-          const range = child.loc
+          const editTarget = createSlotEditTarget(child, offset, isVineDocument)
+          if (!editTarget)
+            return
           const filters: string[] = []
           for (const c of Array.from(child.children) as any) {
             if (c.type === 'JSXElement') {
@@ -1083,17 +1075,13 @@ export function registerCodeLensProviderFn() {
           }
           slots.filter((s: any) => !filters.includes(s.name)).forEach((s: any, i: number) => {
             const { name, description, description_zh, version } = s
-            // Normalize compiler AST and ESTree nodes into absolute document offsets.
-            const absoluteRange = getNodeOffsetRange(child, offset)
-            const codeLensRange = absoluteRange
-              ? new vscode.Range(positionAt(absoluteRange.start), positionAt(absoluteRange.end))
-              : createRange(range.start.line - 1, range.start.column, range.end.line - 1, range.end.column)
+            const codeLensRange = new vscode.Range(positionAt(editTarget.start), positionAt(editTarget.end))
 
             result.push(new vscode.CodeLens(codeLensRange, {
               title: `${i === 0 ? 'Slots: ' : ''}${name}`,
               tooltip: (version ? `❗${version} VERSION: ` : '') + (isZh ? description_zh : description),
               command: 'common-intellisense.slots',
-              arguments: [child, name, offset, s, {
+              arguments: [editTarget, name, s, {
                 uri: document.uri.toString(),
                 version: document.version,
                 packagePath: analysis.packagePath,
@@ -1116,30 +1104,13 @@ async function getTemplateAst(document: vscode.TextDocument, UiCompletions: any,
   const isVineDocument = uri.endsWith('.vine.ts')
 
   if (isVueDocument) {
-    const {
-      descriptor: { template, script, scriptSetup },
-    } = getVueSfcParseResult(code)
-    const analyses: Array<{ children: any, offset: number }> = []
-    if (template) {
-      analyses.push({
-        children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
-        offset: 0,
-      })
-    }
-    else {
-      for (const block of [script, scriptSetup]) {
-        const lang = block?.lang?.toLowerCase()
-        if (!block || (lang !== 'tsx' && lang !== 'jsx'))
-          continue
-        const jsxElements: any[] = []
-        collectJsxElements(getJsxAst(block.content), jsxElements)
-        analyses.push({
-          children: await findUiTag(jsxElements, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
-          offset: block.loc.start.offset,
-        })
-      }
-    }
-    return analyses
+    const { descriptor: { template } } = getVueSfcParseResult(code)
+    if (!template)
+      return []
+    return [{
+      children: await findUiTag(template.ast.children, UiCompletions, [], new Set(), uiDeps, prefix, sourceContext),
+      offset: 0,
+    }]
   }
   else if (isVineDocument) {
     const { vineFileCtx } = createVineFileCtx('', code)
@@ -1177,34 +1148,33 @@ export async function findUiTag(children: any, UiCompletions: any, result: any[]
     if (!source && isNativeTag(tag))
       continue
     const localSource = isLocalModuleSource(source)
+    const scope = source && sourceContext ? getSourceScope(sourceContext, source) : undefined
+    const projectAlias = !!(!scope && source && sourceContext?.currentDocumentPath && sourceContext.workspaceRoot
+      && await isProjectPathAlias(source, sourceContext.currentDocumentPath, sourceContext.workspaceRoot))
     let scopedCompletions = UiCompletions
     let normalizedSource = source
-    if (source && sourceContext && !localSource) {
-      const scope = getSourceScope(sourceContext, source)
-      if (scope) {
-        const scoped = sourceContext.cacheMap.get(scope.key)
-        if (scoped && typeof scoped === 'object' && !Array.isArray(scoped))
-          scopedCompletions = scoped
-        normalizedSource = scope.exactLib || scope.lib
-      }
+    if (scope && sourceContext) {
+      const scoped = sourceContext.cacheMap.get(scope.key)
+      if (scoped && typeof scoped === 'object' && !Array.isArray(scoped))
+        scopedCompletions = scoped
+      normalizedSource = scope.exactLib || scope.lib
     }
 
     let target: any
-    if (localSource) {
-      target = await resolveLocalWrappedComponent(source!, UiCompletions, prefix, sourceContext?.currentDocumentPath, sourceContext?.workspaceRoot, (wrappedSource) => {
-        const scope = sourceContext ? getSourceScope(sourceContext, wrappedSource) : undefined
-        const scoped = scope ? sourceContext?.cacheMap.get(scope.key) : undefined
+    if (source && (localSource || (sourceContext && !scope))) {
+      target = await resolveLocalWrappedComponent(source, UiCompletions, prefix, sourceContext?.currentDocumentPath, sourceContext?.workspaceRoot, (wrappedSource) => {
+        const wrappedScope = sourceContext ? getSourceScope(sourceContext, wrappedSource) : undefined
+        const scoped = wrappedScope ? sourceContext?.cacheMap.get(wrappedScope.key) : undefined
         return scoped && typeof scoped === 'object' && !Array.isArray(scoped) ? scoped : undefined
       })
     }
-    else {
+    if (!target && !localSource && !projectAlias) {
       for (const candidate of importedTag.candidates) {
         target = source
           ? await findDynamicComponent(candidate, {}, scopedCompletions, prefix, normalizedSource)
           : findPrefixedComponent(candidate, prefix.filter(Boolean), scopedCompletions)
             || scopedCompletions[candidate]
             || await findDynamicComponent(candidate, {}, scopedCompletions, prefix)
-        const scope = source && sourceContext ? getSourceScope(sourceContext, source) : undefined
         if (target && sourceScopeAccepts(scope, target.lib))
           break
         target = undefined
@@ -1335,8 +1305,6 @@ function parseImportDepsBlock(content: string, lang?: string) {
     traverse(ast as any, {
       ImportDeclaration(p: any) {
         const source = p.node.source.value
-        if (!/^[./@]/.test(source))
-          return
         for (const specifier of p.node.specifiers || [])
           deps[specifier.local.name] = source
       },
@@ -1402,11 +1370,18 @@ export function getImportDeps(text: string, context: { activeOffset?: number } =
   )
 }
 
+function stripModuleSuffix(url: string) {
+  const queryIndex = url.indexOf('?')
+  const withoutQuery = queryIndex >= 0 ? url.slice(0, queryIndex) : url
+  const fragmentIndex = withoutQuery.indexOf('#', 1)
+  return fragmentIndex >= 0 ? withoutQuery.slice(0, fragmentIndex) : withoutQuery
+}
+
 export function getAbsoluteUrl(url: string, currentFileUrl?: string, workspaceRoot?: string) {
   const base = currentFileUrl || getCurrentFileUrl()
   if (!base)
     return
-  const clean = url.replace(/[?#].*$/, '')
+  const clean = stripModuleSuffix(url)
   if (clean.startsWith('file:')) {
     try { return fileURLToPath(clean) }
     catch { return }
@@ -1475,6 +1450,26 @@ async function findProjectResolutionContext(currentFile: string, workspaceRoot: 
   return { projectRoot: projectRoot || root, configPath: undefined }
 }
 
+function matchesProjectPathAlias(source: string, paths: Record<string, readonly string[] | undefined>) {
+  return Object.keys(paths).some((pattern) => {
+    const star = pattern.indexOf('*')
+    return star < 0
+      ? pattern === source
+      : source.startsWith(pattern.slice(0, star)) && source.endsWith(pattern.slice(star + 1))
+  })
+}
+
+async function isProjectPathAlias(source: string, currentFile: string, workspaceRoot: string) {
+  const { configPath } = await findProjectResolutionContext(currentFile, workspaceRoot)
+  if (!configPath)
+    return false
+  const read = ts.readConfigFile(configPath, ts.sys.readFile)
+  if (read.error)
+    return false
+  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(configPath))
+  return matchesProjectPathAlias(source, parsed.options.paths || {})
+}
+
 async function resolveProjectAliasBase(source: string, currentFile: string, workspaceRoot: string) {
   const { projectRoot, configPath } = await findProjectResolutionContext(currentFile, workspaceRoot)
   if (configPath) {
@@ -1516,7 +1511,7 @@ async function resolveLocalComponentModuleUncached(url: string, currentFileUrl?:
   const allowedRoot = workspaceRoot || (effectiveCurrentFile ? path.dirname(effectiveCurrentFile) : undefined)
   if (!allowedRoot || !effectiveCurrentFile)
     return
-  const clean = url.replace(/[?#].*$/, '')
+  const clean = stripModuleSuffix(url)
   let base = workspaceRoot ? await resolveProjectAliasBase(clean, effectiveCurrentFile, workspaceRoot) : undefined
   if (!base)
     base = getAbsoluteUrl(clean, effectiveCurrentFile, workspaceRoot)

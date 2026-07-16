@@ -22,6 +22,12 @@ import { runLegacyAdapterInWorker } from './legacy-adapter-worker'
 
 const prefix = '@common-intellisense/'
 
+interface AdapterRuntimeOptions {
+  resolveFrom?: string
+  installedVersion?: string
+  adapterMajor?: string
+}
+
 export const cacheFetch = new Map<string, string>()
 const warnedLegacyAdapterSources = new Set<string>()
 const legacyMigrationUrl = 'https://github.com/common-intellisense/common-intellisense#explain-configuration'
@@ -497,9 +503,17 @@ function appendReducedExports(target: Record<string, any>, exportsData: Record<s
     if (blockedExportKeys.has(key))
       continue
     try {
-      target[key] = key.endsWith('Components')
-        ? () => componentsReducer(data as any)
-        : (runtimeOptions?: { resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) => propsReducer(
+      target[key] = (runtimeOptions?: AdapterRuntimeOptions) => key.endsWith('Components')
+        ? componentsReducer(
+            runtimeOptions && data && typeof data === 'object' && !Array.isArray(data)
+              ? {
+                  ...(data as any),
+                  installedVersion: runtimeOptions.installedVersion ?? (data as any).installedVersion,
+                  adapterMajor: runtimeOptions.adapterMajor ?? (data as any).adapterMajor,
+                }
+              : data as any,
+          )
+        : propsReducer(
             runtimeOptions && data && typeof data === 'object' && !Array.isArray(data)
               ? { ...(data as any), ...runtimeOptions }
               : data as any,
@@ -740,14 +754,23 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
           const data = exportsData[key]
           if (key.endsWith('Components')) {
             const lib = key.slice(0, -'Components'.length)
-            const userPrefix = getPrefix?.() as Record<string, string> | undefined
-            let components = componentsReducer(data as any)
+            result[key] = (runtimeOptions?: AdapterRuntimeOptions) => {
+              const userPrefix = getPrefix?.() as Record<string, string> | undefined
+              const reducerOptions = data && typeof data === 'object' && !Array.isArray(data)
+                ? {
+                    ...(data as any),
+                    installedVersion: runtimeOptions?.installedVersion ?? options?.installedVersion,
+                    adapterMajor: runtimeOptions?.adapterMajor ?? options?.adapterMajor,
+                  }
+                : data as any
+              let components = componentsReducer(reducerOptions)
 
-            if (userPrefix && userPrefix[lib]) {
-              const customPrefix = userPrefix[lib]
-              components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
+              if (userPrefix && userPrefix[lib]) {
+                const customPrefix = userPrefix[lib]
+                components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
+              }
+              return components
             }
-            result[key] = () => components
           }
           else {
             let propsData = data

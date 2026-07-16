@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDependencyScopeOffset, getHoverPropName, getRefMembers, getRefVariableNames, hasComponentTag, hasRenderedComponentTag, selectScopedCompletions, supportsSlotAnalysis } from '../src/index'
+import { getDependencyScopeOffset, getHoverPropName, getRefMembers, getRefVariableNames, hasComponentTag, hasRenderedComponentTag, selectScopedCompletions, supportsSlotAnalysis, unwrapLiteral } from '../src/index'
 
 describe('provider safety helpers', () => {
   it('limits slot analysis to Vue and Vine documents', () => {
@@ -8,6 +8,13 @@ describe('provider safety helpers', () => {
     expect(supportsSlotAnalysis(document('typescript', '/App.vine.ts'))).toBe(true)
     expect(supportsSlotAnalysis(document('typescriptreact', '/App.tsx'))).toBe(false)
     expect(supportsSlotAnalysis(document('svelte', '/App.svelte'))).toBe(false)
+  })
+
+  it('unwraps only paired literal quotes for attribute value completions', () => {
+    expect([`'top'`, ' "bottom" ', '', '`small`', '`large`'].map(unwrapLiteral).filter(Boolean)).toEqual(['top', 'bottom', 'small', 'large'])
+    expect(unwrapLiteral('top')).toBe('top')
+    expect(unwrapLiteral(`'don\'t'`)).toBe(`don't`)
+    expect(unwrapLiteral(`'mixed"quote'`)).toBe('mixed"quote')
   })
 
   it('safely resolves hover names for Vue directives', () => {

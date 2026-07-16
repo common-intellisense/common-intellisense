@@ -17,6 +17,12 @@ import { formatUIName, getAlias, getPrefix, getSelectedUIs } from './ui-utils'
 
 export const logger = createLog('common-intellisense')
 
+interface AdapterRuntimeOptions {
+  resolveFrom?: string
+  installedVersion?: string
+  adapterMajor?: string
+}
+
 interface ContextModel {
   optionsComponents: OptionsComponents
   uiCompletions: PropsConfig | null
@@ -54,6 +60,7 @@ export interface PackageContext {
   uiNames: string[]
   currentPkgUiNames: string[]
   userPrefix: Record<string, string>
+  adapterRuntimeOptions: Map<string, AdapterRuntimeOptions>
   optionsComponents: OptionsComponents
   uiCompletions: PropsConfig | null
   cacheMap: Map<string, any>
@@ -538,6 +545,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   const availableNames: string[] = []
   const originNames: string[] = []
   const formatToPkg = new Map<string, { pkgName: string, version: string, installedVersion?: string, adapterMajor: string }>()
+  const adapterRuntimeOptions = new Map<string, AdapterRuntimeOptions>()
   const selectionToAdapter = new Map<string, string>()
   const sourceScopes = new Map<string, ComponentSourceScope>()
   const sourceSignatures = new Map<string, string>()
@@ -562,6 +570,11 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     const formatName = `${formatUIName(uiName)}${major}`
     const selectionName = `${declaredName}${major}`
     formatToPkg.set(formatName, { pkgName: uiName, version: major, installedVersion, adapterMajor: major })
+    const runtimeOptions = { resolveFrom: pkgPath, installedVersion, adapterMajor: major }
+    adapterRuntimeOptions.set(formatName, runtimeOptions)
+    adapterRuntimeOptions.set(selectionName, runtimeOptions)
+    adapterRuntimeOptions.set(formatUIName(uiName), runtimeOptions)
+    adapterRuntimeOptions.set(formatUIName(declaredName), runtimeOptions)
     selectionToAdapter.set(formatName, formatName)
     selectionToAdapter.set(selectionName, formatName)
     if (declaredName === '@dcloudio/uni-ui')
@@ -603,7 +616,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     Object.assign(localUI, exports)
     const componentsKey = `${name}Components`
     try {
-      const components = exports[componentsKey]?.()
+      const components = exports[componentsKey]?.({ resolveFrom: pkgPath, installedVersion: pkgInfo?.installedVersion, adapterMajor: pkgInfo?.adapterMajor })
       if (components) {
         localCache.set(componentsKey, components)
         const sourceId = `official:${name}`
@@ -659,6 +672,7 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
     uiNames,
     currentPkgUiNames: availableNames,
     userPrefix,
+    adapterRuntimeOptions,
     ...cloneModel(officialModel),
     officialModel,
     customSourceSnapshots: new Map(),
@@ -784,12 +798,19 @@ function startTrackedContextEnhancements(context: PackageContext, expectedEpoch:
   })
 }
 
+function getAdapterRuntimeOptions(context: PackageContext, exportKey: string) {
+  const baseKey = exportKey.replace(/Components$/, '')
+  return context.adapterRuntimeOptions.get(baseKey)
+    || context.adapterRuntimeOptions.get(formatUIName(baseKey))
+    || { resolveFrom: context.pkgPath }
+}
+
 async function prepareCustomSnapshot(context: PackageContext, sourceId: string, exports: Record<string, any>, signature: string, configurationIndex = Number.MAX_SAFE_INTEGER): Promise<CustomSourceSnapshot> {
   const model: ContextModel = { optionsComponents: emptyOptions(), uiCompletions: null, cacheMap: new Map(), sourceScopes: new Map(), sourceSignatures: new Map([[sourceId, signature]]) }
   for (const key of Object.keys(exports)) {
     const scopedKey = `custom:${sourceId}:${key}`
     if (key.endsWith('Components')) {
-      const components = exports[key]?.()
+      const components = exports[key]?.(getAdapterRuntimeOptions(context, key))
       if (components) {
         model.cacheMap.set(scopedKey, components)
         const directiveKey = `custom:${sourceId}:${key.slice(0, -'Components'.length)}`
@@ -797,7 +818,7 @@ async function prepareCustomSnapshot(context: PackageContext, sourceId: string, 
       }
       continue
     }
-    const completion = await exports[key]?.({ resolveFrom: context.pkgPath })
+    const completion = await exports[key]?.(getAdapterRuntimeOptions(context, key))
     if (!completion)
       continue
     for (const item of Object.values(completion) as any[])

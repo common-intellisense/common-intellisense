@@ -513,9 +513,8 @@ describe('activation registration', () => {
     await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
 
     await mocks.commandHandlers.get('common-intellisense.slots')?.(
-      { range: [0, 10], children: [], openingElement: { selfClosing: true } },
+      { start: 0, end: 10, selfClosing: true, column: 1, sameLine: true },
       'footer',
-      0,
       {},
       { uri: 'file:///workspace/A.tsx', version: 2, packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 2 },
     )
@@ -537,9 +536,8 @@ describe('activation registration', () => {
     const { activate } = await import('../src/index')
     await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
     await mocks.commandHandlers.get('common-intellisense.slots')?.(
-      { tag: 'Button', children: [], isSelfClosing: false, loc: { start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 18, offset: 17 }, source: '<Button></Button>' } },
+      { start: 0, end: 17, tag: 'Button', selfClosing: false, column: 1, sameLine: true },
       'default',
-      0,
       {},
       { uri: 'file:///workspace/A.vue', version: 2, packagePath: '/workspace/package.json', contextGeneration: 1, contextRevision: 2 },
     )

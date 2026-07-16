@@ -213,6 +213,31 @@ describe('utils reducer regressions', () => {
     expect(props.Demo.rawSlots?.map(slot => slot.name)).toEqual(['newer-slot'])
   })
 
+  it('filters component tags and directives with the package version context', async () => {
+    const { componentsReducer } = await import('../../src/ui/utils')
+    const map = [
+      [{ name: 'Old' }, 'Old'],
+      [{ name: 'Current', version: '2.4.0' }, 'Current'],
+      [{ name: 'Future', version: '2.6.0' }, 'Future'],
+      [{ name: 'NextMajor', version: '3.0.0' }, 'Next major'],
+    ] as any
+    const directives = [
+      { name: 'old', description: '', description_zh: '', link: '', link_zh: '' },
+      { name: 'current', version: '2.4.0', description: '', description_zh: '', link: '', link_zh: '' },
+      { name: 'future', version: '2.6.0', description: '', description_zh: '', link: '', link_zh: '' },
+      { name: 'next-major', version: '3.0.0', description: '', description_zh: '', link: '', link_zh: '' },
+    ]
+    const context = { languageId: 'vue', framework: 'vue' as const, uri: 'file:///Demo.vue' }
+
+    const exact = componentsReducer({ lib: 'fixture-lib', map, directives, installedVersion: '2.4.0' })
+    expect((await Promise.all(exact[0].data(undefined, context))).map((item: any) => item.content.split('  ')[0])).toEqual(['old', 'current'])
+    expect(exact[0].directives?.map(item => item.name)).toEqual(['old', 'current'])
+
+    const major = componentsReducer({ lib: 'fixture-lib', map, directives, adapterMajor: '2' })
+    expect((await Promise.all(major[0].data(undefined, context))).map((item: any) => item.content.split('  ')[0])).toEqual(['old', 'current', 'future'])
+    expect(major[0].directives?.map(item => item.name)).toEqual(['old', 'current', 'future'])
+  })
+
   it('uses the package-specific installed version for API filtering', async () => {
     const { propsReducer } = await import('../../src/ui/utils')
     const component = { name: 'Demo', props: { old: { type: 'string' }, newer: { type: 'string', version: '2.6.0' } } }

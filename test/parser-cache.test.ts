@@ -72,6 +72,32 @@ describe('parser cache', () => {
     expect(tsParseMock).toHaveBeenCalledTimes(2)
   })
 
+  it('does not mutate a cached JSX AST while deriving parser context', async () => {
+    const ast: any = {
+      body: [{
+        type: 'JSXElement',
+        range: [0, 27],
+        loc: { start: { line: 1, column: 0 }, end: { line: 1, column: 27 } },
+        openingElement: {
+          name: { type: 'JSXIdentifier', name: 'Button' },
+          range: [0, 27],
+          loc: { start: { line: 1, column: 0 }, end: { line: 1, column: 27 } },
+          attributes: [{ type: 'JSXAttribute', name: { name: 'disabled' }, value: null, range: [8, 16] }],
+        },
+        children: [],
+      }],
+    }
+    const snapshot = structuredClone(ast)
+    tsParseMock.mockReturnValue(ast)
+    const mod = await import('../src/parser')
+
+    mod.parserJSX('<Button disabled></Button>', { line: 0, character: 12 } as any)
+    mod.parserJSX('<Button disabled></Button>', { line: 0, character: 12 } as any)
+
+    expect(ast).toEqual(snapshot)
+    expect(() => JSON.stringify(ast)).not.toThrow()
+  })
+
   it('reuses vine compile result for unchanged code', async () => {
     const mod = await import('../src/parser')
     mod.createVineFileCtx('comp.ts', 'function App(){}')
