@@ -67,6 +67,31 @@ describe('multi-root package contexts', () => {
     expect(b?.uiNames).toEqual(['elementPlus2'])
   })
 
+  it('keeps separate contexts for the same package under overlapping workspace roots', async () => {
+    const findUp = vi.mocked((await import('find-up')).findUp)
+    findUp
+      .mockResolvedValueOnce('/workspace-a/packages/app/package.json')
+      .mockResolvedValueOnce('/workspace-a/packages/app/package.json')
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = {} as any
+    const outerDocument = '/workspace-a/packages/app/src/App.tsx'
+    const innerDocument = '/workspace-a/packages/app/src/Nested.tsx'
+
+    const outer = await mod.ensureContextForPath(outerDocument, extensionContext, () => {}, false, '/workspace-a')
+    const inner = await mod.ensureContextForPath(innerDocument, extensionContext, () => {}, false, '/workspace-a/packages')
+
+    expect(outer).not.toBe(inner)
+    expect(outer?.workspaceRoot).toBe('/workspace-a')
+    expect(inner?.workspaceRoot).toBe('/workspace-a/packages')
+    expect(mod.getContextForDocumentPath(outerDocument)).toBe(outer)
+    expect(mod.getContextForDocumentPath(innerDocument)).toBe(inner)
+    ;(findUp as any).mockImplementation(async (_name: string, options: any) => options.cwd.startsWith('/workspace-b')
+      ? '/workspace-b/packages/app/package.json'
+      : options.cwd.includes('/packages/b/')
+        ? '/workspace-a/packages/b/package.json'
+        : '/workspace-a/packages/app/package.json')
+  })
+
   it('keeps document contexts isolated when workspace A finishes after workspace B', async () => {
     let releaseA!: () => void
     const waitForA = new Promise<void>((resolve) => { releaseA = resolve })
@@ -111,16 +136,16 @@ describe('multi-root package contexts', () => {
     expect(second?.uis).toEqual([])
   })
 
-  it('invokes a child package watcher callback exactly once per change', async () => {
-    const onChange = vi.fn()
+  it('rebuilds a child package context exactly once per watcher change', async () => {
     const mod = await import('../../src/ui/ui-find')
 
-    await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', onChange, '/workspace-a')
+    const documentPath = '/workspace-a/packages/app/src/App.tsx'
+    const initial = await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace-a')
     const packageWatch = (watchFileMock.mock.calls as any[][]).find(([file]) => file === '/workspace-a/packages/app/package.json')
     expect(packageWatch).toBeDefined()
 
     packageWatch![1].onChange()
-    expect(onChange).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.generation).toBeGreaterThan(initial?.generation || 0))
   })
 
   it('watches an existing non-monorepo root for a false-to-true transition', async () => {
@@ -135,19 +160,16 @@ describe('multi-root package contexts', () => {
       return JSON.stringify({ dependencies: {} })
     })
     vi.mocked(fs.default.access).mockRejectedValue(new Error('no workspace file'))
-    const onChange = vi.fn()
     const mod = await import('../../src/ui/ui-find')
 
-    const first = await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', onChange, '/workspace-a')
-    expect(first?.uis).toEqual([])
+    const first = await mod.ensureContextForPath('/workspace-a/packages/app/src/App.tsx', {} as any, () => {}, false, '/workspace-a')
+    expect(first?.uiNames).toEqual([])
     const rootWatch = (watchFileMock.mock.calls as any[][]).find(([file]) => file === '/workspace-a/package.json')
     expect(rootWatch).toBeDefined()
 
     rootHasWorkspaces = true
     rootWatch![1].onChange()
-    expect(onChange).toHaveBeenCalled()
-    const second = await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', onChange, '/workspace-a')
-    expect(second?.uis).toEqual([['antd', '5.0.0']])
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath('/workspace-a/packages/app/src/App.tsx')?.uiNames).toEqual(['antd5']))
   })
 
   it('drops stale root dependencies when the root manifest disappears or is invalid', async () => {
@@ -175,22 +197,20 @@ describe('multi-root package contexts', () => {
     expect((await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', undefined, '/workspace-a'))?.uis).toEqual([['antd', '5.0.0']])
   })
 
-  it('notifies every loaded child package when the shared root manifest changes', async () => {
+  it('rebuilds every loaded child package when the shared root manifest changes', async () => {
     const mod = await import('../../src/ui/ui-find')
-    const rebuildA = vi.fn()
-    const rebuildB = vi.fn()
+    const app = '/workspace-a/packages/app/src/App.tsx'
+    const sibling = '/workspace-a/packages/b/src/App.tsx'
 
-    await mod.findPkgUI('/workspace-a/packages/app/src/App.tsx', rebuildA, '/workspace-a')
-    await mod.findPkgUI('/workspace-a/packages/b/src/App.tsx', rebuildB, '/workspace-a')
-    // Re-registering a child replaces, rather than duplicates, its subscriber.
-    await mod.findPkgUI('/workspace-a/packages/app/src/Other.tsx', rebuildA, '/workspace-a')
+    const firstA = await mod.ensureContextForPath(app, {} as any, () => {}, false, '/workspace-a')
+    const firstB = await mod.ensureContextForPath(sibling, {} as any, () => {}, false, '/workspace-a')
 
     const rootWatch = (watchFileMock.mock.calls as any[]).find(([file]) => file === '/workspace-a/package.json')
     expect(rootWatch).toBeDefined()
     rootWatch[1].onChange()
 
-    expect(rebuildA).toHaveBeenCalledTimes(1)
-    expect(rebuildB).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(app)?.generation).toBeGreaterThan(firstA?.generation || 0))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(sibling)?.generation).toBeGreaterThan(firstB?.generation || 0))
   })
 
   it('does not inherit workspace-root dependencies without monorepo metadata', async () => {

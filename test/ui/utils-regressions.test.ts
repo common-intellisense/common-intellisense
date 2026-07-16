@@ -5,7 +5,7 @@ const mockGetActiveTextEditorLanguageId = vi.fn(() => 'vue')
 const mockGetCurrentFileUrl = vi.fn(() => '/fixtures/App.vue')
 const mockGetConfiguration = vi.fn(() => undefined)
 const mockSetCommandParams = vi.fn((value: any) => `encoded:${Array.isArray(value) ? value.join('|') : value}`)
-const mockResolveInstalledPackageVersion = vi.fn(async () => undefined)
+const mockResolveInstalledPackageVersion = vi.fn(async (): Promise<string | undefined> => undefined)
 const mockCreateCompletionItem = vi.fn((options: any) => ({ ...options }))
 const mockCreateHover = vi.fn((documentation: any) => ({ documentation }))
 
@@ -177,6 +177,20 @@ describe('utils reducer regressions', () => {
     expect(svelteButton.params.requiresImport).toBe(true)
   })
 
+  it('keeps the built-in Svelte onclick suggestion with legacy click metadata', async () => {
+    const { propsReducer } = await import('../../src/ui/utils')
+    const props = await propsReducer({
+      uiName: 'fixture',
+      lib: 'fixture',
+      map: [{ name: 'Demo', props: {}, events: [{ name: 'click' }] }] as any,
+    })
+    const context = { languageId: 'svelte', framework: 'svelte' as const, uri: 'file:///Demo.svelte' }
+    const events = props.Demo.events[0](context).map(item => item.content)
+
+    expect(events).toContain('click={click}')
+    expect(events.some(event => event.startsWith('onclick={onclick}'))).toBe(true)
+  })
+
   it('uses the same Svelte event names for optional and required snippets', async () => {
     const { getRequireProp, propsReducer } = await import('../../src/ui/utils')
     const events = [
@@ -198,6 +212,7 @@ describe('utils reducer regressions', () => {
   })
 
   it('keeps same-major APIs when only an alias adapter major is known', async () => {
+    mockResolveInstalledPackageVersion.mockClear().mockResolvedValueOnce('3.1.0')
     const { propsReducer } = await import('../../src/ui/utils')
     const component = {
       name: 'Demo',
@@ -207,6 +222,7 @@ describe('utils reducer regressions', () => {
     const props = await propsReducer({ uiName: 'elementUi2', lib: 'element-ui', adapterMajor: '2', map: [component] as any })
     const vue = { languageId: 'vue', framework: 'vue' as const, uri: 'file:///Demo.vue' }
 
+    expect(mockResolveInstalledPackageVersion).not.toHaveBeenCalled()
     expect(props.Demo.completions[0](vue).some(item => item.content.startsWith('newer'))).toBe(true)
     expect(props.Demo.completions[0](vue).some(item => item.content.startsWith('future'))).toBe(false)
     expect(props.Demo.tableDocument.value).toContain('newer')

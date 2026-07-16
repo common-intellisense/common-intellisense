@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock } = vi.hoisted(() => ({
+const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock, resolveInstalledVersionMock } = vi.hoisted(() => ({
   findUpMock: vi.fn(),
   fetchMock: vi.fn(),
   localFetchMock: vi.fn(async (_root?: string) => ({})),
@@ -9,6 +9,7 @@ const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, re
   resolveLocalAdapterFileMock: vi.fn(),
   getConfigurationMock: vi.fn<(key: string) => unknown>(() => null),
   watchFileMock: vi.fn(() => () => {}),
+  resolveInstalledVersionMock: vi.fn(async () => '5.0.0'),
 }))
 
 vi.mock('find-up', () => ({ findUp: findUpMock }))
@@ -40,7 +41,7 @@ vi.mock('../../src/services/fetch', () => ({
 }))
 vi.mock('../../src/services/package-version', () => ({
   clearPackageVersionCache: vi.fn(),
-  resolveInstalledPackageVersion: vi.fn(async () => '5.0.0'),
+  resolveInstalledPackageVersion: resolveInstalledVersionMock,
 }))
 vi.mock('../../src/type-extract/cache', () => ({ clearTypeCache: vi.fn() }))
 vi.mock('../../src/constants', () => ({ UINames: ['antd'], nameMap: {} }))
@@ -56,6 +57,7 @@ describe('package context generations', () => {
     resolveLocalAdapterFileMock.mockReset().mockImplementation(async (root: string, uri: string) => `${root}/${uri}`)
     getConfigurationMock.mockReset().mockReturnValue(null)
     watchFileMock.mockReset().mockImplementation(() => () => {})
+    resolveInstalledVersionMock.mockReset().mockResolvedValue('5.0.0')
   })
 
   it('does not let a context started before global invalidation commit later', async () => {
@@ -124,6 +126,23 @@ describe('package context generations', () => {
     resolveSecond({})
     await expect(second).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
     expect(mod.getContextForDocumentPath(documentPath)?.pkgPath).toBe('/workspace/package.json')
+  })
+
+  it('does not register package watchers after an in-flight load is invalidated', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveFetch!: (value: any) => void
+    fetchMock.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    const pending = mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidatePackageContext(documentPath)
+    resolveFetch({})
+
+    await expect(pending).resolves.toBeUndefined()
+    expect(watchFileMock).not.toHaveBeenCalledWith('/workspace/package.json', expect.anything())
+    expect(mod.getContextRegistryStats().watchers).toBe(0)
   })
 
   it('notifies listeners when a package context is invalidated and rebuilt', async () => {
@@ -372,6 +391,27 @@ describe('package context generations', () => {
     nowSpy.mockRestore()
   })
 
+  it('re-reduces custom snapshots when official runtime version context changes', async () => {
+    let now = 3_750_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    resolveInstalledVersionMock.mockResolvedValueOnce('5.1.0').mockResolvedValue('5.2.0')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    localFetchMock
+      .mockResolvedValueOnce({ antd5: (options: any) => ({ CustomButton: { versionMarker: options.installedVersion } }) })
+      .mockReturnValueOnce(new Promise(() => {}))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.CustomButton?.versionMarker).toBe('5.1.0'))
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.CustomButton?.versionMarker).toBe('5.2.0'))
+    nowSpy.mockRestore()
+  })
+
   it('does not let an old custom reduction overwrite a newer official context', async () => {
     let now = 4_000_000
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -545,6 +585,28 @@ describe('package context generations', () => {
 
     expect(watchFileMock).not.toHaveBeenCalledWith('/workspace/adapter.js', expect.anything())
     expect(mod.getContextRegistryStats().localWatchers).toBe(0)
+  })
+
+  it('retains root resources while a sibling context is still loading', async () => {
+    findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/pkg-a/')
+      ? '/workspace/pkg-a/package.json'
+      : '/workspace/pkg-b/package.json')
+    let resolveSibling!: (value: any) => void
+    fetchMock
+      .mockResolvedValueOnce({})
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSibling = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const firstDocument = '/workspace/pkg-a/src/App.tsx'
+    const siblingDocument = '/workspace/pkg-b/src/App.tsx'
+
+    await mod.ensureContextForPath(firstDocument, {} as any, () => {}, false, '/workspace')
+    const sibling = mod.ensureContextForPath(siblingDocument, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    mod.invalidatePackageContext(firstDocument)
+
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(1)
+    resolveSibling({})
+    await expect(sibling).resolves.toMatchObject({ pkgPath: '/workspace/pkg-b/package.json' })
   })
 
   it('retains shared workspace resources until its last context is removed', async () => {

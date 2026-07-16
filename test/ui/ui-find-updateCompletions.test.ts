@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const resolveInstalledPackageVersion = vi.fn(async () => undefined)
+const resolveInstalledPackageVersion = vi.fn(async (): Promise<string | undefined> => undefined)
 const fetchFromLocalUris = vi.fn(async (_root?: string) => ({}))
 const writeLocalCache = vi.fn(async () => {})
 const fetchFromCommonIntellisense = vi.fn(async (_tag: string, options: any) => {
@@ -84,7 +84,8 @@ describe('ui-find updateCompletions', () => {
     expect(mod.getSourceScope(context, 'antd')).toMatchObject({ key: 'antd5', lib: 'antd' })
   })
 
-  it('uses the alias major rather than the unrelated wrapper package version', async () => {
+  it('uses the alias major rather than an unrelated installed package major', async () => {
+    resolveInstalledPackageVersion.mockResolvedValueOnce('3.1.0')
     const mod = await import('../../src/ui/ui-find')
     await mod.updateCompletions([['@acme/ui', '1.4.0']] as any, {
       selectedUIs: ['auto'],
@@ -99,6 +100,24 @@ describe('ui-find updateCompletions', () => {
     expect(fetchFromCommonIntellisense).toHaveBeenCalledWith(
       'element-ui2',
       expect.objectContaining({ pkgName: 'element-ui', uiName: 'elementUi2', installedVersion: undefined, adapterMajor: '2' }),
+    )
+  })
+
+  it('keeps an installed version that matches the explicit alias major', async () => {
+    resolveInstalledPackageVersion.mockResolvedValueOnce('2.4.0')
+    const mod = await import('../../src/ui/ui-find')
+    await mod.updateCompletions([['@acme/ui', '1.4.0']] as any, {
+      selectedUIs: ['auto'],
+      alias: { '@acme/ui': 'elementUi2' },
+      detectSlots: () => {},
+      prefix: {},
+      pkgPath: '/repo/packages/a/package.json',
+      workspaceRoot: '/repo',
+    })
+
+    expect(fetchFromCommonIntellisense).toHaveBeenCalledWith(
+      'element-ui2',
+      expect.objectContaining({ installedVersion: '2.4.0', adapterMajor: '2' }),
     )
   })
 

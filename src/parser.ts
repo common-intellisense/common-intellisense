@@ -18,6 +18,7 @@ import {
 
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
+import { findUniqueSuffixComponentKey } from './ui/find-prefixed-only'
 import { convertPrefixedComponentName, findPrefixedComponent, hyphenate } from './ui/utils'
 import { getSourceScope, logger } from './ui/ui-find'
 import type { ComponentSourceScope } from './services/component-resolver'
@@ -1734,25 +1735,9 @@ function findDynamic(tag: string, UiCompletions: PropsConfig, prefix: string[], 
   // tags like "Pagination" match keys such as "ElPagination" when prefix
   // lookup didn't find a direct match.
   if (!target && UiCompletions) {
-    const want = tag.toLowerCase()
-    let bestKey: string | null = null
-    for (const key of Object.keys(UiCompletions)) {
-      const k = key.toLowerCase()
-      if (!k.endsWith(want))
-        continue
-      // prefer matches with same lib when `from` specified
-      const candidate = UiCompletions[key]
-      if (!acceptsSource(candidate))
-        continue
-      if (normalizedFrom) {
-        target = candidate
-        break
-      }
-      if (!bestKey || key.length > bestKey.length)
-        bestKey = key
-    }
-    if (!target && bestKey)
-      target = UiCompletions[bestKey]
+    const match = findUniqueSuffixComponentKey(tag, Object.keys(UiCompletions), key => acceptsSource(UiCompletions[key]))
+    if (match)
+      target = UiCompletions[match]
   }
   return target
 }

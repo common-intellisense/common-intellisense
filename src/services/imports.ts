@@ -108,34 +108,33 @@ export function createImportEdits(code: string, source: string, dependencies: st
         : (promotion.clause.namedBindings as ts.NamespaceImport).name.text
       if (collectRuntimeBindingConflicts(sourceFile, promotion.declaration, importWay === 'default').has(promotedName))
         return []
+      const bindings = promotion.clause.namedBindings
+      // Promoting only one value from a default + namespace declaration requires
+      // splitting the statement, which cannot preserve attributes losslessly.
+      if (bindings && ts.isNamespaceImport(bindings) && promotion.clause.name)
+        return []
+
+      const edits: ImportEdit[] = []
+      const removal = getTypeKeywordRemovalEdit(script, sourceFile, promotion.clause)
+      if (!removal)
+        return []
+      edits.push(removal)
+      if (importWay === 'default' && bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          if (!element.isTypeOnly) {
+            const start = script.offset + element.getStart(sourceFile)
+            edits.push({ start, end: start, text: 'type ' })
+          }
+        }
+      }
+
       const additional = names.filter(name => name !== promotedName && !existing.has(name) && !occupied.has(name))
-      const sourceText = JSON.stringify(source)
-      const preserved: string[] = []
-      if (importWay === 'default') {
-        const bindings = promotion.clause.namedBindings
-        if (bindings && ts.isNamedImports(bindings)) {
-          const named = bindings.elements.map(element => `type ${getImportSpecifierText(element)}`)
-          preserved.push(`import ${promotedName}, { ${named.join(', ')} } from ${sourceText}`)
-        }
-        else {
-          preserved.push(`import ${promotedName} from ${sourceText}`)
-          if (bindings && ts.isNamespaceImport(bindings))
-            preserved.push(`import type * as ${bindings.name.text} from ${sourceText}`)
-        }
-      }
-      else {
-        if (promotion.clause.name)
-          preserved.push(`import type ${promotion.clause.name.text} from ${sourceText}`)
-        preserved.push(`import * as ${promotedName} from ${sourceText}`)
-      }
       const extraStatements = createStatements(source, additional, importWay)
-      if (extraStatements)
-        preserved.push(extraStatements)
-      return finish([{
-        start: script.offset + promotion.declaration.getStart(sourceFile),
-        end: script.offset + promotion.declaration.end,
-        text: preserved.join('\n'),
-      }], [...existing, promotedName, ...additional])
+      if (extraStatements) {
+        const insertion = promotion.declaration.end
+        edits.push({ start: script.offset + insertion, end: script.offset + insertion, text: `\n${extraStatements}` })
+      }
+      return finish(edits, [...existing, promotedName, ...additional])
     }
   }
 
@@ -224,6 +223,21 @@ export function createImportEdits(code: string, source: string, dependencies: st
     : beforeInsertion.endsWith('\n') ? '' : '\n'
   const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
   return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }], [...existing, ...missing])
+}
+
+function getTypeKeywordRemovalEdit(script: ScriptRegion, sourceFile: ts.SourceFile, clause: ts.ImportClause): ImportEdit | null {
+  const typeKeyword = clause.getChildren(sourceFile).find(node => node.kind === ts.SyntaxKind.TypeKeyword)
+  if (!typeKeyword)
+    return null
+
+  const nextToken = clause.getChildren(sourceFile).find(node => node.getStart(sourceFile) >= typeKeyword.end)
+  const trailingTrivia = nextToken ? script.code.slice(typeKeyword.end, nextToken.getStart(sourceFile)) : ''
+  const end = nextToken && /^\s*$/.test(trailingTrivia) ? nextToken.getStart(sourceFile) : typeKeyword.end
+  return {
+    start: script.offset + typeKeyword.getStart(sourceFile),
+    end: script.offset + end,
+    text: '',
+  }
 }
 
 function findTypeOnlyValuePromotion(imports: ts.ImportDeclaration[], names: string[], importWay: Exclude<ImportWay, 'specifier'>) {

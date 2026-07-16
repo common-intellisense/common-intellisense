@@ -8,6 +8,7 @@ const adapter = `module.exports = {
       name: 'Demo',
       props: {
         old: { type: 'string' },
+        inferred: { type: '' },
         newer: { type: 'string', version: '2.6.0' }
       },
       events: []
@@ -29,7 +30,11 @@ const adapter = `module.exports = {
 vi.mock('@simon_he/fetch-npm', () => ({ fetchAndExtractPackage: vi.fn(async () => adapter) }))
 vi.mock('@simon_he/fetch-npm-cjs', () => ({ fetchFromCjsForCommonIntellisense: vi.fn(async () => adapter) }))
 vi.mock('@simon_he/latest-version', () => ({ latestVersion: vi.fn(async () => '1.0.0') }))
-vi.mock('../../src/type-extract', () => ({ fetchFromTypes: vi.fn(async () => undefined) }))
+vi.mock('../../src/type-extract', () => ({
+  fetchFromTypes: vi.fn(async () => ({
+    fixture2Raw: () => [{ name: 'Demo', props: { inferred: { type: `'small' | 'large'` } } }],
+  })),
+}))
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: vi.fn(), error: vi.fn() } }))
 
 describe('official adapter package version context', () => {
@@ -55,11 +60,14 @@ describe('official adapter package version context', () => {
     ])
 
     const vue = { languageId: 'vue', framework: 'vue' as const, uri: 'file:///Demo.vue' }
-    const legacyProps = (await legacy!.fixture2()).Demo.completions[0](vue).map((item: any) => item.content)
-    const currentProps = (await current!.fixture2()).Demo.completions[0](vue).map((item: any) => item.content)
+    const legacyItems = (await legacy!.fixture2()).Demo.completions[0](vue)
+    const currentItems = (await current!.fixture2()).Demo.completions[0](vue)
+    const legacyProps = legacyItems.map((item: any) => item.content)
+    const currentProps = currentItems.map((item: any) => item.content)
 
     expect(legacyProps.some((content: string) => content.startsWith('newer'))).toBe(false)
     expect(currentProps.some((content: string) => content.startsWith('newer'))).toBe(true)
+    expect(legacyItems.find((item: any) => item.content.startsWith('inferred'))?.propType).toBe(`'small' | 'large'`)
 
     const legacyComponents = legacy!.fixture2Components()
     const currentComponents = current!.fixture2Components()

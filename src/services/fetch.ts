@@ -774,8 +774,17 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
           }
           else {
             let propsData = data
-            if (Array.isArray(fallbackRaw) && fallbackRaw.length)
-              propsData = mergeComponentsWithTypeFallback(propsData as any[], fallbackRaw)
+            if (Array.isArray(fallbackRaw) && fallbackRaw.length) {
+              if (Array.isArray(propsData)) {
+                propsData = mergeComponentsWithTypeFallback(propsData, fallbackRaw)
+              }
+              else if (propsData && typeof propsData === 'object' && Array.isArray((propsData as any).map)) {
+                propsData = {
+                  ...(propsData as any),
+                  map: mergeComponentsWithTypeFallback((propsData as any).map, fallbackRaw),
+                }
+              }
+            }
             const reducedProps = Array.isArray(propsData)
               ? propsReducer({
                   uiName,

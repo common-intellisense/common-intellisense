@@ -8,6 +8,7 @@ import * as vscode from 'vscode'
 import { translate } from '../translate'
 import { resolveInstalledPackageVersion } from '../services/package-version'
 import { logger } from '../ui/ui-find'
+import { findUniqueSuffixComponentKey } from './find-prefixed-only'
 
 const TRUSTED_COMMANDS = {
   enabledCommands: [
@@ -189,7 +190,7 @@ export function propsReducer(options: PropsOptions) {
   // }
   let localVersion = installedVersion
   let effectiveAdapterMajor = adapterMajor
-  let versionResolved = !!installedVersion
+  let versionResolved = !!installedVersion || !!adapterMajor
 
   return reduceAsync(map, async (result, item: Component) => {
     const completions: ((context?: CompletionRenderInput) => SubCompletionItem[])[] = []
@@ -431,7 +432,9 @@ export function propsReducer(options: PropsOptions) {
       const localEvents = [...visibleEvents]
 
       originEvent.forEach((_event) => {
-        if (!localEvents.find(event => event.name === _event.name))
+        const renderedName = isSvelte ? renderSvelteEventPropName(_event) : _event.name
+        const hasEquivalentEvent = localEvents.some(event => (isSvelte ? renderSvelteEventPropName(event) : event.name) === renderedName)
+        if (!hasEquivalentEvent)
           localEvents.push(_event)
       })
 
@@ -976,8 +979,14 @@ export function convertPrefixedComponentName(componentName: string, prefix: stri
  * @returns Matched component or null
  */
 export function findPrefixedComponent(componentName: string, prefixes: string[], UiCompletions: any): any {
-  // Try each prefix
+  // Try each prefix. Construct the expected prefixed key first so `Button`
+  // resolves to `ElButton`, never a longer suffix such as `ElRadioButton`.
   for (const prefix of prefixes) {
+    const pascalPrefix = prefix[0]?.toUpperCase() + prefix.slice(1)
+    const exactPrefixedKey = `${pascalPrefix}${componentName[0]?.toUpperCase()}${componentName.slice(1)}`
+    if (UiCompletions[exactPrefixedKey])
+      return UiCompletions[exactPrefixedKey]
+
     const standardName = convertPrefixedComponentName(componentName, prefix)
     if (standardName) {
       if (UiCompletions[standardName])
@@ -995,18 +1004,9 @@ export function findPrefixedComponent(componentName: string, prefixes: string[],
   // without prefix (e.g. "Pagination" or "pagination") can match prefixed
   // completion keys like "ElPagination".
   if (UiCompletions) {
-    const want = componentName.toLowerCase()
-    let bestKey: string | null = null
-    for (const key of Object.keys(UiCompletions)) {
-      const k = key.toLowerCase()
-      if (!k.endsWith(want))
-        continue
-      // prefer longer key (more specific prefix), e.g. ElPagination over Pagination
-      if (!bestKey || key.length > bestKey.length)
-        bestKey = key
-    }
-    if (bestKey)
-      return UiCompletions[bestKey]
+    const match = findUniqueSuffixComponentKey(componentName, Object.keys(UiCompletions))
+    if (match)
+      return UiCompletions[match]
   }
 
   return null

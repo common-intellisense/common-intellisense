@@ -237,6 +237,16 @@ const view = [Button, Input]
     expect(output).toContain('import Button, { type ButtonProps } from "ui"')
   })
 
+  it('promotes type-only values without replacing comments or import attributes', () => {
+    const code = `import /* keep-before */ type /* keep-after */ Button, { ButtonProps } from "ui" with { type: "json" }\n`
+    const output = applyEdits(code, createImportEdits(code, 'ui', ['Button'], 'default'))
+
+    expect(output).toContain('/* keep-before */')
+    expect(output).toContain('/* keep-after */')
+    expect(output).toContain('{ type ButtonProps }')
+    expect(output).toContain('with { type: "json" }')
+  })
+
   it('emits one valid statement per default or namespace dependency', () => {
     expect(applyEdits('', createImportEdits('', 'ui/button', ['Button', 'ButtonGroup'], 'default'))).toBe(
       'import Button from "ui/button"\nimport ButtonGroup from "ui/button"\n',

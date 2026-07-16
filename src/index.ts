@@ -392,7 +392,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return
         if (nearestPackagePath !== packageContext.pkgPath)
           return
-        const latestContext = getContextForPackagePath(nearestPackagePath)
+        const latestContext = getContextForPackagePath(nearestPackagePath, getDocumentWorkspaceRoot(editor.document))
         if (latestContext)
           return analyzeDocumentSlots(editor.document, latestContext)
       }).catch(error => logger.error(String(error)))

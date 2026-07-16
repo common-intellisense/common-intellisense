@@ -3,7 +3,7 @@ import type { OptionsComponents, PropsConfig, Uis } from './types'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { createLog, getConfiguration, getCurrentFileUrl, getRootPath, watchFile } from '@vscode-use/utils'
+import { createLog, getConfiguration, getCurrentFileUrl, getLocale, getRootPath, watchFile } from '@vscode-use/utils'
 import { findUp } from 'find-up'
 import semver from 'semver'
 import { UINames as configUINames } from '../constants'
@@ -34,6 +34,7 @@ interface ContextModel {
 interface CustomSourceSnapshot {
   exports: Record<string, any>
   signature: string
+  reductionSignature: string
   configurationIndex: number
   /** Fully reduced in isolation; publication only composes validated projections. */
   model: ContextModel
@@ -109,12 +110,19 @@ export function getSourceScope(context: Pick<PackageContext, 'sourceScopes'>, so
 interface ContextLoad {
   epoch: number
   generation: number
+  pkgPath: string
+  workspaceRoot: string
   task: Promise<PackageContext | undefined>
+}
+interface PackageWatcherEntry {
+  stop: () => void
+  subscribers: Map<string, () => void>
 }
 const contextLoads = new Map<string, ContextLoad>()
 const generations = new Map<string, number>()
 const documentPackageCache = new Map<string, string | null>()
-const mainWatchers = new Map<string, () => void>()
+const documentContextCache = new Map<string, string>()
+const mainWatchers = new Map<string, PackageWatcherEntry>()
 const maxInactivePackageContexts = 20
 const sourceRefreshes = new Set<string>()
 const localSourceWatchers = new Map<string, { stop: () => void, timer?: ReturnType<typeof setTimeout> }>()
@@ -132,7 +140,7 @@ function getRetryDelay(failureCount: number) {
 }
 
 function getSourceRefreshKey(kind: 'custom' | 'official', context: PackageContext) {
-  return `${kind}:${context.pkgPath || context.cwd}:${context.generation}:${context.officialCheckedAt}`
+  return `${kind}:${getContextKeyForContext(context)}:${context.generation}:${context.officialCheckedAt}`
 }
 
 let registryEpoch = 0
@@ -187,6 +195,14 @@ function cloneModel(model: ContextModel): ContextModel {
 
 let generationSequence = 0
 
+function getContextKey(workspaceRoot: string, pkgPath: string) {
+  return `${path.resolve(workspaceRoot)}\0${path.resolve(pkgPath)}`
+}
+
+function getContextKeyForContext(context: Pick<PackageContext, 'pkgPath' | 'workspaceRoot'>) {
+  return getContextKey(context.workspaceRoot, context.pkgPath)
+}
+
 function nextGeneration(key: string) {
   const generation = ++generationSequence
   generations.set(key, generation)
@@ -199,24 +215,78 @@ function applyContext(context: PackageContext) {
     cacheMap.set(key, value)
 }
 
-function touchContext(pkgPath: string, context: PackageContext) {
-  contexts.delete(pkgPath)
-  contexts.set(pkgPath, context)
+function touchContext(contextKey: string, context: PackageContext) {
+  contexts.delete(contextKey)
+  contexts.set(contextKey, context)
 }
 
-function disposePackageWatcher(pkgPath: string) {
-  const stop = mainWatchers.get(pkgPath)
-  if (!stop)
+function disposePackageWatcher(contextKey: string, pkgPath: string) {
+  const watcher = mainWatchers.get(pkgPath)
+  if (!watcher)
     return
-  try { stop() }
+  watcher.subscribers.delete(contextKey)
+  if (watcher.subscribers.size)
+    return
+  try { watcher.stop() }
   catch {}
   mainWatchers.delete(pkgPath)
 }
 
+function registerPackageWatchers(contextKey: string, context: PackageContext, onChange: () => void) {
+  let watcher = mainWatchers.get(context.pkgPath)
+  if (!watcher) {
+    const subscribers = new Map<string, () => void>()
+    watcher = {
+      subscribers,
+      stop: watchFile(context.pkgPath, {
+        onChange: () => {
+          for (const rebuild of [...subscribers.values()])
+            rebuild()
+        },
+      }),
+    }
+    mainWatchers.set(context.pkgPath, watcher)
+  }
+  watcher.subscribers.set(contextKey, onChange)
+
+  const cached = rootPkgCache.get(context.workspaceRoot)
+  if (!cached || cached.rootPkgPath === context.pkgPath)
+    return
+  cached.subscribers ||= new Map()
+  cached.subscribers.set(contextKey, onChange)
+  if (!cached.stopRoot) {
+    cached.stopRoot = watchFile(cached.rootPkgPath, {
+      onChange: () => {
+        const subscribers = [...(cached.subscribers?.values() || [])]
+        invalidatePackageContext(context.workspaceRoot)
+        for (const rebuild of subscribers)
+          rebuild()
+      },
+    })
+  }
+  if (!cached.stopWorkspace) {
+    try {
+      const fsWatcher = fs.watch(context.workspaceRoot, (_event, filename) => {
+        if (filename?.toString() !== 'pnpm-workspace.yaml')
+          return
+        cached.isMonorepo = false
+        const subscribers = [...(cached.subscribers?.values() || [])]
+        invalidatePackageContext(context.workspaceRoot)
+        for (const rebuild of subscribers)
+          rebuild()
+      })
+      cached.stopWorkspace = () => fsWatcher.close()
+    }
+    catch {}
+  }
+}
+
 function disposeUnusedWorkspaceResources(workspaceRoot: string) {
   const resolvedRoot = path.resolve(workspaceRoot)
-  if ([...contexts.values()].some(context => path.resolve(context.workspaceRoot) === resolvedRoot))
+  if ([...contexts.values()].some(context => path.resolve(context.workspaceRoot) === resolvedRoot)
+    || [...contextLoads.values()].some(load => path.resolve(load.workspaceRoot) === resolvedRoot)) {
     return
+  }
   disposeRootPackageCache(workspaceRoot)
   const prefix = `${resolvedRoot}\0`
   for (const [key, watcher] of localSourceWatchers) {
@@ -233,18 +303,18 @@ function disposeUnusedWorkspaceResources(workspaceRoot: string) {
 function pruneInactiveContexts() {
   if (contexts.size <= maxInactivePackageContexts)
     return
-  const referenced = new Set([...documentPackageCache.values()].filter((value): value is string => !!value))
-  for (const [pkgPath] of contexts) {
+  const referenced = new Set(documentContextCache.values())
+  for (const [contextKey, context] of contexts) {
     if (contexts.size <= maxInactivePackageContexts)
       break
-    if (referenced.has(pkgPath))
+    if (referenced.has(contextKey))
       continue
-    const workspaceRoot = contexts.get(pkgPath)?.workspaceRoot
-    contexts.delete(pkgPath)
-    contextLoads.delete(pkgPath)
-    generations.delete(pkgPath)
-    disposePackageWatcher(pkgPath)
-    removeRootPackageSubscriber(pkgPath)
+    const { workspaceRoot, pkgPath } = context
+    contexts.delete(contextKey)
+    contextLoads.delete(contextKey)
+    generations.delete(contextKey)
+    disposePackageWatcher(contextKey, pkgPath)
+    removeRootPackageSubscriber(contextKey)
     if (workspaceRoot)
       disposeUnusedWorkspaceResources(workspaceRoot)
     for (const [documentPath, cached] of urlCache) {
@@ -256,6 +326,7 @@ function pruneInactiveContexts() {
 
 export function releaseDocumentContext(documentPath: string) {
   documentPackageCache.delete(documentPath)
+  documentContextCache.delete(documentPath)
   urlCache.delete(documentPath)
   pruneInactiveContexts()
 }
@@ -271,12 +342,14 @@ export function getContextRegistryStats() {
 }
 
 export function getContextForDocumentPath(cwd: string) {
-  const packagePath = documentPackageCache.get(cwd)
-  return packagePath ? contexts.get(packagePath) : contexts.get(cwd)
+  const contextKey = documentContextCache.get(cwd)
+  return contextKey ? contexts.get(contextKey) : undefined
 }
 
-export function getContextForPackagePath(pkgPath: string) {
-  return contexts.get(pkgPath)
+export function getContextForPackagePath(pkgPath: string, workspaceRoot?: string) {
+  if (workspaceRoot)
+    return contexts.get(getContextKey(workspaceRoot, pkgPath))
+  return [...contexts.values()].find(context => context.pkgPath === pkgPath)
 }
 
 export async function resolvePackagePathForDocument(cwd: string, refresh = false) {
@@ -304,6 +377,7 @@ export function invalidateDocumentPackageMappingsForManifest(manifestPath: strin
   for (const [documentPath, packagePath] of documentPackageCache) {
     if (packagePath === normalizedManifest || isSameOrWithin(documentPath, manifestDirectory)) {
       documentPackageCache.delete(documentPath)
+      documentContextCache.delete(documentPath)
       urlCache.delete(documentPath)
     }
   }
@@ -328,7 +402,8 @@ export function handlePackageManifestLifecycle(manifestPath: string) {
       .map(context => context.pkgPath))
     invalidatePackageContext(rootEntry[0])
   }
-  else if (contexts.has(normalizedManifest) || contextLoads.has(normalizedManifest)) {
+  else if ([...contexts.values()].some(context => context.pkgPath === normalizedManifest)
+    || [...contextLoads.values()].some(load => load.pkgPath === normalizedManifest)) {
     packagePaths.push(normalizedManifest)
     invalidatePackageContext(normalizedManifest)
   }
@@ -343,6 +418,7 @@ export function handlePackageManifestLifecycle(manifestPath: string) {
     if (!mappedToChangedManifest && !introducesNearerBoundary)
       continue
     documentPackageCache.delete(documentPath)
+    documentContextCache.delete(documentPath)
     urlCache.delete(documentPath)
     documentPaths.push(documentPath)
   }
@@ -363,30 +439,47 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
   if (cachedDiscovery?.pkg !== pkgPath)
     urlCache.delete(cwd)
 
-  const existing = contexts.get(pkgPath)
+  const resolvedWorkspaceRoot = workspaceRoot || path.dirname(pkgPath)
+  const contextKey = getContextKey(resolvedWorkspaceRoot, pkgPath)
+  const existing = contexts.get(contextKey)
   if (existing) {
-    touchContext(pkgPath, existing)
+    touchContext(contextKey, existing)
     documentPackageCache.set(cwd, pkgPath)
+    documentContextCache.set(cwd, contextKey)
     applyContext(existing)
-    revalidateStaleContext(existing, extensionContext, detectSlots, workspaceRoot || existing.workspaceRoot)
+    revalidateStaleContext(existing, extensionContext, detectSlots, resolvedWorkspaceRoot)
     return existing
   }
-  const loading = contextLoads.get(pkgPath)
+  const loading = contextLoads.get(contextKey)
   if (loading)
     return loading.task
 
   const epoch = registryEpoch
-  const generation = nextGeneration(pkgPath)
+  const generation = nextGeneration(contextKey)
   const load = {} as ContextLoad
   load.epoch = epoch
   load.generation = generation
+  load.pkgPath = pkgPath
+  load.workspaceRoot = resolvedWorkspaceRoot
   load.task = (async () => {
     try {
-      const context = await buildContext(cwd, extensionContext, detectSlots, generation, workspaceRoot || path.dirname(pkgPath))
-      if (!context || registryEpoch !== epoch || generations.get(pkgPath) !== generation)
+      const context = await buildContext(cwd, extensionContext, detectSlots, generation, resolvedWorkspaceRoot)
+      if (!context || registryEpoch !== epoch || generations.get(contextKey) !== generation)
         return
-      touchContext(context.pkgPath, context)
+      const onChange = () => {
+        invalidatePackageContext(contextKey)
+        void ensureContextForPath(cwd, extensionContext, detectSlots, false, resolvedWorkspaceRoot)
+          .catch(error => logger.error(`Failed to rebuild package context: ${String(error)}`))
+      }
+      registerPackageWatchers(contextKey, context, onChange)
+      if (registryEpoch !== epoch || generations.get(contextKey) !== generation) {
+        disposePackageWatcher(contextKey, context.pkgPath)
+        removeRootPackageSubscriber(contextKey)
+        return
+      }
+      touchContext(contextKey, context)
       documentPackageCache.set(cwd, context.pkgPath)
+      documentContextCache.set(cwd, contextKey)
       pruneInactiveContexts()
       applyContext(context)
       notifyContextUpdated(context)
@@ -394,16 +487,17 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
       return context
     }
     finally {
-      if (contextLoads.get(pkgPath) === load)
-        contextLoads.delete(pkgPath)
+      if (contextLoads.get(contextKey) === load)
+        contextLoads.delete(contextKey)
+      disposeUnusedWorkspaceResources(resolvedWorkspaceRoot)
     }
   })()
-  contextLoads.set(pkgPath, load)
+  contextLoads.set(contextKey, load)
   return load.task
 }
 
 function maybeStartCustomRefresh(context: PackageContext, expectedEpoch: number, now = Date.now()) {
-  const contextKey = context.pkgPath || context.cwd
+  const contextKey = getContextKeyForContext(context)
   const latest = contexts.get(contextKey)
   if (!latest
     || registryEpoch !== expectedEpoch
@@ -421,7 +515,7 @@ function maybeStartCustomRefresh(context: PackageContext, expectedEpoch: number,
 }
 
 function revalidateStaleContext(context: PackageContext, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, workspaceRoot: string) {
-  const contextKey = context.pkgPath || context.cwd
+  const contextKey = getContextKeyForContext(context)
   const now = Date.now()
   const expectedEpoch = registryEpoch
   const officialDue = now - context.officialCheckedAt >= officialSourceTTL && now >= context.officialNextRetryAt
@@ -454,7 +548,12 @@ function revalidateStaleContext(context: PackageContext, extensionContext: vscod
       refreshed.officialLastAttemptAt = context.officialLastAttemptAt
       refreshed.officialFailureCount = 0
       refreshed.officialNextRetryAt = 0
-      refreshed.customSourceSnapshots = new Map(registered.customSourceSnapshots)
+      refreshed.customSourceSnapshots = new Map(await Promise.all([...registered.customSourceSnapshots].map(async ([sourceId, snapshot]) => [
+        sourceId,
+        snapshot.reductionSignature === getCustomReductionSignature(refreshed)
+          ? snapshot
+          : await prepareCustomSnapshot(refreshed, sourceId, snapshot.exports, snapshot.signature, snapshot.configurationIndex),
+      ] as const)))
       const composed = await composeContextFromSnapshots(refreshed, refreshed.customSourceSnapshots)
       const latest = contexts.get(contextKey)
       if (registryEpoch !== expectedEpoch || latest !== registered || generations.get(contextKey) !== context.generation)
@@ -493,12 +592,7 @@ export async function findUI(extensionContext: vscode.ExtensionContext, detectSl
 }
 
 async function buildContext(cwd: string, extensionContext: vscode.ExtensionContext, detectSlots: (...args: any[]) => void, generation: number, workspaceRoot?: string, refreshDiscovery = false) {
-  const onChange = () => {
-    invalidatePackageContext(cwd)
-    void ensureContextForPath(cwd, extensionContext, detectSlots, false, workspaceRoot)
-      .catch(error => logger.error(`Failed to rebuild package context: ${String(error)}`))
-  }
-  const discovered = (!refreshDiscovery && urlCache.get(cwd)) || await findPkgUI(cwd, onChange, workspaceRoot)
+  const discovered = (!refreshDiscovery && urlCache.get(cwd)) || await findPkgUI(cwd, undefined, workspaceRoot)
   if (!discovered)
     return
   urlCache.set(cwd, discovered)
@@ -526,7 +620,9 @@ export interface UpdateCompletionsOptions {
 
 export async function updateCompletions(uis: Uis, options: UpdateCompletionsOptions) {
   const cwd = options.pkgPath ? path.dirname(options.pkgPath) : getCurrentFileUrl() || ''
-  const contextKey = options.pkgPath || cwd
+  const pkgPath = options.pkgPath || cwd
+  const workspaceRoot = options.workspaceRoot || path.dirname(pkgPath)
+  const contextKey = getContextKey(workspaceRoot, pkgPath)
   const context = await buildCompletions(uis, options, cwd, nextGeneration(contextKey))
   contexts.set(contextKey, context)
   applyContext(context)
@@ -560,7 +656,11 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
       uiName = parsedAlias.name || uiName
       major = parsedAlias.major || major
       const underlyingPackageName = configUINames.find(candidate => formatUIName(candidate) === formatUIName(uiName)) || uiName
-      installedVersion = await resolveInstalledPackageVersion(underlyingPackageName, path.dirname(pkgPath))
+      const resolvedVersion = await resolveInstalledPackageVersion(underlyingPackageName, path.dirname(pkgPath))
+      const validResolvedVersion = resolvedVersion && semver.valid(resolvedVersion)
+      installedVersion = validResolvedVersion && (!parsedAlias.major || semver.major(validResolvedVersion) === Number(parsedAlias.major))
+        ? validResolvedVersion
+        : undefined
       uiName = underlyingPackageName
       originNames.push(`${declaredName}${major}`)
     }
@@ -742,7 +842,7 @@ export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath
 
 async function ensureLocalSourceWatchers(context: PackageContext, expectedEpoch: number) {
   const configuredPaths = await getConfiguredLocalSourcePaths(context.workspaceRoot, true)
-  const contextKey = context.pkgPath || context.cwd
+  const contextKey = getContextKeyForContext(context)
   const isContextLive = () => registryEpoch === expectedEpoch
     && contexts.get(contextKey)?.generation === context.generation
   if (!isContextLive())
@@ -788,7 +888,7 @@ function startTrackedContextEnhancements(context: PackageContext, expectedEpoch:
   sourceRefreshes.add(refreshKey)
   startContextEnhancements(context, expectedEpoch, expectedSourceEpoch, () => {
     sourceRefreshes.delete(refreshKey)
-    const latest = contexts.get(context.pkgPath || context.cwd)
+    const latest = contexts.get(getContextKeyForContext(context))
     if (latest?.generation === context.generation
       && latest.customSourceEpoch !== expectedSourceEpoch
       && latest.customRefreshPending) {
@@ -805,7 +905,21 @@ function getAdapterRuntimeOptions(context: PackageContext, exportKey: string) {
     || { resolveFrom: context.pkgPath }
 }
 
+function getCustomReductionSignature(context: PackageContext) {
+  let locale = ''
+  try { locale = getLocale() }
+  catch {}
+  return JSON.stringify({
+    adapterRuntimeOptions: [...context.adapterRuntimeOptions].sort(([a], [b]) => a.localeCompare(b)),
+    userPrefix: Object.keys(context.userPrefix).sort().map(key => [key, context.userPrefix[key]]),
+    locale,
+    workspaceRoot: path.resolve(context.workspaceRoot),
+    pkgPath: path.resolve(context.pkgPath),
+  })
+}
+
 async function prepareCustomSnapshot(context: PackageContext, sourceId: string, exports: Record<string, any>, signature: string, configurationIndex = Number.MAX_SAFE_INTEGER): Promise<CustomSourceSnapshot> {
+  const reductionSignature = getCustomReductionSignature(context)
   const model: ContextModel = { optionsComponents: emptyOptions(), uiCompletions: null, cacheMap: new Map(), sourceScopes: new Map(), sourceSignatures: new Map([[sourceId, signature]]) }
   for (const key of Object.keys(exports)) {
     const scopedKey = `custom:${sourceId}:${key}`
@@ -834,7 +948,7 @@ async function prepareCustomSnapshot(context: PackageContext, sourceId: string, 
       key,
     )
   }
-  return { exports, signature, configurationIndex, model }
+  return { exports, signature, reductionSignature, configurationIndex, model }
 }
 
 function startContextEnhancements(context: PackageContext, expectedEpoch: number, expectedSourceEpoch: number, onSettled?: () => void) {
@@ -875,7 +989,7 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
         const old = baselinePrefix.get(result.id)
         if (result.status === 'success') {
           const signature = result.signature || `volatile:${++volatileSnapshotSequence}`
-          if (old && result.signature && old.signature === result.signature) {
+          if (old && result.signature && old.signature === result.signature && old.reductionSignature === getCustomReductionSignature(context)) {
             const configurationIndex = result.configurationIndex ?? Number.MAX_SAFE_INTEGER
             preparedPrefix.set(result.id, old.configurationIndex === configurationIndex ? old : { ...old, configurationIndex })
           }
@@ -930,7 +1044,7 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
       // Every fulfilled loader has enqueued its publication before its task
       // settles, so this waits for the complete, latest publication queue.
       await publishQueue
-      const current = contexts.get(context.pkgPath || context.cwd)
+      const current = contexts.get(getContextKeyForContext(context))
       if (!loaderFailed
         && !publicationFailed
         && registryEpoch === expectedEpoch
@@ -989,7 +1103,7 @@ async function composeContextFromSnapshots(context: PackageContext, snapshots: C
 async function publishContextEnhancement(context: PackageContext, expectedEpoch: number, sourceResults: CustomSourceSnapshots, expectedSourceEpoch = context.customSourceEpoch) {
   if (registryEpoch !== expectedEpoch)
     return
-  const contextKey = context.pkgPath || context.cwd
+  const contextKey = getContextKeyForContext(context)
   const current = contexts.get(contextKey)
   const latestGeneration = generations.get(contextKey) ?? generations.get(context.cwd)
   if (!current || current.generation !== context.generation || current.customSourceEpoch !== expectedSourceEpoch || current.officialCheckedAt !== context.officialCheckedAt || latestGeneration !== context.generation)
@@ -1132,7 +1246,7 @@ async function computeMonorepoState(rootPath: string, rootPkg: any) {
   }
 }
 
-export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRoot?: string) {
+export async function findPkgUI(cwd?: string, _onChange?: () => void, workspaceRoot?: string) {
   if (!cwd)
     return
   const pkg = await findUp('package.json', { cwd })
@@ -1178,52 +1292,6 @@ export async function findPkgUI(cwd?: string, onChange?: () => void, workspaceRo
     }
   }
 
-  if (onChange && rootPath && rootPkgPath && rootPkgPath !== pkg) {
-    const cached = rootPkgCache.get(rootPath)!
-    cached.subscribers ||= new Map()
-    cached.subscribers.set(pkg, onChange)
-  }
-
-  if (onChange && !mainWatchers.has(pkg)) {
-    // buildContext's callback owns invalidation and rebuild. Wrapping it with a
-    // second invalidation advances generations and clears shared caches twice.
-    mainWatchers.set(pkg, watchFile(pkg, { onChange }))
-    // A root manifest is shared by every child package. Rebuild all subscribed
-    // children rather than only the package that created this watcher.
-    if (rootPath && rootPkgPath && rootPkgPath !== pkg) {
-      const cached = rootPkgCache.get(rootPath)!
-      if (!cached.stopRoot) {
-        cached.stopRoot = watchFile(rootPkgPath, {
-          onChange: () => {
-            const subscribers = [...(cached.subscribers?.values() || [])]
-            invalidatePackageContext(rootPath)
-            for (const rebuild of subscribers)
-              rebuild()
-          },
-        })
-      }
-    }
-  }
-
-  if (onChange && rootPath && rootPkgPath && rootPkgPath !== pkg) {
-    const cached = rootPkgCache.get(rootPath)!
-    if (!cached.stopWorkspace) {
-      try {
-        const watcher = fs.watch(rootPath, (_event, filename) => {
-          if (filename?.toString() !== 'pnpm-workspace.yaml')
-            return
-          cached.isMonorepo = false
-          const subscribers = [...(cached.subscribers?.values() || [])]
-          invalidatePackageContext(rootPath)
-          for (const rebuild of subscribers)
-            rebuild()
-        })
-        cached.stopWorkspace = () => watcher.close()
-      }
-      catch {}
-    }
-  }
-
   const manifest = JSON.parse(await fsp.readFile(pkg, 'utf8'))
   const dependencyRootPkg = isMonorepo ? rootPkg : null
   const { localDependencies, dependencies: deps } = collectDependencyScopes(manifest, dependencyRootPkg)
@@ -1258,40 +1326,37 @@ function isSameOrWithin(target: string, parent: string) {
 }
 
 export function invalidatePackageContext(cwdOrPkg: string) {
-  const affectedPackages = new Set<string>()
-  const cachedPackage = documentPackageCache.get(cwdOrPkg)
-  if (cachedPackage)
-    affectedPackages.add(cachedPackage)
-  if (path.basename(cwdOrPkg) === 'package.json')
-    affectedPackages.add(cwdOrPkg)
+  const affected = new Map<string, { pkgPath: string, workspaceRoot: string }>()
+  const cachedContextKey = documentContextCache.get(cwdOrPkg)
 
-  for (const [key, context] of contexts) {
+  for (const [contextKey, context] of contexts) {
     const root = path.dirname(context.pkgPath)
-    if (key === cwdOrPkg || context.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
-      affectedPackages.add(context.pkgPath)
+    if (contextKey === cwdOrPkg || contextKey === cachedContextKey || context.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
+      affected.set(contextKey, context)
   }
-  for (const pkgPath of contextLoads.keys()) {
-    const root = path.dirname(pkgPath)
-    if (pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
-      affectedPackages.add(pkgPath)
+  for (const [contextKey, load] of contextLoads) {
+    const root = path.dirname(load.pkgPath)
+    if (contextKey === cwdOrPkg || contextKey === cachedContextKey || load.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
+      affected.set(contextKey, load)
   }
 
+  const affectedPackages = new Set([...affected.values()].map(item => item.pkgPath))
   const affectedWorkspaceRoots = new Set<string>()
-  for (const pkgPath of affectedPackages) {
-    nextGeneration(pkgPath)
-    const workspaceRoot = contexts.get(pkgPath)?.workspaceRoot
-    if (workspaceRoot)
-      affectedWorkspaceRoots.add(workspaceRoot)
-    contexts.delete(pkgPath)
-    contextLoads.delete(pkgPath)
-    disposePackageWatcher(pkgPath)
-    removeRootPackageSubscriber(pkgPath)
+  for (const [contextKey, item] of affected) {
+    nextGeneration(contextKey)
+    affectedWorkspaceRoots.add(item.workspaceRoot)
+    contexts.delete(contextKey)
+    contextLoads.delete(contextKey)
+    disposePackageWatcher(contextKey, item.pkgPath)
+    removeRootPackageSubscriber(contextKey)
   }
   for (const workspaceRoot of affectedWorkspaceRoots)
     disposeUnusedWorkspaceResources(workspaceRoot)
   for (const [documentPath, packagePath] of documentPackageCache) {
-    if (packagePath && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg)))
+    if (packagePath && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg))) {
       documentPackageCache.delete(documentPath)
+      documentContextCache.delete(documentPath)
+    }
   }
   for (const key of urlCache.keys()) {
     const cached = urlCache.get(key)
@@ -1314,6 +1379,7 @@ export function invalidateContexts() {
   contextLoads.clear()
   sourceRefreshes.clear()
   documentPackageCache.clear()
+  documentContextCache.clear()
   urlCache.clear()
   cacheMap.clear()
   pkgUIConfigMap.clear()
@@ -1323,8 +1389,8 @@ export function invalidateContexts() {
 }
 
 export function disposeUIWatchers() {
-  for (const stop of mainWatchers.values()) {
-    try { stop() }
+  for (const watcher of mainWatchers.values()) {
+    try { watcher.stop() }
     catch {}
   }
   mainWatchers.clear()
