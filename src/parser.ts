@@ -345,7 +345,83 @@ export function parserJSX(code: string, position: vscode.Position) {
     }
   }
   catch (error) {
+    const result = parserIncompleteJSXAtCursor(code, position)
+    if (result)
+      return result
     logger.error(String(error))
+  }
+}
+
+function parserIncompleteJSXAtCursor(code: string, position: vscode.Position) {
+  const cursorOffset = getSourceOffset(code, position)
+  const sourceFile = ts.createSourceFile('incomplete.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  let target: ts.JsxOpeningElement | ts.JsxSelfClosingElement | undefined
+
+  const visit = (node: ts.Node) => {
+    if (node.getFullStart() <= cursorOffset && cursorOffset <= node.end) {
+      if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const tagStart = node.tagName.getStart(sourceFile)
+        const attributesStart = node.attributes.getFullStart()
+        const openingEnd = findOpeningElementEnd(code, tagStart, node.end)
+        if (tagStart <= cursorOffset && cursorOffset <= openingEnd && cursorOffset >= Math.min(node.getStart(sourceFile), attributesStart))
+          target = node
+      }
+      ts.forEachChild(node, visit)
+    }
+  }
+  visit(sourceFile)
+
+  if (!target)
+    return
+
+  const tag = target.tagName.getText(sourceFile)
+  const tagStart = target.tagName.getStart(sourceFile)
+  const tagEnd = target.tagName.end
+  const props = target.attributes.properties.map((attribute) => {
+    if (ts.isJsxSpreadAttribute(attribute)) {
+      return {
+        type: 'JSXSpreadAttribute',
+        range: [attribute.getStart(sourceFile), attribute.end],
+      }
+    }
+    const name = attribute.name.getText(sourceFile)
+    return {
+      type: 'JSXAttribute',
+      name: { type: 'JSXIdentifier', name },
+      range: [attribute.getStart(sourceFile), attribute.end],
+    }
+  })
+  const attribute = target.attributes.properties.find((item) => {
+    const start = item.getStart(sourceFile)
+    return start <= cursorOffset && cursorOffset <= item.end
+  })
+
+  if (attribute) {
+    const spread = ts.isJsxSpreadAttribute(attribute)
+    const propName = spread ? undefined : attribute.name.getText(sourceFile)
+    const initializer = spread ? undefined : attribute.initializer
+    return {
+      type: 'props',
+      tag,
+      props,
+      propName,
+      propType: spread ? 'JSXSpreadAttribute' : 'JSXAttribute',
+      isValue: !!initializer,
+      isDynamicFlag: !!initializer && ts.isJsxExpression(initializer),
+      isEvent: !!propName?.startsWith('on'),
+      isInTemplate: true,
+      refsMap: {},
+      refs: [],
+    }
+  }
+
+  return {
+    type: tagStart <= cursorOffset && cursorOffset <= tagEnd ? 'tag' : 'props',
+    tag,
+    props,
+    isInTemplate: true,
+    refsMap: {},
+    refs: [],
   }
 }
 
