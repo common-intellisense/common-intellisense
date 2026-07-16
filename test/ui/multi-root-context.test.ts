@@ -50,7 +50,7 @@ describe('multi-root package contexts', () => {
   beforeEach(() => {
     vi.resetModules()
     fetchOfficial.mockReset().mockResolvedValue({})
-    watchFileMock.mockClear()
+    watchFileMock.mockReset().mockImplementation(() => () => {})
   })
 
   it('uses each document workspace root for root dependencies', async () => {
@@ -84,6 +84,44 @@ describe('multi-root package contexts', () => {
     expect(outer?.workspaceRoot).toBe('/workspace-a')
     expect(inner?.workspaceRoot).toBe('/workspace-a/packages')
     expect(mod.getContextForDocumentPath(outerDocument)).toBe(outer)
+    expect(mod.getContextForDocumentPath(innerDocument)).toBe(inner)
+    ;(findUp as any).mockImplementation(async (_name: string, options: any) => options.cwd.startsWith('/workspace-b')
+      ? '/workspace-b/packages/app/package.json'
+      : options.cwd.includes('/packages/b/')
+        ? '/workspace-a/packages/b/package.json'
+        : '/workspace-a/packages/app/package.json')
+  })
+
+  it('rolls back package subscribers when root watcher registration fails', async () => {
+    const stopped = vi.fn()
+    watchFileMock.mockImplementation(((file: string) => {
+      if (file === '/workspace-a/package.json')
+        throw new Error('watch failed')
+      return stopped
+    }) as any)
+    const mod = await import('../../src/ui/ui-find')
+
+    await expect(mod.ensureContextForPath('/workspace-a/packages/app/src/App.tsx', {} as any, () => {}, false, '/workspace-a')).rejects.toThrow('watch failed')
+
+    expect(stopped).toHaveBeenCalledTimes(1)
+    expect(mod.getContextRegistryStats().watchers).toBe(0)
+    expect(mod.getContextRegistryStats().contexts).toBe(0)
+  })
+
+  it('invalidates only subscribers owned by a changed overlapping workspace root', async () => {
+    const findUp = vi.mocked((await import('find-up')).findUp)
+    findUp.mockResolvedValue('/workspace-a/packages/app/package.json')
+    const mod = await import('../../src/ui/ui-find')
+    const outerDocument = '/workspace-a/packages/app/src/App.tsx'
+    const innerDocument = '/workspace-a/packages/app/src/Nested.tsx'
+    const outer = await mod.ensureContextForPath(outerDocument, {} as any, () => {}, false, '/workspace-a')
+    const inner = await mod.ensureContextForPath(innerDocument, {} as any, () => {}, false, '/workspace-a/packages')
+    const outerRootWatch = (watchFileMock.mock.calls as any[][]).find(([file]) => file === '/workspace-a/package.json')
+
+    expect(outerRootWatch).toBeDefined()
+    outerRootWatch![1].onChange()
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(outerDocument)?.generation).toBeGreaterThan(outer?.generation || 0))
     expect(mod.getContextForDocumentPath(innerDocument)).toBe(inner)
     ;(findUp as any).mockImplementation(async (_name: string, options: any) => options.cwd.startsWith('/workspace-b')
       ? '/workspace-b/packages/app/package.json'

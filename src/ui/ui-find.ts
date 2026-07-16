@@ -233,51 +233,54 @@ function disposePackageWatcher(contextKey: string, pkgPath: string) {
 }
 
 function registerPackageWatchers(contextKey: string, context: PackageContext, onChange: () => void) {
-  let watcher = mainWatchers.get(context.pkgPath)
-  if (!watcher) {
-    const subscribers = new Map<string, () => void>()
-    watcher = {
-      subscribers,
-      stop: watchFile(context.pkgPath, {
-        onChange: () => {
-          for (const rebuild of [...subscribers.values()])
-            rebuild()
-        },
-      }),
+  try {
+    let watcher = mainWatchers.get(context.pkgPath)
+    if (!watcher) {
+      const subscribers = new Map<string, () => void>()
+      watcher = {
+        subscribers,
+        stop: watchFile(context.pkgPath, {
+          onChange: () => {
+            for (const rebuild of [...subscribers.values()])
+              rebuild()
+          },
+        }),
+      }
+      mainWatchers.set(context.pkgPath, watcher)
     }
-    mainWatchers.set(context.pkgPath, watcher)
-  }
-  watcher.subscribers.set(contextKey, onChange)
+    watcher.subscribers.set(contextKey, onChange)
 
-  const cached = rootPkgCache.get(context.workspaceRoot)
-  if (!cached || cached.rootPkgPath === context.pkgPath)
-    return
-  cached.subscribers ||= new Map()
-  cached.subscribers.set(contextKey, onChange)
-  if (!cached.stopRoot) {
-    cached.stopRoot = watchFile(cached.rootPkgPath, {
-      onChange: () => {
-        const subscribers = [...(cached.subscribers?.values() || [])]
-        invalidatePackageContext(context.workspaceRoot)
-        for (const rebuild of subscribers)
-          rebuild()
-      },
-    })
-  }
-  if (!cached.stopWorkspace) {
-    try {
-      const fsWatcher = fs.watch(context.workspaceRoot, (_event, filename) => {
-        if (filename?.toString() !== 'pnpm-workspace.yaml')
-          return
-        cached.isMonorepo = false
-        const subscribers = [...(cached.subscribers?.values() || [])]
-        invalidatePackageContext(context.workspaceRoot)
-        for (const rebuild of subscribers)
-          rebuild()
-      })
-      cached.stopWorkspace = () => fsWatcher.close()
+    const cached = rootPkgCache.get(context.workspaceRoot)
+    if (!cached || cached.rootPkgPath === context.pkgPath)
+      return
+    cached.subscribers ||= new Map()
+    cached.subscribers.set(contextKey, onChange)
+    const rebuildSubscribers = () => {
+      for (const rebuild of [...(cached.subscribers?.values() || [])])
+        rebuild()
     }
-    catch {}
+    if (!cached.stopRoot) {
+      cached.stopRoot = watchFile(cached.rootPkgPath, {
+        onChange: rebuildSubscribers,
+      })
+    }
+    if (!cached.stopWorkspace) {
+      try {
+        const fsWatcher = fs.watch(context.workspaceRoot, (_event, filename) => {
+          if (filename?.toString() !== 'pnpm-workspace.yaml')
+            return
+          cached.isMonorepo = false
+          rebuildSubscribers()
+        })
+        cached.stopWorkspace = () => fsWatcher.close()
+      }
+      catch {}
+    }
+  }
+  catch (error) {
+    disposePackageWatcher(contextKey, context.pkgPath)
+    removeRootPackageSubscriber(contextKey)
+    throw error
   }
 }
 
@@ -467,7 +470,7 @@ export async function ensureContextForPath(cwd: string, extensionContext: vscode
       if (!context || registryEpoch !== epoch || generations.get(contextKey) !== generation)
         return
       const onChange = () => {
-        invalidatePackageContext(contextKey)
+        invalidatePackageContext(contextKey, true)
         void ensureContextForPath(cwd, extensionContext, detectSlots, false, resolvedWorkspaceRoot)
           .catch(error => logger.error(`Failed to rebuild package context: ${String(error)}`))
       }
@@ -1325,18 +1328,19 @@ function isSameOrWithin(target: string, parent: string) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
-export function invalidatePackageContext(cwdOrPkg: string) {
+export function invalidatePackageContext(cwdOrPkg: string, retainWorkspaceResources = false) {
   const affected = new Map<string, { pkgPath: string, workspaceRoot: string }>()
   const cachedContextKey = documentContextCache.get(cwdOrPkg)
+  const exactContextKey = cwdOrPkg.includes('\0')
 
   for (const [contextKey, context] of contexts) {
     const root = path.dirname(context.pkgPath)
-    if (contextKey === cwdOrPkg || contextKey === cachedContextKey || context.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
+    if (contextKey === cwdOrPkg || contextKey === cachedContextKey || (!exactContextKey && (context.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))))
       affected.set(contextKey, context)
   }
   for (const [contextKey, load] of contextLoads) {
     const root = path.dirname(load.pkgPath)
-    if (contextKey === cwdOrPkg || contextKey === cachedContextKey || load.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))
+    if (contextKey === cwdOrPkg || contextKey === cachedContextKey || (!exactContextKey && (load.pkgPath === cwdOrPkg || isSameOrWithin(cwdOrPkg, root) || isSameOrWithin(root, cwdOrPkg))))
       affected.set(contextKey, load)
   }
 
@@ -1350,17 +1354,20 @@ export function invalidatePackageContext(cwdOrPkg: string) {
     disposePackageWatcher(contextKey, item.pkgPath)
     removeRootPackageSubscriber(contextKey)
   }
-  for (const workspaceRoot of affectedWorkspaceRoots)
-    disposeUnusedWorkspaceResources(workspaceRoot)
+  if (!retainWorkspaceResources) {
+    for (const workspaceRoot of affectedWorkspaceRoots)
+      disposeUnusedWorkspaceResources(workspaceRoot)
+  }
   for (const [documentPath, packagePath] of documentPackageCache) {
-    if (packagePath && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg))) {
+    const mappedContextKey = documentContextCache.get(documentPath)
+    if (packagePath && (affected.has(mappedContextKey || '') || (!exactContextKey && (affectedPackages.has(packagePath) || isSameOrWithin(documentPath, cwdOrPkg))))) {
       documentPackageCache.delete(documentPath)
       documentContextCache.delete(documentPath)
     }
   }
   for (const key of urlCache.keys()) {
     const cached = urlCache.get(key)
-    if (isSameOrWithin(key, cwdOrPkg) || (cached && affectedPackages.has(cached.pkg)))
+    if ((!exactContextKey && isSameOrWithin(key, cwdOrPkg)) || (cached && affectedPackages.has(cached.pkg) && documentContextCache.get(key) === undefined))
       urlCache.delete(key)
   }
   if (affectedPackages.size)
