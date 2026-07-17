@@ -74,6 +74,24 @@ describe('data-only adapter manifest validation', () => {
     expect(exportsData.demoComponents.directives[0].params[0]).toMatchObject({ name: 'delay', type: 'number' })
   })
 
+  it('accepts directive and method param limits at the boundary', () => {
+    expect(() => normalizeAdapterManifestExports({
+      demoComponents: {
+        lib: 'demo',
+        directives: Array.from({ length: 250 }, (_, index) => ({
+          name: `directive${index}`,
+          params: index === 0 ? Array.from({ length: 250 }, (_, paramIndex) => ({ name: `param${paramIndex}`, type: 'string' })) : [],
+        })),
+        map: [['Demo', 'Demo']],
+      },
+      demo: {
+        uiName: 'demo',
+        lib: 'demo',
+        map: [{ name: 'Demo', methods: [{ name: 'open', params: Array.from({ length: 250 }, (_, index) => `param${index}`) }] }],
+      },
+    }, 'fixture')).not.toThrow()
+  })
+
   it('keeps reducer execution safe when a configured prefix is longer than the component name', async () => {
     const exportsData = normalizeAdapterManifestExports({
       demo: { uiName: 'demo', lib: 'demo', prefix: 'VeryLongPrefix', map: [{ name: 'A', props: { value: { type: 'string' } } }] },
@@ -102,6 +120,41 @@ describe('data-only adapter manifest validation', () => {
   })
 
   it.each([
+    {
+      demoComponents: {
+        lib: 'demo',
+        directives: Array.from({ length: 251 }, (_, index) => ({ name: `directive${index}` })),
+        map: [['Demo', 'Demo']],
+      },
+    },
+    {
+      demoComponents: {
+        lib: 'demo',
+        directives: [{ name: 'loading', params: Array.from({ length: 251 }, (_, index) => ({ name: `param${index}`, type: 'string' })) }],
+        map: [['Demo', 'Demo']],
+      },
+    },
+    {
+      demoComponents: {
+        lib: 'demo',
+        map: [['Demo', 'Demo detail', 'Demo import', 'unexpected']],
+      },
+    },
+  ])('rejects oversized directive metadata and component tuples', (manifest) => {
+    expect(() => normalizeAdapterManifestExports(manifest, 'fixture')).toThrow(/Invalid adapter manifest field/)
+  })
+
+  it('enforces aggregate nested-member budgets across components', () => {
+    const component = (index: number) => ({
+      name: `Demo${index}`,
+      methods: [{ name: 'open', params: Array.from({ length: 250 }, (_, paramIndex) => `param${paramIndex}`) }],
+    })
+    expect(() => normalizeAdapterManifestExports({
+      demo: { uiName: 'demo', lib: 'demo', map: Array.from({ length: 81 }, (_, index) => component(index)) },
+    }, 'fixture')).toThrow(/Invalid adapter manifest field: fixture\.members/)
+  })
+
+  it.each([
     ...['__proto__', 'prototype', 'constructor', 'then', 'icons'].map(name => ({ uiName: 'demo', lib: 'demo', map: [{ name }] })),
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { disabled: null } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { type: 42 } } }] },
@@ -117,6 +170,8 @@ describe('data-only adapter manifest validation', () => {
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', typeDetail: { options: Array.from({ length: 251 }, (_, index) => ({ name: `item${index}` })) } }] },
     { lib: 'demo', directives: {}, map: [['Demo', 'Demo']] },
     { lib: 'demo', directives: [{ name: 'loading', params: [{ name: 'delay' }] }], map: [['Demo', 'Demo']] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', methods: [{ name: 'open', params: Array.from({ length: 251 }, (_, index) => `param${index}`) }] }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'change', params: Array.from({ length: 251 }, (_, index) => `param${index}`) }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { ':': { type: 'string' } } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'click', kind: 'invalid' }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'submit', required: 'false' }] }] },

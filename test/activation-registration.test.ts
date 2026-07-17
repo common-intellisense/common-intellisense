@@ -31,6 +31,9 @@ const mocks = vi.hoisted(() => {
     workspaceEdits: [] as any[],
     contextUpdatedListener: undefined as undefined | ((context: any) => void),
     textChangeListener: undefined as undefined | ((event: any) => void),
+    configChangeListener: undefined as undefined | ((event: any) => void),
+    invalidateContexts: vi.fn(),
+    resetCustomSourcesForApprovalChange: vi.fn(async () => {}),
     closeListener: undefined as undefined | ((document: any) => void),
     manifestCreateListener: undefined as undefined | ((uri: any) => void),
     manifestDeleteListener: undefined as undefined | ((uri: any) => void),
@@ -51,7 +54,8 @@ vi.mock('../src/ui/ui-find', () => ({
   getContextForPackagePath: mocks.getPackageContext,
   getCurrentPkgUiNames: vi.fn(),
   handlePackageManifestLifecycle: mocks.handlePackageManifestLifecycle,
-  invalidateContexts: vi.fn(),
+  invalidateContexts: mocks.invalidateContexts,
+  resetCustomSourcesForApprovalChange: mocks.resetCustomSourcesForApprovalChange,
   onPackageContextsInvalidated: vi.fn(() => ({ dispose: vi.fn() })),
   onPackageContextUpdated: vi.fn((listener: (context: any) => void) => {
     mocks.contextUpdatedListener = listener
@@ -78,6 +82,8 @@ vi.mock('@vscode-use/utils', () => ({
   addEventListener: vi.fn((name: string, listener: (event: any) => void) => {
     if (name === 'text-change')
       mocks.textChangeListener = listener
+    if (name === 'config-change')
+      mocks.configChangeListener = listener
     return { dispose: vi.fn() }
   }),
   createCompletionItem: vi.fn(),
@@ -164,6 +170,9 @@ describe('activation registration', () => {
     mocks.workspaceEdits.length = 0
     mocks.contextUpdatedListener = undefined
     mocks.textChangeListener = undefined
+    mocks.configChangeListener = undefined
+    mocks.invalidateContexts.mockClear()
+    mocks.resetCustomSourcesForApprovalChange.mockClear()
     mocks.closeListener = undefined
     mocks.manifestCreateListener = undefined
     mocks.manifestDeleteListener = undefined
@@ -361,6 +370,30 @@ describe('activation registration', () => {
       { label: 'antd5', picked: true },
       { label: 'elementPlus2' },
     ], expect.any(Object))
+  })
+
+  it('fully invalidates contexts when approval and context configuration change together', async () => {
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    mocks.configChangeListener?.({
+      affectsConfiguration: (key: string) => key === 'common-intellisense.alias' || key === 'common-intellisense.legacyAdapterAllowlist',
+    })
+
+    expect(mocks.invalidateContexts).toHaveBeenCalledTimes(1)
+    expect(mocks.resetCustomSourcesForApprovalChange).not.toHaveBeenCalled()
+  })
+
+  it('resets only custom sources when only adapter approval changes', async () => {
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    mocks.configChangeListener?.({
+      affectsConfiguration: (key: string) => key === 'common-intellisense.legacyAdapterAllowlist',
+    })
+    await vi.waitFor(() => expect(mocks.resetCustomSourcesForApprovalChange).toHaveBeenCalledTimes(1))
+
+    expect(mocks.invalidateContexts).not.toHaveBeenCalled()
   })
 
   it('applies import edits to the source document after completion insertion advances its version', async () => {

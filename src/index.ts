@@ -85,6 +85,22 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, match => `\\${match}`)
 }
 
+export function getPreferredSuggestionNames(suggestions: unknown) {
+  const names = new Set<string>()
+  if (!Array.isArray(suggestions))
+    return names
+  for (const suggestion of suggestions) {
+    if (typeof suggestion === 'string') {
+      if (suggestion)
+        names.add(suggestion)
+      continue
+    }
+    if (suggestion && typeof suggestion === 'object' && 'name' in suggestion && typeof suggestion.name === 'string' && suggestion.name)
+      names.add(suggestion.name)
+  }
+  return names
+}
+
 export function hasRenderedComponentTag(code: string, renderedTag: string, languageId?: string) {
   if (!renderedTag)
     return false
@@ -93,7 +109,10 @@ export function hasRenderedComponentTag(code: string, renderedTag: string, langu
     let quote = ''
     for (let index = 0; index < script.length; index++) {
       if (!quote && script.startsWith('/*', index)) {
-        index = Math.max(index, script.indexOf('*/', index + 2)) + 1
+        const commentEnd = script.indexOf('*/', index + 2)
+        if (commentEnd < 0)
+          return false
+        index = commentEnd + 1
         continue
       }
       if (!quote && script.startsWith('//', index)) {
@@ -512,7 +531,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
     if (rebuildSources)
       clearFetchCaches()
-    if (approvalChanged) {
+    if (rebuildContexts) {
+      invalidateContexts()
+      void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
+    }
+    else if (approvalChanged) {
       void resetCustomSourcesForApprovalChange().then(() => rebuildVisibleDocumentContexts()).catch(error => logger.error(`Failed to apply legacy adapter approvals: ${String(error)}`))
     }
     else {
@@ -932,9 +955,10 @@ export async function activate(context: vscode.ExtensionContext) {
         if (UiCompletions) {
           const suggestions = UiCompletions[fixedTagName(parentTag)]?.suggestions
           if (suggestions && suggestions.length) {
+            const preferredNames = getPreferredSuggestionNames(suggestions)
             data.forEach((child) => {
               const label = typeof child.label === 'string' ? child.label.split(' ')[0] : child.label.label.split(' ')[0]
-              child.sortText = suggestions.includes(label) ? '1' : '2';
+              child.sortText = preferredNames.has(label) ? '1' : '2';
               (child as any).loc = result.loc
             })
           }

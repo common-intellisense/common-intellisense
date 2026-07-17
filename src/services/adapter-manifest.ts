@@ -3,6 +3,7 @@ type PlainRecord = Record<string, unknown>
 const maxComponentsPerLibrary = 500
 const maxComponentMembers = 250
 const maxAggregateComponents = 1_000
+const maxAggregateMembers = 20_000
 const maxDomainStringLength = 10_000
 const unsafeObjectKeys = new Set(['__proto__', 'prototype', 'constructor', 'then'])
 const reservedComponentNames = new Set([...unsafeObjectKeys, 'icons'])
@@ -16,6 +17,17 @@ function isPlainRecord(value: unknown): value is PlainRecord {
 
 function invalid(path: string): never {
   throw new TypeError(`Invalid adapter manifest field: ${path}`)
+}
+
+interface NormalizationBudget {
+  members: number
+  path: string
+}
+
+function consumeMembers(budget: NormalizationBudget, count: number) {
+  budget.members += count
+  if (budget.members > maxAggregateMembers)
+    invalid(`${budget.path}.members`)
 }
 
 function cloneSafeRecord(record: PlainRecord, path: string, overrides: PlainRecord = {}) {
@@ -53,13 +65,14 @@ function validateOptionalBoolean(record: PlainRecord, key: string, path: string)
     invalid(`${path}.${key}`)
 }
 
-function normalizeParams(value: unknown, path: string) {
+function normalizeParams(value: unknown, path: string, budget: NormalizationBudget) {
   if (value === undefined)
     return undefined
   if (typeof value === 'string')
     return value
-  if (!Array.isArray(value))
+  if (!Array.isArray(value) || value.length > maxComponentMembers)
     invalid(path)
+  consumeMembers(budget, value.length)
   return value.map((entry, index) => {
     if (typeof entry === 'string')
       return entry
@@ -71,13 +84,15 @@ function normalizeParams(value: unknown, path: string) {
   })
 }
 
-function normalizeTypeDetail(value: unknown, path: string) {
+function normalizeTypeDetail(value: unknown, path: string, budget: NormalizationBudget) {
   if (value === undefined)
     return undefined
   if (!isPlainRecord(value))
     invalid(path)
-  if (Object.keys(value).length > maxComponentMembers)
+  const keys = Object.keys(value)
+  if (keys.length > maxComponentMembers)
     invalid(path)
+  consumeMembers(budget, keys.length)
   const normalized: PlainRecord = Object.create(null)
   for (const [key, detail] of Object.entries(value)) {
     if (unsafeObjectKeys.has(key))
@@ -88,6 +103,7 @@ function normalizeTypeDetail(value: unknown, path: string) {
     }
     if (!Array.isArray(detail) || detail.length > maxComponentMembers)
       invalid(`${path}.${key}`)
+    consumeMembers(budget, detail.length)
     normalized[key] = detail.map((entry, index) => {
       if (!isPlainRecord(entry))
         invalid(`${path}.${key}[${index}]`)
@@ -117,7 +133,7 @@ function normalizeSuggestions(value: unknown, path: string) {
   })
 }
 
-function normalizeNamedArray(value: unknown, path: string, eventEntries = false) {
+function normalizeNamedArray(value: unknown, path: string, budget: NormalizationBudget, eventEntries = false) {
   if (value === undefined)
     return []
   if (!Array.isArray(value) || value.length > maxComponentMembers)
@@ -133,7 +149,7 @@ function normalizeNamedArray(value: unknown, path: string, eventEntries = false)
       invalid(`${entryPath}.kind`)
     if (eventEntries)
       validateOptionalBoolean(entry, 'required', entryPath)
-    const params = normalizeParams(entry.params, `${entryPath}.params`)
+    const params = normalizeParams(entry.params, `${entryPath}.params`, budget)
     if (!eventEntries)
       return cloneSafeRecord(entry, entryPath, { params })
     // Events are consumed directly by snippet generation. Clone only the public
@@ -154,7 +170,7 @@ function normalizeNamedArray(value: unknown, path: string, eventEntries = false)
   })
 }
 
-function normalizeProp(prop: PlainRecord, path: string) {
+function normalizeProp(prop: PlainRecord, path: string, budget: NormalizationBudget) {
   for (const key of ['type', 'version', 'description', 'description_zh', 'platform'])
     validateOptionalString(prop, key, path)
   for (const key of ['required', 'foreach'])
@@ -175,7 +191,7 @@ function normalizeProp(prop: PlainRecord, path: string) {
       invalid(`${path}.value`)
     }
   }
-  const typeDetail = normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`)
+  const typeDetail = normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`, budget)
   for (const [key, value] of Object.entries(prop)) {
     if (key.startsWith('$') && typeof value !== 'string')
       invalid(`${path}.${key}`)
@@ -183,7 +199,7 @@ function normalizeProp(prop: PlainRecord, path: string) {
   return cloneSafeRecord(prop, path, { typeDetail })
 }
 
-function normalizeComponent(value: unknown, path: string) {
+function normalizeComponent(value: unknown, path: string, budget: NormalizationBudget) {
   if (!isPlainRecord(value))
     invalid(path)
   requireSafeComponentName(value.name, `${path}.name`)
@@ -199,16 +215,16 @@ function normalizeComponent(value: unknown, path: string) {
       invalid(`${path}.props.${name || '<empty>'}`)
     if (!isPlainRecord(prop))
       invalid(`${path}.props.${name}`)
-    props[name] = normalizeProp(prop, `${path}.props.${name}`)
+    props[name] = normalizeProp(prop, `${path}.props.${name}`, budget)
   }
   return cloneSafeRecord(value, path, {
     props,
-    events: normalizeNamedArray(value.events, `${path}.events`, true),
-    methods: normalizeNamedArray(value.methods, `${path}.methods`),
-    slots: normalizeNamedArray(value.slots, `${path}.slots`),
-    exposed: normalizeNamedArray(value.exposed, `${path}.exposed`),
+    events: normalizeNamedArray(value.events, `${path}.events`, budget, true),
+    methods: normalizeNamedArray(value.methods, `${path}.methods`, budget),
+    slots: normalizeNamedArray(value.slots, `${path}.slots`, budget),
+    exposed: normalizeNamedArray(value.exposed, `${path}.exposed`, budget),
     suggestions: normalizeSuggestions(value.suggestions, `${path}.suggestions`),
-    typeDetail: normalizeTypeDetail(value.typeDetail, `${path}.typeDetail`),
+    typeDetail: normalizeTypeDetail(value.typeDetail, `${path}.typeDetail`, budget),
   })
 }
 
@@ -216,11 +232,12 @@ function isSafeDirectiveValue(value: unknown) {
   return value === null || ['string', 'number', 'boolean'].includes(typeof value)
 }
 
-function normalizeDirectives(value: unknown, path: string) {
+function normalizeDirectives(value: unknown, path: string, budget: NormalizationBudget) {
   if (value === undefined)
     return undefined
-  if (!Array.isArray(value))
+  if (!Array.isArray(value) || value.length > maxComponentMembers)
     invalid(path)
+  consumeMembers(budget, value.length)
   return value.map((directive, index) => {
     const directivePath = `${path}[${index}]`
     if (!isPlainRecord(directive))
@@ -228,9 +245,11 @@ function normalizeDirectives(value: unknown, path: string) {
     requireNonEmptyString(directive.name, `${directivePath}.name`)
     for (const key of ['description', 'description_zh', 'documentation', 'documentationType', 'link', 'version'])
       validateOptionalString(directive, key, directivePath)
-    if (directive.params !== undefined && !Array.isArray(directive.params))
+    if (directive.params !== undefined && (!Array.isArray(directive.params) || directive.params.length > maxComponentMembers))
       invalid(`${directivePath}.params`)
-    const params = (directive.params || []).map((param, paramIndex) => {
+    const rawParams = (directive.params || []) as unknown[]
+    consumeMembers(budget, rawParams.length)
+    const params = rawParams.map((param, paramIndex) => {
       const paramPath = `${directivePath}.params[${paramIndex}]`
       if (!isPlainRecord(param))
         invalid(paramPath)
@@ -248,7 +267,7 @@ function normalizeDirectives(value: unknown, path: string) {
   })
 }
 
-function normalizeComponentsExport(value: PlainRecord, path: string) {
+function normalizeComponentsExport(value: PlainRecord, path: string, budget: NormalizationBudget) {
   requireNonEmptyString(value.lib, `${path}.lib`)
   for (const key of ['prefix', 'dynamicLib'])
     validateOptionalString(value, key, path)
@@ -257,34 +276,35 @@ function normalizeComponentsExport(value: PlainRecord, path: string) {
   if (!Array.isArray(value.map) || value.map.length > maxComponentsPerLibrary)
     invalid(`${path}.map`)
   const map = value.map.map((entry, index) => {
-    if (!Array.isArray(entry) || !entry.length)
+    if (!Array.isArray(entry) || entry.length < 1 || entry.length > 3)
       invalid(`${path}.map[${index}]`)
     const component = entry[0]
     const normalizedComponent = typeof component === 'string'
       ? requireSafeComponentName(component, `${path}.map[${index}][0]`)
-      : normalizeComponent(component, `${path}.map[${index}][0]`)
+      : normalizeComponent(component, `${path}.map[${index}][0]`, budget)
     if (entry[1] !== undefined && typeof entry[1] !== 'string')
       invalid(`${path}.map[${index}][1]`)
     if (entry[2] !== undefined && typeof entry[2] !== 'string')
       invalid(`${path}.map[${index}][2]`)
     return [normalizedComponent, ...entry.slice(1)]
   })
-  return cloneSafeRecord(value, path, { map, directives: normalizeDirectives(value.directives, `${path}.directives`) })
+  return cloneSafeRecord(value, path, { map, directives: normalizeDirectives(value.directives, `${path}.directives`, budget) })
 }
 
-function normalizePropsExport(value: PlainRecord, path: string) {
+function normalizePropsExport(value: PlainRecord, path: string, budget: NormalizationBudget) {
   requireNonEmptyString(value.uiName, `${path}.uiName`)
   requireNonEmptyString(value.lib, `${path}.lib`)
   for (const key of ['prefix', 'dynamicLib', 'resolveFrom', 'installedVersion', 'adapterMajor'])
     validateOptionalString(value, key, path)
   if (!Array.isArray(value.map) || value.map.length > maxComponentsPerLibrary)
     invalid(`${path}.map`)
-  return cloneSafeRecord(value, path, { map: value.map.map((component, index) => normalizeComponent(component, `${path}.map[${index}]`)) })
+  return cloneSafeRecord(value, path, { map: value.map.map((component, index) => normalizeComponent(component, `${path}.map[${index}]`, budget)) })
 }
 
 /** Validate and clone data-only adapter exports before reducer closures are created. */
 export function normalizeAdapterManifestExports(exportsData: Record<string, unknown>, source: string) {
   const normalized: Record<string, unknown> = Object.create(null)
+  const budget: NormalizationBudget = { members: 0, path: source }
   let aggregateComponents = 0
   for (const [key, value] of Object.entries(exportsData)) {
     if (['__proto__', 'prototype', 'constructor', 'then'].includes(key))
@@ -299,8 +319,8 @@ export function normalizeAdapterManifestExports(exportsData: Record<string, unkn
         invalid(`${source}.components`)
     }
     normalized[key] = key.endsWith('Components')
-      ? normalizeComponentsExport(value, path)
-      : normalizePropsExport(value, path)
+      ? normalizeComponentsExport(value, path, budget)
+      : normalizePropsExport(value, path, budget)
   }
   return normalized
 }
