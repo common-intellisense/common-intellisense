@@ -107,6 +107,17 @@ export declare const SelectOption: (props: OptionProps) => any
 export interface ExportButtonProps { disabled?: boolean }
 export declare const ExportButton: (props: ExportButtonProps) => any
 `)
+    const lateGlobalRoot = path.join(tempRoot, 'node_modules', 'mock-late-global')
+    await fsp.mkdir(lateGlobalRoot, { recursive: true })
+    await fsp.writeFile(path.join(lateGlobalRoot, 'package.json'), JSON.stringify({
+      name: 'mock-late-global',
+      version: '1.0.0',
+      types: 'index.d.ts',
+    }))
+    await fsp.writeFile(path.join(lateGlobalRoot, 'index.d.ts'), `
+export interface InitialProps { value?: string }
+export declare const InitialButton: (props: InitialProps) => any
+`)
     process.chdir(tempRoot)
   })
 
@@ -198,6 +209,29 @@ export declare const BazCard: DefineSetupFnComponent<BazProps, BazEmits>
     const after = refreshedComponents.find((entry: any) => entry[0].name === 'FooButton')?.[0]?.props?.size?.value
     expect(before).toEqual(['sm', 'md'])
     expect(after).toEqual(['sm', 'lg'])
+  })
+
+  it('refreshes the cache when a previously missing global declaration is created', async () => {
+    const mod = await import('../../src/type-extract')
+    const pkgRoot = path.join(tempRoot, 'node_modules', 'mock-late-global')
+    const initial = await mod.fetchFromTypes({ pkgName: 'mock-late-global', uiName: 'lateGlobalUi' })
+    expect(initial!.lateGlobalUiComponents().map((entry: any) => entry[0].name)).not.toContain('LaterButton')
+
+    await fsp.writeFile(path.join(pkgRoot, 'late.d.ts'), `
+export interface LaterProps { disabled?: boolean }
+export declare const LaterButton: (props: LaterProps) => any
+`)
+    await fsp.writeFile(path.join(pkgRoot, 'global.d.ts'), `
+declare module 'vue' {
+  export interface GlobalComponents {
+    LaterButton: typeof import('./late').LaterButton
+  }
+}
+export {}
+`)
+
+    const refreshed = await mod.fetchFromTypes({ pkgName: 'mock-late-global', uiName: 'lateGlobalUi' })
+    expect(refreshed!.lateGlobalUiComponents().map((entry: any) => entry[0].name)).toContain('LaterButton')
   })
 
   it('does not recursively scan declaration directories on cache hits', async () => {

@@ -372,6 +372,36 @@ describe('activation registration', () => {
     ], expect.any(Object))
   })
 
+  it('ensures a context when a visible Vue document is no longer excluded', async () => {
+    const document = {
+      languageId: 'vue',
+      version: 1,
+      uri: { fsPath: '/workspace/Excluded.vue', toString: () => 'file:///workspace/Excluded.vue' },
+      getText: () => '<template><Button /></template>',
+    }
+    const packageContext = {
+      pkgPath: '/workspace/package.json',
+      generation: 1,
+      revision: 1,
+      uiCompletions: {},
+      optionsComponents: { prefix: [] },
+    }
+    const vscode = await import('vscode')
+    ;(vscode.window.visibleTextEditors as any).push({ document })
+    mocks.ensureContext.mockResolvedValue(packageContext)
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+    mocks.ensureContext.mockClear()
+
+    mocks.configChangeListener?.({
+      affectsConfiguration: (key: string) => key === 'common-intellisense.exclude',
+    })
+
+    await vi.waitFor(() => expect(mocks.ensureContext).toHaveBeenCalledWith(document.uri.fsPath, expect.anything(), expect.anything(), false, '/workspace'))
+    expect(mocks.detectSlots).toHaveBeenCalled()
+    ;(vscode.window.visibleTextEditors as any).length = 0
+  })
+
   it('fully invalidates contexts when approval and context configuration change together', async () => {
     const { activate } = await import('../src/index')
     await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)

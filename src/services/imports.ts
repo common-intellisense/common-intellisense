@@ -131,8 +131,12 @@ export function createImportEdits(code: string, source: string, dependencies: st
       const additional = names.filter(name => name !== promotedName && !existing.has(name) && !occupied.has(name))
       const extraStatements = createStatements(source, additional, importWay)
       if (extraStatements) {
-        const insertion = promotion.declaration.end
-        edits.push({ start: script.offset + insertion, end: script.offset + insertion, text: `\n${extraStatements}` })
+        const insertion = getStatementInsertionEnd(script.code, promotion.declaration)
+        edits.push({
+          start: script.offset + insertion,
+          end: script.offset + insertion,
+          text: createStatementInsertionText(script.code, insertion, extraStatements),
+        })
       }
       return finish(edits, [...existing, promotedName, ...additional])
     }
@@ -201,13 +205,12 @@ export function createImportEdits(code: string, source: string, dependencies: st
   if (!statements)
     return finish([], [...existing])
   const lastImport = imports.at(-1)
-  const insertion = lastImport ? lastImport.end : getPrologueInsertion(sourceFile, script.code)
-  const beforeInsertion = script.code.slice(0, insertion)
-  const leading = insertion === 0
-    ? host === 'svelte' || (script.offset > 0 && script.code.startsWith('\n')) ? '\n' : ''
-    : beforeInsertion.endsWith('\n') ? '' : '\n'
-  const trailing = script.code.slice(insertion).startsWith('\n') ? '' : '\n'
-  return finish([{ start: script.offset + insertion, end: script.offset + insertion, text: `${leading}${statements}${trailing}` }], [...existing, ...missing])
+  const insertion = lastImport ? getStatementInsertionEnd(script.code, lastImport) : getPrologueInsertion(sourceFile, script.code)
+  return finish([{
+    start: script.offset + insertion,
+    end: script.offset + insertion,
+    text: createStatementInsertionText(script.code, insertion, statements, insertion === 0 && (host === 'svelte' || (script.offset > 0 && script.code.startsWith('\n')))),
+  }], [...existing, ...missing])
 }
 
 function getNamedImportInsertionEdits(script: ScriptRegion, sourceFile: ts.SourceFile, bindings: ts.NamedImports, names: string[]): ImportEdit[] {
@@ -378,6 +381,31 @@ function collectSpecifierConflicts(sourceFile: ts.SourceFile, ignoredImports: Se
   return result
 }
 
+function getStatementInsertionEnd(code: string, statement: ts.Statement) {
+  let insertion = statement.end
+  const statementLineEnd = code.indexOf('\n', insertion)
+  const contentEnd = statementLineEnd < 0 ? code.length : statementLineEnd
+  const comments = ts.getTrailingCommentRanges(code, statement.end) || []
+  for (const comment of comments) {
+    if (comment.pos > contentEnd || /[\r\n]/.test(code.slice(insertion, comment.pos)))
+      break
+    insertion = comment.end
+  }
+  if (insertion === statement.end)
+    return insertion
+
+  const commentLineEnd = code.indexOf('\n', insertion)
+  if (commentLineEnd < 0)
+    return /^[ \t\r]*$/.test(code.slice(insertion)) ? code.length : insertion
+  return /^[ \t\r]*$/.test(code.slice(insertion, commentLineEnd)) ? commentLineEnd + 1 : insertion
+}
+
+function createStatementInsertionText(code: string, insertion: number, statements: string, forceLeadingNewline = false) {
+  const leading = forceLeadingNewline ? '\n' : insertion > 0 && !code.slice(0, insertion).endsWith('\n') ? '\n' : ''
+  const trailing = code.slice(insertion).startsWith('\n') ? '' : '\n'
+  return `${leading}${statements}${trailing}`
+}
+
 function getPrologueInsertion(sourceFile: ts.SourceFile, code: string) {
   const shebangNewline = code.indexOf('\n')
   const shebangEnd = code.startsWith('#!')
@@ -387,7 +415,7 @@ function getPrologueInsertion(sourceFile: ts.SourceFile, code: string) {
   for (const statement of sourceFile.statements) {
     if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression))
       break
-    insertion = statement.end
+    insertion = getStatementInsertionEnd(code, statement)
   }
   return insertion
 }

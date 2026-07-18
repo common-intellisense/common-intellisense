@@ -149,6 +149,8 @@ async function fetchFromTypesInternal(options: TypeExtractOptions, attempt: numb
         .map(sourceFile => sourceFile.fileName)
         .filter(fileName => isRelevantPackageFile(fileName, pkgRoot)),
       pkgJsonPath,
+      typeEntry,
+      globalDts,
     ])]
     const finalSignature = await getTypeCacheSignature({ pkgRoot: pkgRootReal, version, files: packageSourceFiles })
     const finalCacheKey = `${snapshotKey}::${finalSignature}::${uiName}`

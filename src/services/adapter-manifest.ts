@@ -69,7 +69,7 @@ function normalizeParams(value: unknown, path: string, budget: NormalizationBudg
   if (value === undefined)
     return undefined
   if (typeof value === 'string')
-    return value
+    return requireNonEmptyString(value, path)
   if (!Array.isArray(value) || value.length > maxComponentMembers)
     invalid(path)
   consumeMembers(budget, value.length)
@@ -98,7 +98,7 @@ function normalizeTypeDetail(value: unknown, path: string, budget: Normalization
     if (unsafeObjectKeys.has(key))
       invalid(`${path}.${key}`)
     if (typeof detail === 'string') {
-      normalized[key] = detail
+      normalized[key] = requireNonEmptyString(detail, `${path}.${key}`)
       continue
     }
     if (!Array.isArray(detail) || detail.length > maxComponentMembers)
@@ -116,11 +116,12 @@ function normalizeTypeDetail(value: unknown, path: string, budget: Normalization
   return normalized
 }
 
-function normalizeSuggestions(value: unknown, path: string) {
+function normalizeSuggestions(value: unknown, path: string, budget: NormalizationBudget) {
   if (value === undefined)
     return []
   if (!Array.isArray(value) || value.length > maxComponentMembers)
     invalid(path)
+  consumeMembers(budget, value.length)
   return value.map((entry, index) => {
     if (typeof entry === 'string')
       return requireNonEmptyString(entry, `${path}[${index}]`)
@@ -138,6 +139,7 @@ function normalizeNamedArray(value: unknown, path: string, budget: Normalization
     return []
   if (!Array.isArray(value) || value.length > maxComponentMembers)
     invalid(path)
+  consumeMembers(budget, value.length)
   return value.map((entry, index) => {
     const entryPath = `${path}[${index}]`
     if (!isPlainRecord(entry))
@@ -180,6 +182,8 @@ function normalizeProp(prop: PlainRecord, path: string, budget: NormalizationBud
     || prop.related.some(item => typeof item !== 'string' || item.length > maxDomainStringLength))) {
     invalid(`${path}.related`)
   }
+  if (Array.isArray(prop.related))
+    consumeMembers(budget, prop.related.length)
   if (prop.value !== undefined) {
     if (typeof prop.value === 'string') {
       if (prop.value.length > maxDomainStringLength)
@@ -189,6 +193,9 @@ function normalizeProp(prop: PlainRecord, path: string, budget: NormalizationBud
       || prop.value.length > maxComponentMembers
       || prop.value.some(item => typeof item !== 'string' || item.length > maxDomainStringLength)) {
       invalid(`${path}.value`)
+    }
+    else {
+      consumeMembers(budget, prop.value.length)
     }
   }
   const typeDetail = normalizeTypeDetail(prop.typeDetail, `${path}.typeDetail`, budget)
@@ -209,8 +216,10 @@ function normalizeComponent(value: unknown, path: string, budget: NormalizationB
     invalid(`${path}.importWay`)
   if (value.props !== undefined && (!isPlainRecord(value.props) || Object.keys(value.props).length > maxComponentMembers))
     invalid(`${path}.props`)
+  const propEntries = Object.entries(value.props || {})
+  consumeMembers(budget, propEntries.length)
   const props: PlainRecord = Object.create(null)
-  for (const [name, prop] of Object.entries(value.props || {})) {
+  for (const [name, prop] of propEntries) {
     if (!name.trim() || (name.startsWith(':') && name.length < 2))
       invalid(`${path}.props.${name || '<empty>'}`)
     if (!isPlainRecord(prop))
@@ -223,7 +232,7 @@ function normalizeComponent(value: unknown, path: string, budget: NormalizationB
     methods: normalizeNamedArray(value.methods, `${path}.methods`, budget),
     slots: normalizeNamedArray(value.slots, `${path}.slots`, budget),
     exposed: normalizeNamedArray(value.exposed, `${path}.exposed`, budget),
-    suggestions: normalizeSuggestions(value.suggestions, `${path}.suggestions`),
+    suggestions: normalizeSuggestions(value.suggestions, `${path}.suggestions`, budget),
     typeDetail: normalizeTypeDetail(value.typeDetail, `${path}.typeDetail`, budget),
   })
 }

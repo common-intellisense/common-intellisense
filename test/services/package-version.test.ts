@@ -1,7 +1,7 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearPackageVersionCache, resolveInstalledPackageVersion } from '../../src/services/package-version'
 
 describe('package-version service', () => {
@@ -76,6 +76,31 @@ describe('package-version service', () => {
     }))
 
     await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.7')
+  })
+
+  it('retries when an opened manifest is replaced before its metadata is validated', async () => {
+    const pkgDir = path.join(tempDir, 'node_modules', 'element-plus')
+    const manifestPath = path.join(pkgDir, 'package.json')
+    await fsp.mkdir(pkgDir, { recursive: true })
+    await fsp.writeFile(manifestPath, JSON.stringify({ name: 'element-plus', version: '2.9.8' }))
+    const current = await fsp.stat(manifestPath)
+    const realOpen = fsp.open.bind(fsp)
+    const oldStat = { ...current, ino: current.ino + 1 }
+    const openSpy = vi.spyOn(fsp, 'open')
+      .mockResolvedValueOnce({
+        stat: vi.fn().mockResolvedValue(oldStat),
+        readFile: vi.fn().mockResolvedValue(JSON.stringify({ name: 'element-plus', version: '2.9.7' })),
+        close: vi.fn(),
+      } as any)
+      .mockImplementation(realOpen as any)
+
+    try {
+      await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.8')
+      await expect(resolveInstalledPackageVersion('element-plus', tempDir)).resolves.toBe('2.9.8')
+    }
+    finally {
+      openSpy.mockRestore()
+    }
   })
 
   it('refreshes cached versions when the installed package manifest changes', async () => {

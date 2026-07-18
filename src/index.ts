@@ -515,12 +515,13 @@ export async function activate(context: vscode.ExtensionContext) {
       refreshExcludeFilter()
       clearDocumentAnalysis()
       documentAnalysisCache.clear()
-      void rebuildVisibleDocumentContexts(true).catch(error => logger.error(`Failed to refresh after exclude change: ${String(error)}`))
+      void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to refresh after exclude change: ${String(error)}`))
     }
 
     if (affects('showSlots')) {
       clearDocumentAnalysis()
-      void rebuildVisibleDocumentContexts(true).catch(error => logger.error(`Failed to refresh slots after configuration change: ${String(error)}`))
+      if (getIsShowSlots())
+        void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to refresh slots after configuration change: ${String(error)}`))
     }
 
     const rebuildContexts = ['ui', 'prefix', 'alias', 'translate'].some(affects)

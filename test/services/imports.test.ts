@@ -299,6 +299,34 @@ const view = [Button, Input]
     )
   })
 
+  it.each([
+    {
+      code: `import A from 'a' // eslint-disable-line\nconst value = 1\n`,
+      expected: `import A from 'a' // eslint-disable-line\nimport { Button } from "ui"\nconst value = 1\n`,
+    },
+    {
+      code: `import A from 'a' /* keep */\nconst value = 1\n`,
+      expected: `import A from 'a' /* keep */\nimport { Button } from "ui"\nconst value = 1\n`,
+    },
+    {
+      code: `import type { A } from 'a' // keep\nconst value = 1\n`,
+      expected: `import type { A } from 'a' // keep\nimport { Button } from "ui"\nconst value = 1\n`,
+    },
+    {
+      code: `'use client' // keep\nexport default function Page() {}\n`,
+      expected: `'use client' // keep\nimport { Button } from "ui"\nexport default function Page() {}\n`,
+    },
+  ])('keeps statement trailing comments attached when adding an import', ({ code, expected }) => {
+    expect(applyEdits(code, createImportEdits(code, 'ui', ['Button']))).toBe(expected)
+  })
+
+  it('keeps promotion comments before additional import statements', () => {
+    const code = `import type Button from 'ui' // keep\nconst value = Button\n`
+    expect(applyEdits(code, createImportEdits(code, 'ui', ['Button', 'Input'], 'default'))).toBe(
+      `import Button from 'ui' // keep\nimport Input from "ui"\nconst value = Button\n`,
+    )
+  })
+
   it('preserves directive prologues and shebangs', () => {
     const directives = `'use client'\n'use strict'\n\nexport default function Page() {}\n`
     const directiveOutput = applyEdits(directives, createImportEdits(directives, 'ui', ['Button']))

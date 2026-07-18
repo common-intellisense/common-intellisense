@@ -144,11 +144,20 @@ describe('data-only adapter manifest validation', () => {
     expect(() => normalizeAdapterManifestExports(manifest, 'fixture')).toThrow(/Invalid adapter manifest field/)
   })
 
-  it('enforces aggregate nested-member budgets across components', () => {
-    const component = (index: number) => ({
-      name: `Demo${index}`,
-      methods: [{ name: 'open', params: Array.from({ length: 250 }, (_, paramIndex) => `param${paramIndex}`) }],
-    })
+  it.each([
+    (index: number) => ({
+      name: `Props${index}`,
+      props: Object.fromEntries(Array.from({ length: 250 }, (_, memberIndex) => [`prop${memberIndex}`, {}])),
+    }),
+    (index: number) => ({
+      name: `Events${index}`,
+      events: Array.from({ length: 250 }, (_, memberIndex) => ({ name: `event${memberIndex}` })),
+    }),
+    (index: number) => ({
+      name: `Suggestions${index}`,
+      suggestions: Array.from({ length: 250 }, (_, memberIndex) => `Suggestion${memberIndex}`),
+    }),
+  ])('enforces aggregate budgets for direct component members', (component) => {
     expect(() => normalizeAdapterManifestExports({
       demo: { uiName: 'demo', lib: 'demo', map: Array.from({ length: 81 }, (_, index) => component(index)) },
     }, 'fixture')).toThrow(/Invalid adapter manifest field: fixture\.members/)
@@ -172,6 +181,8 @@ describe('data-only adapter manifest validation', () => {
     { lib: 'demo', directives: [{ name: 'loading', params: [{ name: 'delay' }] }], map: [['Demo', 'Demo']] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', methods: [{ name: 'open', params: Array.from({ length: 251 }, (_, index) => `param${index}`) }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'change', params: Array.from({ length: 251 }, (_, index) => `param${index}`) }] }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', methods: [{ name: 'open', params: 'x'.repeat(10_001) }] }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', typeDetail: { options: 'x'.repeat(10_001) } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { ':': { type: 'string' } } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'click', kind: 'invalid' }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'submit', required: 'false' }] }] },
