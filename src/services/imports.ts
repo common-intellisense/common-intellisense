@@ -29,12 +29,21 @@ interface ScriptRegion {
   vueMode?: 'setup' | 'normal'
 }
 
-export function resolveImportSource(dataFrom: unknown, dynamicLib: unknown, lib: string, componentName: string, hyphenate: (name: string) => string) {
-  if (typeof dataFrom === 'string' && dataFrom.trim())
-    return dataFrom
-  if (typeof dynamicLib === 'string' && dynamicLib.trim())
-    return dynamicLib.replace('${name}', hyphenate(componentName))
+export function resolveComponentSource(component: { from?: unknown, dynamicLib?: unknown, name?: unknown }, lib: string, dynamicLib: unknown, hyphenate: (name: string) => string) {
+  if (typeof component.from === 'string' && component.from.trim())
+    return component.from
+  const sourceTemplate = typeof component.dynamicLib === 'string' && component.dynamicLib.trim()
+    ? component.dynamicLib
+    : dynamicLib
+  if (typeof sourceTemplate === 'string' && sourceTemplate.trim()) {
+    const name = typeof component.name === 'string' ? component.name.split('.')[0] : ''
+    return sourceTemplate.replace('${name}', hyphenate(name))
+  }
   return lib
+}
+
+export function resolveImportSource(dataFrom: unknown, dynamicLib: unknown, lib: string, componentName: string, hyphenate: (name: string) => string) {
+  return resolveComponentSource({ from: dataFrom, name: componentName }, lib, dynamicLib, hyphenate)
 }
 
 export function getSuggestedImportNames(suggestions: unknown, prefix: string, importWay: ImportWay = 'specifier') {

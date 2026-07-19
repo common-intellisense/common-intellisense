@@ -6,6 +6,7 @@ import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from
 import { createCompletionItem, createHover, createMarkdownString, getConfiguration, getCurrentFileUrl, getLocale, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { translate } from '../translate'
+import { resolveComponentSource } from '../services/imports'
 import { resolveInstalledPackageVersion } from '../services/package-version'
 import { logger } from '../ui/ui-find'
 import { findUniqueSuffixComponentKey } from './find-prefixed-only'
@@ -172,8 +173,14 @@ export interface PropsConfigItem {
   lib: string
 }
 
+export interface CompletionImportPlan {
+  localName: string
+  source: string
+  importWay: 'as default' | 'default' | 'specifier'
+}
+
 export interface FixParams {
-  data: Component
+  data: Component & { __imports?: CompletionImportPlan[] }
   lib: string
   isReact: boolean
   prefix: string
@@ -715,8 +722,7 @@ export function propsReducer(options: PropsOptions) {
       return documentation
     }
     const tableDocument = createTableDocument()
-    const name = item.name.split('.')[0]
-    const from = (item.dynamicLib || dynamicLib) ? (item.dynamicLib || dynamicLib)!.replace('${name}', hyphenate(name)) : lib
+    const from = resolveComponentSource(item, lib, dynamicLib, hyphenate)
     result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: visibleSlots, uiName, lib: from }
     return result
   }, result)
@@ -764,6 +770,41 @@ export interface ComponentsConfigItem {
 }
 
 export type ComponentsConfig = ComponentsConfigItem[]
+
+function getImportBindingName(value: string) {
+  const root = value.split('.')[0]
+  const normalized = root
+    .split(/[^\w$]+/)
+    .filter(Boolean)
+    .map((segment, index) => index ? `${segment[0].toUpperCase()}${segment.slice(1)}` : segment)
+    .join('')
+  return /^[A-Z_$][\w$]*$/i.test(normalized) ? normalized : undefined
+}
+
+function createCompletionData(component: Component, componentByName: Map<string, Component>, lib: string, dynamicLib: string | undefined, importWay: 'as default' | 'default' | 'specifier', renderedName = component.name) {
+  const imports: CompletionImportPlan[] = []
+  const addImport = (target: Component, localName: string) => {
+    const binding = getImportBindingName(localName)
+    if (!binding)
+      return
+    imports.push({
+      localName: binding,
+      source: resolveComponentSource(target, lib, dynamicLib, hyphenate),
+      importWay: target.importWay || importWay,
+    })
+  }
+
+  addImport(component, renderedName)
+  if (component.suggestions?.length === 1) {
+    const suggestionName = normalizeSuggestionName(component.suggestions[0])
+    if (suggestionName) {
+      const suggestion = componentByName.get(normalizeSuggestionLookupName(suggestionName)) || { name: suggestionName } as Component
+      addImport(suggestion, suggestionName)
+    }
+  }
+  return { ...component, name: renderedName, __imports: imports }
+}
+
 export function componentsReducer(options: ComponentOptions): ComponentsConfig {
   const { map: inputMap, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives, installedVersion, adapterMajor } = options
   const map = (inputMap as [Component | string, string, string?][]).map(([content, detail, demo]) => [
@@ -823,7 +864,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           // FIXME: params要求string| string[]
           // const fixParams: FixParams = [content as Component, lib, isReact, prefix, dynamicLib || '', importWay || '']
           const fixParams: any = {
-            data: content,
+            data: createCompletionData(content as Component, componentByName, lib, dynamicLib, itemImportWay || 'specifier'),
             lib,
             isReact,
             requiresImport: context?.syntax === 'jsx' || context?.hostFramework === 'svelte' || isReact,
@@ -877,7 +918,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
 
           // FIXME: params要求string| string[]
           const fixParams: any = {
-            data: { ...(content as any), name: (content as any).name?.slice(prefix.length) },
+            data: createCompletionData(content as Component, componentByName, lib, dynamicLib, itemImportWay || 'specifier', (content as Component).name.slice(prefix.length)),
             lib,
             isReact: true,
             requiresImport: true,
@@ -935,7 +976,7 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       // FIXME: params要求string| string[]
       // const fixParams: any = [content, lib, isReact, prefix, dynamicLib || '', importWay || '']
       const fixParams: any = {
-        data: content,
+        data: createCompletionData(content as Component, componentByName, lib, dynamicLib, itemImportWay || 'specifier'),
         lib,
         isReact,
         requiresImport: context?.syntax === 'jsx' || context?.hostFramework === 'svelte' || isReact,
@@ -1311,7 +1352,7 @@ async function getTemplateStr(componentByName: Map<string, Component>, content: 
 }
 
 async function getSuggestionsTemplateStr(content: any, componentByName: Map<string, Component>, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>, adapterPrefix = '', renderedPrefix?: string) {
-  if (content.suggestions?.length) {
+  if (content.suggestions?.length === 1) {
     const suggestionName = normalizeSuggestionName(content.suggestions[0])
     if (!suggestionName)
       return `$${++index}`

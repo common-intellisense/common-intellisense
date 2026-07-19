@@ -66,11 +66,10 @@ function requireStaticArgument(value: unknown, path: string) {
   return requireSourceToken(value, path, staticArgumentRE)
 }
 
-function requireSafeSnippetValue(value: unknown, path: string) {
-  const text = requireNonEmptyString(value, path)
-  if (/\r|\n/.test(text))
+function requireSafeSnippetString(value: unknown, path: string) {
+  if (typeof value !== 'string' || value.length > maxDomainStringLength || /[\0\r\n]/.test(value))
     invalid(path)
-  return text
+  return value
 }
 
 function validateOptionalString(
@@ -130,7 +129,7 @@ function validateOptionalSnippetValue(
   ) {
     return
   }
-  requireSafeSnippetValue(value, `${path}.${key}`)
+  requireSafeSnippetString(value, `${path}.${key}`)
 }
 
 function normalizeParams(
@@ -257,7 +256,7 @@ function normalizeNamedArray(
     ])
       validateOptionalString(entry, key, entryPath)
     if (entry.value !== undefined)
-      requireSafeSnippetValue(entry.value, `${entryPath}.value`)
+      requireSafeSnippetString(entry.value, `${entryPath}.value`)
     if (
       kind === 'event'
       && entry.kind !== undefined
@@ -320,7 +319,7 @@ function normalizeProp(
     consumeMembers(budget, prop.related.length)
   if (prop.value !== undefined) {
     if (typeof prop.value === 'string') {
-      requireSafeSnippetValue(prop.value, `${path}.value`)
+      requireSafeSnippetString(prop.value, `${path}.value`)
     }
     else if (
       !Array.isArray(prop.value)
@@ -495,6 +494,7 @@ function normalizeDirectives(
       'documentation',
       'documentationType',
       'link',
+      'link_zh',
       'version',
     ])
       validateOptionalString(directive, key, directivePath)
@@ -519,11 +519,11 @@ function normalizeDirectives(
         if (param[key] !== undefined && !isSafeDirectiveValue(param[key]))
           invalid(`${paramPath}.${key}`)
         if (typeof param[key] === 'string')
-          requireSafeSnippetValue(param[key], `${paramPath}.${key}`)
+          requireSafeSnippetString(param[key], `${paramPath}.${key}`)
       }
       return copyKnownFields(param, ['name', 'type', 'description', 'description_zh', 'default', 'value'], paramPath, { name })
     })
-    return copyKnownFields(directive, ['name', 'description', 'description_zh', 'documentation', 'documentationType', 'link', 'version', 'params'], directivePath, { name, params })
+    return copyKnownFields(directive, ['name', 'description', 'description_zh', 'documentation', 'documentationType', 'link', 'link_zh', 'version', 'params'], directivePath, { name, params })
   })
 }
 

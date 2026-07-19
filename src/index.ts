@@ -613,18 +613,29 @@ export async function activate(context: vscode.ExtensionContext) {
     const name = getComponentImportName(data.name)
     if (!name)
       return
-    const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
-    const deps = [...getSuggestedImportNames(data.suggestions, prefix, importWay), name]
     const importHost = document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'script'
     const preferredOffset = typeof activeLoc?.start?.offset === 'number' ? activeLoc.start.offset : undefined
-    const edits = createImportEdits(code, from, deps, importWay, importHost, {
+    const editContext = {
       languageId: document.languageId,
       uri: document.uri.toString(),
       preferredOffset: params.document.vueBlock ? undefined : preferredOffset,
       preferredVueBlock: params.document.vueBlock,
       expectedBlockLang: params.document.blockLang,
       registerVueComponent: typeof params.registerVueComponent === 'boolean' ? params.registerVueComponent : preferredOffset === undefined,
-    })
+    }
+    const plannedImports = Array.isArray(data.__imports)
+      ? data.__imports.filter((item: any) => item && typeof item.localName === 'string' && typeof item.source === 'string' && ['as default', 'default', 'specifier'].includes(item.importWay))
+      : []
+    const edits = plannedImports.length
+      ? plannedImports.flatMap((item: any) => createImportEdits(code, item.source, [item.localName], item.importWay, importHost, editContext))
+      : createImportEdits(
+          code,
+          resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')),
+          [...getSuggestedImportNames(data.suggestions, prefix, importWay), name],
+          importWay,
+          importHost,
+          editContext,
+        )
     if (!edits.length)
       return
     const workspaceEdit = new vscode.WorkspaceEdit()

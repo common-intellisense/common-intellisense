@@ -82,6 +82,62 @@ describe('data-only adapter manifest validation', () => {
     }, 'fixture')).not.toThrow()
   })
 
+  it('accepts empty strings in snippet value fields', () => {
+    expect(() => normalizeAdapterManifestExports({
+      demoComponents: {
+        lib: 'demo',
+        directives: [{ name: 'loading', params: [{ name: 'label', type: 'string', default: '', value: '' }] }],
+        map: [['Demo', 'Demo']],
+      },
+      demo: {
+        uiName: 'demo',
+        lib: 'demo',
+        map: [{ name: 'Demo', props: { label: { default: '', value: '' } }, events: [{ name: 'change', value: '' }], methods: [{ name: 'reset', value: '' }] }],
+      },
+    }, 'fixture')).not.toThrow()
+  })
+
+  it('preserves directive link_zh metadata', () => {
+    const exportsData = normalizeAdapterManifestExports({
+      demoComponents: { lib: 'demo', directives: [{ name: 'loading', link: '/en', link_zh: '/zh' }], map: [['Demo', 'Demo']] },
+    }, 'fixture') as any
+
+    expect(exportsData.demoComponents.directives[0].link_zh).toBe('/zh')
+  })
+
+  it('uses component-level sources consistently for props and planned completion imports', async () => {
+    const exportsData = normalizeAdapterManifestExports({
+      demoComponents: {
+        lib: 'demo',
+        dynamicLib: '@demo/${name}',
+        map: [[{ name: 'Parent', from: '@custom/parent', suggestions: ['Child'] }, 'Parent'], [{ name: 'Child', from: '@custom/child' }, 'Child']],
+      },
+      demo: { uiName: 'demo', lib: 'demo', dynamicLib: '@demo/${name}', map: [{ name: 'Parent', from: '@custom/parent' }] },
+    }, 'fixture') as any
+
+    const props = await propsReducer(exportsData.demo)
+    expect(props.Parent.lib).toBe('@custom/parent')
+
+    const [provider] = componentsReducer(exportsData.demoComponents)
+    const completions = await Promise.all(provider.data(undefined, { languageId: 'vue', framework: 'vue', syntax: 'template', uri: '' })) as any[]
+    const parent = completions.find(item => item.params.data.name === 'Parent')
+    expect(parent.params.data.__imports).toEqual([
+      { localName: 'Parent', source: '@custom/parent', importWay: 'specifier' },
+      { localName: 'Child', source: '@custom/child', importWay: 'specifier' },
+    ])
+  })
+
+  it('renders a nested suggestion only when exactly one is declared', async () => {
+    const exportsData = normalizeAdapterManifestExports({
+      demoComponents: { lib: 'demo', map: [[{ name: 'Parent', suggestions: ['Child', 'Other'] }, 'Parent']] },
+    }, 'fixture') as any
+    const [provider] = componentsReducer(exportsData.demoComponents)
+    const [parent] = await Promise.all(provider.data(undefined, { languageId: 'vue', framework: 'vue', syntax: 'template', uri: '' })) as any[]
+
+    expect(parent.snippet).not.toContain('<Child')
+    expect(parent.params.data.__imports).toEqual([{ localName: 'Parent', source: 'demo', importWay: 'specifier' }])
+  })
+
   it('accepts bounded enum values that are escaped by the snippet renderer', () => {
     expect(() => normalizeAdapterManifestExports({
       demo: { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { value: ['a,b', 'c|d', 'e}f', 'g\\h'] } } }] },
