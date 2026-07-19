@@ -1,14 +1,17 @@
 import { existsSync } from 'node:fs'
 import fsp from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { createRequire } from 'node:module'
 import process from 'node:process'
 import * as ts from 'typescript'
 import { getRootPath } from '@vscode-use/utils'
 import type { Component, EventItem, PropsItem, typeDetail, typeDetailItem } from '../ui/ui-type'
-import { componentsReducer, hyphenate, propsReducer } from '../ui/utils'
+import { componentsReducer, propsReducer } from '../ui/utils'
 import { fixedTagName } from '../ui/ui-utils'
+import { resolvePackageManifest } from '../services/package-manifest'
 import { typeCache } from './cache'
+
+type TypeExtractResult = Record<string, () => any>
 
 interface TypeExtractOptions {
   pkgName: string
@@ -43,104 +46,213 @@ const MAX_INLINE_TYPE_LENGTH = 240
 const MAX_INLINE_UNION_MEMBERS = 6
 const RESOLVE_EXTENSIONS = ['.d.ts', '.ts', '.tsx', '.js', '.mjs', '.cjs']
 
-export async function fetchFromTypes(options: TypeExtractOptions) {
+export function fetchFromTypes(options: TypeExtractOptions): Promise<TypeExtractResult | undefined> {
+  return fetchFromTypesInternal(options, 0, typeCache.getEpoch())
+}
+
+async function fetchFromTypesInternal(options: TypeExtractOptions, attempt: number, cacheEpoch: number): Promise<TypeExtractResult | undefined> {
   const { pkgName, uiName } = options
   if (!pkgName || !uiName)
     return
 
-  const basePath = options.resolveFrom
-    ? path.extname(options.resolveFrom)
-      ? path.dirname(options.resolveFrom)
-      : options.resolveFrom
-    : (getRootPath() || process.cwd())
-  const requireBase = path.resolve(basePath, 'package.json')
-  const require = createRequire(requireBase)
-  let pkgJsonPath = ''
-  try {
-    pkgJsonPath = require.resolve(`${pkgName}/package.json`)
+  let basePath = getRootPath() || process.cwd()
+  if (options.resolveFrom) {
+    try {
+      const stat = await fsp.stat(options.resolveFrom)
+      basePath = stat.isFile() ? path.dirname(options.resolveFrom) : options.resolveFrom
+    }
+    catch {
+      basePath = path.basename(options.resolveFrom) === 'package.json'
+        ? path.dirname(options.resolveFrom)
+        : options.resolveFrom
+    }
   }
-  catch {
+  const pkgJsonPath = await resolvePackageManifest(pkgName, basePath)
+  if (!pkgJsonPath)
     return
-  }
 
   const pkgRoot = path.dirname(pkgJsonPath)
-  const pkgJson = JSON.parse(await fsp.readFile(pkgJsonPath, 'utf-8'))
+  const pkgRootReal = await fsp.realpath(pkgRoot)
+  const pkgJsonContent = await fsp.readFile(pkgJsonPath, 'utf-8')
+  const pkgJson = JSON.parse(pkgJsonContent)
   const version = pkgJson?.version || '0.0.0'
-  const cacheKey = `${pkgName}@${version}`
-  if (typeCache.has(cacheKey))
-    return typeCache.get(cacheKey)
-
   const typeEntry = resolveTypesEntry(pkgJson, pkgRoot)
   if (!typeEntry)
     return
   const globalDts = path.resolve(pkgRoot, 'global.d.ts')
-  const rootNames = [
-    typeEntry,
-    ...(existsSync(globalDts) ? [globalDts] : []),
-  ]
+  const snapshotKey = `${pkgRootReal}::${typeEntry}::${version}`
+  const knownFiles = typeCache.getSnapshot(snapshotKey)?.files || [pkgJsonPath, typeEntry, globalDts]
+  const signature = await getTypeCacheSignature({
+    pkgRoot: pkgRootReal,
+    version,
+    files: knownFiles,
+  })
+  const cacheKey = `${snapshotKey}::${signature}::${uiName}`
+  const cached = typeCache.get(cacheKey)
+  if (cached)
+    return cached
 
-  const compilerOptions: ts.CompilerOptions = {
-    target: ts.ScriptTarget.ESNext,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    skipLibCheck: true,
-    noEmit: true,
-    jsx: ts.JsxEmit.Preserve,
-    allowJs: false,
-    strictNullChecks: true,
-  }
-  const host = ts.createCompilerHost(compilerOptions)
-  const origResolveModuleNames = host.resolveModuleNames?.bind(host)
-  host.resolveModuleNames = (moduleNames, containingFile, ...rest) => {
-    const baseResolved = origResolveModuleNames
-      ? origResolveModuleNames(moduleNames, containingFile, ...rest)
-      : moduleNames.map(name => ts.resolveModuleName(name, containingFile, compilerOptions, host).resolvedModule)
-    return moduleNames.map((name, index) => {
-      const resolved = baseResolved?.[index]
-      const preferred = preferDtsResolved(resolved)
-      if (preferred)
-        return preferred
-      const fallback = resolveModuleFallback(name, containingFile, compilerOptions, host)
-      return preferDtsResolved(fallback)
+  const pending = typeCache.getInFlight(cacheKey)
+  if (pending && attempt === 0)
+    return pending
+
+  const promise: Promise<TypeExtractResult | undefined> = (async () => {
+    const rootNames = [
+      typeEntry,
+      ...(await pathExists(globalDts) ? [globalDts] : []),
+    ]
+
+    const compilerOptions: ts.CompilerOptions = {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      skipLibCheck: true,
+      noEmit: true,
+      jsx: ts.JsxEmit.Preserve,
+      allowJs: false,
+      strictNullChecks: true,
+    }
+    const host = ts.createCompilerHost(compilerOptions)
+    const sourceHashes = new Map<string, string>()
+    let sourceChangedDuringRead = false
+    const originalReadFile = host.readFile.bind(host)
+    host.readFile = (fileName) => {
+      const text = originalReadFile(fileName)
+      if (text !== undefined && isRelevantPackageFile(fileName, pkgRoot)) {
+        const normalized = path.resolve(fileName)
+        const digest = hashText(text)
+        const previous = sourceHashes.get(normalized)
+        if (previous !== undefined && previous !== digest)
+          sourceChangedDuringRead = true
+        sourceHashes.set(normalized, digest)
+      }
+      return text
+    }
+    const origResolveModuleNames = host.resolveModuleNames?.bind(host)
+    host.resolveModuleNames = (moduleNames, containingFile, ...rest) => {
+      const baseResolved = origResolveModuleNames
+        ? origResolveModuleNames(moduleNames, containingFile, ...rest)
+        : moduleNames.map(name => ts.resolveModuleName(name, containingFile, compilerOptions, host).resolvedModule)
+      return moduleNames.map((name, index) => {
+        const resolved = baseResolved?.[index]
+        const preferred = preferDtsResolved(resolved)
+        if (preferred)
+          return preferred
+        const fallback = resolveModuleFallback(name, containingFile, compilerOptions, host)
+        return preferDtsResolved(fallback)
+      })
+    }
+    sourceHashes.set(path.resolve(pkgJsonPath), hashText(pkgJsonContent))
+    const program = ts.createProgram(rootNames, compilerOptions, host)
+    const packageSourceFiles = [...new Set([
+      ...program.getSourceFiles()
+        .map(sourceFile => sourceFile.fileName)
+        .filter(fileName => isRelevantPackageFile(fileName, pkgRoot)),
+      pkgJsonPath,
+      typeEntry,
+      globalDts,
+    ])]
+    const finalSignature = await getTypeCacheSignature({ pkgRoot: pkgRootReal, version, files: packageSourceFiles })
+    const finalCacheKey = `${snapshotKey}::${finalSignature}::${uiName}`
+    const checker = program.getTypeChecker()
+    const components = collectComponents(program, checker, pkgRoot, typeEntry)
+    if (!components.length) {
+      const filesChangedDuringBuild = sourceChangedDuringRead || await didRecordedSourcesChange(sourceHashes)
+      return filesChangedDuringBuild && attempt < 1
+        ? fetchFromTypesInternal(options, attempt + 1, cacheEpoch)
+        : undefined
+    }
+
+    const reactLikeCount = components.filter(c => c.reactLike).length
+    const isReact = reactLikeCount > 0 && reactLikeCount >= Math.ceil(components.length / 2)
+    const map = components.map(({ component }) => [component, component.name] as [Component, string])
+
+    const componentsConfig = componentsReducer({
+      map,
+      lib: pkgName,
+      isReact,
+      isSeperatorByHyphen: !isReact,
     })
-  }
-  const program = ts.createProgram(rootNames, compilerOptions, host)
-  const checker = program.getTypeChecker()
-  const components = collectComponents(program, checker, pkgRoot, typeEntry)
-  if (!components.length)
-    return
+    const propsConfig = await propsReducer({
+      uiName,
+      lib: pkgName,
+      map: components.map(c => c.component),
+      resolveFrom: options.resolveFrom,
+      installedVersion: version,
+    })
+    const rawComponents = components.map(c => c.component)
+    const result = {
+      [`${uiName}Components`]: () => componentsConfig,
+      [`${uiName}`]: () => propsConfig,
+      [`${uiName}Raw`]: () => rawComponents,
+    }
+    const filesChangedDuringBuild = sourceChangedDuringRead || await didRecordedSourcesChange(sourceHashes)
+    if (filesChangedDuringBuild)
+      return attempt < 1 ? fetchFromTypesInternal(options, attempt + 1, cacheEpoch) : undefined
+    if (typeCache.getEpoch() === cacheEpoch) {
+      typeCache.setSnapshot(snapshotKey, packageSourceFiles)
+      typeCache.set(finalCacheKey, result)
+    }
+    return result
+  })()
 
-  const reactLikeCount = components.filter(c => c.reactLike).length
-  const isReact = reactLikeCount > 0 && reactLikeCount >= Math.ceil(components.length / 2)
-  const map = components.map(({ component }) => [component, component.name] as [Component, string])
-
-  const componentsConfig = componentsReducer({
-    map,
-    lib: pkgName,
-    isReact,
-  })
-  const propsConfig = await propsReducer({
-    uiName,
-    lib: pkgName,
-    map: components.map(c => c.component),
-  })
-  const rawComponents = components.map(c => c.component)
-  // Alias kebab-case component names to improve props lookup in templates.
-  for (const key of Object.keys(propsConfig)) {
-    if (!key || key.includes('-'))
-      continue
-    const kebab = hyphenate(key[0].toLowerCase() + key.slice(1))
-    if (!propsConfig[kebab])
-      propsConfig[kebab] = propsConfig[key]
+  typeCache.setInFlight(cacheKey, promise)
+  try {
+    return await promise
   }
-
-  const result = {
-    [`${uiName}Components`]: () => componentsConfig,
-    [`${uiName}`]: () => propsConfig,
-    [`${uiName}Raw`]: () => rawComponents,
+  finally {
+    typeCache.clearInFlight(cacheKey, promise)
+    typeCache.prune()
   }
-  typeCache.set(cacheKey, result)
-  return result
+}
+
+function hashText(text: string) {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+function isRelevantPackageFile(fileName: string, pkgRoot: string) {
+  const relative = path.relative(pkgRoot, fileName)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative) && !relative.split(path.sep).includes('node_modules'))
+}
+
+async function didRecordedSourcesChange(sourceHashes: Map<string, string>) {
+  for (const [fileName, recordedHash] of sourceHashes) {
+    try {
+      if (hashText(await fsp.readFile(fileName, 'utf8')) !== recordedHash)
+        return true
+    }
+    catch {
+      return true
+    }
+  }
+  return false
+}
+
+async function pathExists(target: string) {
+  try {
+    await fsp.access(target)
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
+async function getTypeCacheSignature(input: { pkgRoot: string, version: string, files: string[] }) {
+  const hash = createHash('sha256')
+  hash.update(input.pkgRoot)
+  hash.update(input.version)
+  for (const file of [...new Set(input.files)].sort()) {
+    try {
+      const content = await fsp.readFile(file)
+      hash.update(path.relative(input.pkgRoot, file))
+      hash.update(createHash('sha256').update(content).digest('hex'))
+    }
+    catch {
+      hash.update(`${path.relative(input.pkgRoot, file)}:missing`)
+    }
+  }
+  return hash.digest('hex')
 }
 
 function resolveTypesEntry(pkgJson: any, pkgRoot: string) {
@@ -242,7 +354,8 @@ function collectVueGlobalComponents(program: ts.Program, checker: ts.TypeChecker
   for (const sourceFile of program.getSourceFiles()) {
     if (!sourceFile.isDeclarationFile)
       continue
-    if (!sourceFile.fileName.startsWith(normalizedRoot))
+    const relative = path.relative(normalizedRoot, path.resolve(sourceFile.fileName))
+    if (relative.startsWith('..') || path.isAbsolute(relative) || relative.split(path.sep).includes('node_modules'))
       continue
 
     ts.forEachChild(sourceFile, (node) => {

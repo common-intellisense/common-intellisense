@@ -28,9 +28,16 @@ vi.mock('@vscode-use/utils', () => ({
   getCurrentFileUrl: vi.fn(() => ''),
   getLineText: () => '',
   getLocale: vi.fn(() => 'en'),
+  getOffsetFromPosition: (position: any, code?: string) => code
+    ? code.split('\n').slice(0, position.line).reduce((total: number, line: string) => total + line.length + 1, 0) + position.character
+    : position.character,
   getPosition: () => ({ position: { line: 0, character: 0 } }),
   getSelection: () => ({ lineText: '' }),
   insertText: () => {},
+  isInPosition: (loc: any, position: any) => position.line + 1 >= loc.start.line
+    && position.line + 1 <= loc.end.line
+    && (position.line + 1 !== loc.start.line || position.character >= (loc.start.column ?? loc.start.character ?? 0))
+    && (position.line + 1 !== loc.end.line || position.character <= (loc.end.column ?? loc.end.character ?? Number.MAX_SAFE_INTEGER)),
   message: { info: () => {} },
   openExternalUrl: () => {},
   registerCommand: () => {},
@@ -40,6 +47,8 @@ vi.mock('@vscode-use/utils', () => ({
   setCommandParams: (value: any) => encodeURIComponent(JSON.stringify(value)),
   updateText: () => {},
   addEventListener: () => () => {},
+  watchFile: () => () => {},
+  watchFiles: () => () => {},
   createFilter: () => () => false,
   // logging helper used in ui-find
   createLog: (_name: string) => ({
@@ -83,9 +92,25 @@ vi.mock('vscode', () => {
     }
   }
   class Range {}
+  class EventEmitter<T = void> {
+    listeners = new Set<(value: T) => void>()
+    event = (listener: (value: T) => void) => {
+      this.listeners.add(listener)
+      return { dispose: () => this.listeners.delete(listener) }
+    }
+
+    fire(value: T) {
+      this.listeners.forEach(listener => listener(value))
+    }
+
+    dispose() {
+      this.listeners.clear()
+    }
+  }
   return {
     MarkdownString,
     Range,
+    EventEmitter,
     CodeLens: class CodeLens {
       range: any
       command: any
@@ -104,6 +129,7 @@ vi.mock('vscode', () => {
     ViewColumn: { Beside: 2 },
     languages: { registerHoverProvider: () => ({}) },
     window: { visibleTextEditors: [] },
+    workspace: { isTrusted: true, onDidCloseTextDocument: () => ({ dispose: () => {} }) },
   }
 })
 

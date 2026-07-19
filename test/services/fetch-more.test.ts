@@ -1,17 +1,46 @@
+import vm from 'node:vm'
+import fsp from 'node:fs/promises'
+import * as vscode from 'vscode'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let remoteUris: string[] = ['https://fake/remote.js']
 let remoteNpmUris: ({ name: string, resource?: string } | string)[] = [{ name: '@common-intellisense/button', resource: undefined }]
-let trustedHosts: string[] = []
+let localUris: string[] = []
+let trustedHosts: string[] = ['fake']
+let allowLegacyAdapters = true
+let legacyAdapterAllowlist: string[] = []
+const fetchFromTypesMock = vi.fn()
+
+async function useMockRemoteRequester(mod: typeof import('../../src/services/fetch')) {
+  const { ofetch } = await import('ofetch')
+  mod.setRemoteTransportForTest(async (uri) => {
+    let status = 200
+    let location: string | undefined
+    const body = await vi.mocked(ofetch)(uri, {
+      onResponse({ response }: any) {
+        status = response.status
+        location = response.headers.get('location') || undefined
+      },
+    } as any)
+    return { status, location, body: String(body ?? '') }
+  }, async () => [{ address: '8.8.8.8', family: 4 }])
+}
 
 // This test file isolates different mocked behaviors from the other fetch.test.ts
 vi.mock('node:fs', () => ({ existsSync: () => false }))
-vi.mock('node:fs/promises', () => ({ readFile: vi.fn(async () => '{}') }))
+vi.mock('node:fs/promises', () => ({
+  default: {
+    readFile: vi.fn(async () => '{}'),
+    realpath: vi.fn(async (value: string) => value),
+    stat: vi.fn(async () => ({ isFile: () => true, size: 2 })),
+  },
+}))
 vi.mock('@simon_he/fetch-npm', () => ({ fetchAndExtractPackage: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
 vi.mock('@simon_he/latest-version', () => ({ latestVersion: vi.fn(async () => '2.0.0') }))
 vi.mock('@simon_he/fetch-npm-cjs', () => ({ fetchFromCjsForCommonIntellisense: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
 vi.mock('ofetch', () => ({ ofetch: vi.fn(async () => 'module.exports = { ButtonComponents: (isZh) => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }') }))
-vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsReducer: (v: any) => v }))
+vi.mock('../../src/ui/utils', () => ({ componentsReducer: (v: any) => v, propsReducer: (v: any) => v?.map ?? v }))
+vi.mock('../../src/type-extract', () => ({ fetchFromTypes: fetchFromTypesMock }))
 vi.mock('../../src/ui/ui-find', () => ({ logger: { info: () => {}, error: () => {} } }))
 vi.mock('@vscode-use/utils', () => ({
   createFakeProgress: ({ callback }: any) => callback(() => {}, () => {}),
@@ -19,11 +48,15 @@ vi.mock('@vscode-use/utils', () => ({
     if (k === 'common-intellisense.remoteUris')
       return remoteUris
     if (k === 'common-intellisense.localUris')
-      return []
+      return localUris
     if (k === 'common-intellisense.remoteNpmUris')
       return remoteNpmUris
     if (k === 'common-intellisense.trustedHosts')
       return trustedHosts
+    if (k === 'common-intellisense.allowLegacyAdapters')
+      return allowLegacyAdapters
+    if (k === 'common-intellisense.legacyAdapterAllowlist')
+      return legacyAdapterAllowlist
     return undefined
   },
   getLocale: () => 'en',
@@ -34,12 +67,46 @@ vi.mock('@vscode-use/utils', () => ({
 }))
 
 describe('fetch service additional tests (mocked)', () => {
+  it('validates remote npm resource paths', async () => {
+    const { normalizeNpmResource } = await import('../../src/services/fetch')
+    expect(normalizeNpmResource('dist/manifest.json')).toBe('dist/manifest.json')
+    for (const invalid of ['../package.json', '/absolute/path', 'C:\\absolute\\path', 'foo\\..\\bar', 'bad\0path', 'x'.repeat(257)])
+      expect(() => normalizeNpmResource(invalid)).toThrow('Invalid npm adapter resource')
+  })
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
     remoteUris = ['https://fake/remote.js']
     remoteNpmUris = [{ name: '@common-intellisense/button', resource: undefined }]
-    trustedHosts = []
+    localUris = []
+    trustedHosts = ['fake']
+    allowLegacyAdapters = true
+    legacyAdapterAllowlist = []
+    vi.mocked(fsp.readFile).mockReset().mockResolvedValue('{}')
+    vi.mocked(fsp.realpath).mockReset().mockImplementation(async value => String(value))
+    vi.mocked(fsp.stat).mockReset().mockResolvedValue({ isFile: () => true, size: 2 } as any)
+    fetchFromTypesMock.mockReset()
+  })
+
+  beforeEach(async () => {
+    const mod = await import('../../src/services/fetch')
+    await useMockRemoteRequester(mod)
+  })
+
+  it('does not disguise an official failure as an unrelated local adapter success', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    vi.mocked(npm.fetchAndExtractPackage).mockRejectedValueOnce(new Error('registry offline'))
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockRejectedValueOnce(new Error('registry offline'))
+    fetchFromTypesMock.mockResolvedValue(undefined)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromCommonIntellisense('button', {
+      pkgName: 'button',
+      uiName: 'button',
+      resolveFrom: '/workspace/package.json',
+    })).resolves.toBeUndefined()
   })
 
   it('fetchFromCommonIntellisense returns parsed exports and caches the result', async () => {
@@ -55,8 +122,102 @@ describe('fetch service additional tests (mocked)', () => {
     expect(comps[0].name).toBe('X')
 
     // version mocked to 2.0.0 and prefix in module is '@common-intellisense/'
-    const key = '@common-intellisense/Button@2.0.0'
+    const key = 'official:@common-intellisense/Button@2.0.0'
     expect(mod.cacheFetch.has(key)).toBe(true)
+  })
+
+  it('uses configured npm resources and isolates their cache keys', async () => {
+    const fetchNpm = await import('@simon_he/fetch-npm')
+    remoteNpmUris = [
+      { name: '@common-intellisense/button', resource: 'dist/manifest.json' },
+      { name: '@common-intellisense/button', resource: 'dist/alternate.json' },
+    ]
+    vi.mocked(fetchNpm.fetchAndExtractPackage)
+      .mockResolvedValueOnce(JSON.stringify({ schemaVersion: 1, exports: { FirstProps: { uiName: 'first', lib: 'first', map: [] } } }))
+      .mockResolvedValueOnce(JSON.stringify({ schemaVersion: 1, exports: { SecondProps: { uiName: 'second', lib: 'second', map: [] } } }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteNpmUrls()
+
+    expect(result.FirstProps).toBeTypeOf('function')
+    expect(result.SecondProps).toBeTypeOf('function')
+    expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({ dist: 'dist/manifest.json' }))
+    expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({ dist: 'dist/alternate.json' }))
+    expect(mod.cacheFetch.has('remote-npm:@common-intellisense/button@2.0.0::dist/manifest.json')).toBe(true)
+    expect(mod.cacheFetch.has('remote-npm:@common-intellisense/button@2.0.0::dist/alternate.json')).toBe(true)
+  })
+
+  it('pins the extract channel to the resolved version and does not race the legacy channel', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue('module.exports = { ButtonProps: () => ({ source: "extract" }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteNpmUrls()
+
+    expect(result.ButtonProps().source).toBe('extract')
+    expect(vi.mocked(npm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({
+      name: '@common-intellisense/button@2.0.0',
+      dist: 'index.cjs',
+    }))
+    expect(vi.mocked(cjs.fetchFromCjsForCommonIntellisense)).not.toHaveBeenCalled()
+  })
+
+  it('uses the legacy npm channel only after the pinned extract channel fails', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    vi.mocked(npm.fetchAndExtractPackage).mockRejectedValue(new Error('extract failed'))
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockResolvedValue('module.exports = { ButtonProps: () => ({ source: "legacy" }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteNpmUrls()
+
+    expect(result.ButtonProps().source).toBe('legacy')
+    expect(vi.mocked(cjs.fetchFromCjsForCommonIntellisense)).toHaveBeenCalledWith(expect.objectContaining({
+      name: '@common-intellisense/button',
+      version: '2.0.0',
+    }))
+  })
+
+  it('does not add workspace-local source paths to the shared fetch cache', async () => {
+    localUris = ['./adapter.cjs']
+    vi.mocked(fsp.readFile).mockResolvedValue('module.exports = { LocalProps: () => ({ local: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromLocalUris('/workspace')
+
+    expect(result.LocalProps().local).toBe(true)
+    expect(mod.cacheFetch.has('/workspace/adapter.cjs')).toBe(false)
+  })
+
+  it('rejects npm adapters that exceed the UTF-8 byte budget', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    const oversized = '你'.repeat(3 * 1024 * 1024)
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue(oversized)
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockResolvedValue(oversized)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteNpmUrls()).rejects.toThrow('too large')
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue('module.exports = { ButtonComponents: () => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }')
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockResolvedValue('module.exports = { ButtonComponents: () => [{ name: "X" }], ButtonProps: () => ({ bar: 2 }) }')
+  })
+
+  it('rejects oversized local adapters before reading their contents', async () => {
+    localUris = ['./oversized.js']
+    vi.mocked(fsp.stat).mockResolvedValue({ isFile: () => true, size: 8 * 1024 * 1024 + 1 } as any)
+    const readFile = vi.mocked(fsp.readFile)
+    readFile.mockClear()
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromLocalUris('/workspace')).rejects.toThrow('too large')
+    expect(readFile).not.toHaveBeenCalled()
   })
 
   it('fetchFromRemoteNpmUrls handles configured npm packages', async () => {
@@ -73,6 +234,52 @@ describe('fetch service additional tests (mocked)', () => {
     expect(comps[0].name).toBe('X')
     const props = res.ButtonProps()
     expect(props.bar).toBe(2)
+  })
+
+  it('isolates official adapter fallback results by package context', async () => {
+    const fetchNpm = await import('@simon_he/fetch-npm')
+    vi.mocked(fetchNpm.fetchAndExtractPackage).mockResolvedValue(`module.exports = {
+      ButtonComponents: () => [{ name: "Button" }],
+      ButtonProps: () => [{ name: "Button", props: { size: { type: "" } } }]
+    }`)
+    fetchFromTypesMock.mockImplementation(async ({ uiName, resolveFrom }: any) => ({
+      [`${uiName}Raw`]: () => [{
+        name: 'Button',
+        props: { size: { type: resolveFrom.includes('/a/') ? 'AType' : 'BType' } },
+      }],
+    }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [a, b] = await Promise.all([
+      mod.fetchFromCommonIntellisense('button', { pkgName: 'button-a', uiName: 'buttonA', resolveFrom: '/workspace/a/package.json' }),
+      mod.fetchFromCommonIntellisense('button', { pkgName: 'button-b', uiName: 'buttonB', resolveFrom: '/workspace/b/package.json' }),
+    ])
+
+    expect(a.ButtonProps()[0].props.size.type).toBe('AType')
+    expect(b.ButtonProps()[0].props.size.type).toBe('BType')
+    expect(fetchFromTypesMock).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not duplicate an unresolved raw latest-version request after cache invalidation', async () => {
+    const latest = await import('@simon_he/latest-version')
+    let resolveRaw!: (value: string) => void
+    vi.mocked(latest.latestVersion)
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveRaw = resolve }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const oldTask = mod.fetchFromCommonIntellisense('button')
+    await Promise.resolve()
+    mod.clearFetchCaches()
+    const retriedTask = mod.fetchFromCommonIntellisense('button')
+    await Promise.resolve()
+    expect(vi.mocked(latest.latestVersion)).toHaveBeenCalledTimes(1)
+
+    resolveRaw('3.0.0')
+    await Promise.all([oldTask, retriedTask])
+    expect(mod.cacheFetch.has('official:@common-intellisense/button@3.0.0')).toBe(true)
   })
 
   it('fetchFromCommonIntellisense supports concurrent fetches for different keys', async () => {
@@ -145,6 +352,476 @@ describe('fetch service additional tests (mocked)', () => {
     expect(third.ButtonProps().bar).toBe(2)
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
     nowSpy.mockRestore()
+  })
+
+  it('backs off after a stale-cache refresh failure', async () => {
+    const ofetchMod = await import('ofetch')
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { ButtonProps: () => ({ value: 1 }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    nowSpy.mockReturnValue(1000 + 6 * 60 * 1000)
+    vi.mocked(ofetchMod.ofetch).mockRejectedValue(new Error('offline'))
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
+
+    nowSpy.mockReturnValue(1000 + 6 * 60 * 1000 + 31_000)
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { ButtonProps: () => ({ value: 2 }) }')
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(2)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(3)
+    nowSpy.mockRestore()
+  })
+
+  it('keeps last-known-good remote cache when a refreshed manifest is malformed', async () => {
+    const ofetchMod = await import('ofetch')
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const good = 'module.exports = { ButtonProps: () => ({ value: 1 }) }'
+    vi.mocked(ofetchMod.ofetch).mockResolvedValueOnce(good)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    nowSpy.mockReturnValue(1000 + 6 * 60 * 1000)
+    vi.mocked(ofetchMod.ofetch).mockResolvedValueOnce(JSON.stringify({
+      schemaVersion: 1,
+      exports: { BadProps: { uiName: 'bad', lib: 'bad', map: [{ name: 'Bad', props: { broken: null } }] } },
+    }))
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps().value).toBe(1)
+    expect(mod.cacheFetch.get(mod.getRemoteSourceIdentity('https://fake/remote.js').cacheKey)).toBe(good)
+    nowSpy.mockRestore()
+  })
+
+  it('uses secret-free identities and cache keys for signed remote URLs', async () => {
+    const mod = await import('../../src/services/fetch')
+    const raw = 'https://user:password@example.com/manifest.json?token=secret-token#private'
+    const identity = mod.getRemoteSourceIdentity(raw)
+
+    expect(identity.requestUri).toBe(raw)
+    expect(identity.cacheKey).toMatch(/^remote:[a-f0-9]{64}$/)
+    expect(identity.id).toMatch(/^http:[a-f0-9]{64}$/)
+    for (const value of [identity.cacheKey, identity.id, identity.displayName]) {
+      expect(value).not.toContain('user')
+      expect(value).not.toContain('password')
+      expect(value).not.toContain('secret-token')
+      expect(value).not.toContain('private')
+    }
+  })
+
+  it('warns once per blocked legacy source and opens migration actions', async () => {
+    allowLegacyAdapters = false
+    const warning = vi.fn()
+      .mockResolvedValueOnce('Open Settings')
+      .mockResolvedValueOnce('Migration Guide')
+    const executeCommand = vi.fn()
+    const openExternal = vi.fn()
+    ;(vscode.window as any).showWarningMessage = warning
+    ;(vscode as any).commands = { executeCommand }
+    ;(vscode as any).env = { openExternal }
+    ;(vscode.Uri as any).parse = (value: string) => value
+    const mod = await import('../../src/services/fetch')
+
+    mod.notifyLegacyAdapterBlocked('https://user:secret@example.com/a.cjs?token=secret#x')
+    mod.notifyLegacyAdapterBlocked('https://user:secret@example.com/a.cjs?token=secret#x')
+    await Promise.resolve()
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning.mock.calls[0][0]).not.toContain('secret')
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', 'common-intellisense.legacyAdapterAllowlist')
+
+    mod.notifyLegacyAdapterBlocked('https://example.com/b.cjs?token=other')
+    await Promise.resolve()
+    expect(warning).toHaveBeenCalledTimes(2)
+    expect(openExternal).toHaveBeenCalled()
+  })
+
+  it('blocks custom executable adapters unless legacy mode is explicitly enabled', async () => {
+    allowLegacyAdapters = false
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { ButtonProps: () => ({ unsafe: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
+  })
+
+  it('approves legacy execution by exact source and content digest', async () => {
+    allowLegacyAdapters = false
+    remoteUris = ['https://fake/approved.cjs']
+    const script = 'module.exports = { ApprovedProps: () => ({ ok: true }) }'
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(script)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
+    const sourceId = mod.getRemoteSourceIdentity(remoteUris[0]).id
+    legacyAdapterAllowlist = [mod.getLegacyAdapterApproval(sourceId, script)]
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteUrls()
+    expect(result.ApprovedProps()).toEqual({ ok: true })
+
+    legacyAdapterAllowlist = [`${sourceId}#sha256:changed`]
+    mod.clearFetchCaches()
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
+  })
+
+  it('rejects dangerous keys returned by an approved legacy adapter', async () => {
+    allowLegacyAdapters = false
+    remoteUris = ['https://fake/prototype.cjs']
+    const script = `module.exports = { UnsafeProps: () => JSON.parse('{"__proto__":{"polluted":true}}') }`
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(script)
+    const mod = await import('../../src/services/fetch')
+    const sourceId = mod.getRemoteSourceIdentity(remoteUris[0]).id
+    legacyAdapterAllowlist = [mod.getLegacyAdapterApproval(sourceId, script)]
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow(/Unsafe adapter key/)
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined()
+  })
+
+  it('rechecks remote npm legacy approval against the exact downloaded bytes', async () => {
+    allowLegacyAdapters = false
+    remoteNpmUris = [{ name: '@common-intellisense/approved', resource: 'index.cjs' }]
+    const fetchNpm = await import('@simon_he/fetch-npm')
+    const first = 'module.exports = { ApprovedProps: () => ({ value: 1 }) }'
+    const changed = 'module.exports = { ApprovedProps: () => ({ value: 2 }) }'
+    vi.mocked(fetchNpm.fetchAndExtractPackage).mockResolvedValue(first)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteNpmUrls()).rejects.toThrow('Executable adapter blocked')
+    legacyAdapterAllowlist = [mod.getLegacyAdapterApproval('npm:@common-intellisense/approved::index.cjs', first)]
+    mod.clearFetchCaches()
+    await expect(mod.fetchFromRemoteNpmUrls()).resolves.toHaveProperty('ApprovedProps')
+
+    vi.mocked(fetchNpm.fetchAndExtractPackage).mockResolvedValue(changed)
+    mod.clearFetchCaches()
+    await expect(mod.fetchFromRemoteNpmUrls()).rejects.toThrow('Executable adapter blocked')
+  })
+
+  it('blocks workspace-local adapters in Restricted Mode', async () => {
+    const mod = await import('../../src/services/fetch')
+    const originalTrust = vscode.workspace.isTrusted
+    ;(vscode.workspace as any).isTrusted = false
+    try {
+      await expect(mod.resolveLocalAdapterFile('/workspace', './manifest.json')).resolves.toBeUndefined()
+    }
+    finally {
+      ;(vscode.workspace as any).isTrusted = originalTrust
+    }
+  })
+
+  it('blocks executable remote adapters in Restricted Mode but accepts data manifests', async () => {
+    allowLegacyAdapters = true
+    const ofetchMod = await import('ofetch')
+    const mod = await import('../../src/services/fetch')
+    const originalTrust = vscode.workspace.isTrusted
+    ;(vscode.workspace as any).isTrusted = false
+    try {
+      vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { UnsafeProps: () => ({ value: 1 }) }')
+      mod.clearFetchCaches()
+      await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Executable adapter blocked')
+
+      vi.mocked(ofetchMod.ofetch).mockResolvedValue(JSON.stringify({
+        schemaVersion: 1,
+        exports: { SafeProps: { uiName: 'safe', lib: 'safe', map: [] } },
+      }))
+      mod.clearFetchCaches()
+      await expect(mod.fetchFromRemoteUrls()).resolves.toHaveProperty('SafeProps')
+    }
+    finally {
+      ;(vscode.workspace as any).isTrusted = originalTrust
+    }
+  })
+
+  it('loads data-only manifests while legacy mode is disabled', async () => {
+    allowLegacyAdapters = false
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(JSON.stringify({
+      schemaVersion: 1,
+      exports: {
+        ButtonComponents: { lib: 'button', map: [['ManifestButton', 'Manifest button']] },
+        ButtonProps: { uiName: 'button', lib: 'button', map: [{ name: 'Button', description: 'safe' }] },
+      },
+    }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteUrls()
+    expect(result.ButtonComponents().map).toHaveLength(1)
+    expect(result.ButtonProps()[0].name).toBe('Button')
+  })
+
+  it('loads BOM-prefixed data manifests without treating them as legacy code', async () => {
+    allowLegacyAdapters = false
+    const warning = vi.fn()
+    ;(vscode.window as any).showWarningMessage = warning
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(`\uFEFF${JSON.stringify({
+      schemaVersion: 1,
+      exports: {
+        ButtonProps: { uiName: 'button', lib: 'button', map: [{ name: 'Button' }] },
+      },
+    })}`)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    expect((await mod.fetchFromRemoteUrls()).ButtonProps()[0].name).toBe('Button')
+    expect(warning).not.toHaveBeenCalled()
+
+    mod.clearFetchCaches()
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('\uFEFF   \n')
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Adapter is empty')
+  })
+
+  it('rejects unknown manifest schema versions', async () => {
+    allowLegacyAdapters = false
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(JSON.stringify({ schemaVersion: 2, exports: { ButtonProps: {} } }))
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('Unsupported adapter manifest schema')
+  })
+
+  it('shares production per-source tasks between concurrent contexts', async () => {
+    let resolveRemote!: (value: string) => void
+    const pending = new Promise<string>((resolve) => { resolveRemote = resolve })
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockReturnValue(pending as any)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const first = mod.fetchRemoteUrlSourceResults()
+    const second = mod.fetchRemoteUrlSourceResults()
+    resolveRemote('module.exports = { SharedProps: () => ({ ok: true }) }')
+    const [firstResults, secondResults] = await Promise.all([first, second])
+
+    expect(firstResults[0].status).toBe('success')
+    expect(secondResults[0].status).toBe('success')
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('isolates malformed custom source entries from valid siblings without retaining configuration details', async () => {
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockImplementation(async (uri: any) => `module.exports = { ${String(uri).includes('first') ? 'First' : 'Second'}Props: () => ({ ok: true }) }`)
+    remoteUris = ['https://fake/first.js', null, undefined, 'http-secret', { secret: 'http-object-secret' }, 'https://fake/second.js'] as any
+    remoteNpmUris = [
+      { name: '@common-intellisense/first', resource: 'first.cjs' },
+      null,
+      undefined,
+      { secret: 'npm-secret' },
+      { name: '@common-intellisense/second', resource: 'second.cjs' },
+    ] as any
+    localUris = ['./first.cjs', null, undefined, { secret: 'local-secret' }, './second.cjs'] as any
+    const npm = await import('@simon_he/fetch-npm')
+    vi.mocked(npm.fetchAndExtractPackage).mockImplementation(async ({ name }: any) => `module.exports = { ${String(name).includes('first') ? 'First' : 'Second'}Props: () => ({ ok: true }) }`)
+    vi.mocked(fsp.readFile).mockImplementation(async (file: any) => `module.exports = { ${String(file).includes('first') ? 'First' : 'Second'}Props: () => ({ ok: true }) }`)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [http, remoteNpm, local] = await Promise.all([
+      mod.fetchRemoteUrlSourceResults(),
+      mod.fetchRemoteNpmSourceResults(),
+      mod.fetchLocalSourceResults('/workspace'),
+    ])
+
+    for (const [kind, results] of [['http', http], ['npm', remoteNpm], ['local', local]] as const) {
+      const expectedLength = kind === 'http' ? 6 : 5
+      const invalidEnd = expectedLength - 1
+      expect(results.map(result => result.configurationIndex)).toEqual(Array.from({ length: expectedLength }, (_, index) => index))
+      expect(results.map(result => result.status)).toEqual(['success', ...Array.from({ length: invalidEnd - 1 }, () => 'failed'), 'success'])
+      expect(results.slice(1, invalidEnd).map(result => result.id)).toEqual(
+        Array.from({ length: invalidEnd - 1 }, (_, index) => `${kind}:invalid:${index + 1}`),
+      )
+      expect(results.slice(1, invalidEnd).map(result => String(result.error))).toEqual(
+        Array.from({ length: invalidEnd - 1 }, () => 'Error: Invalid custom source configuration'),
+      )
+      expect(JSON.stringify(results)).not.toContain('secret')
+      expect(results[0].value).toHaveProperty('FirstProps')
+      expect(results[invalidEnd].value).toHaveProperty('SecondProps')
+    }
+  })
+
+  it('skips malformed entries in the aggregate custom source APIs', async () => {
+    remoteUris = [null, 'https://fake/remote.js', undefined] as any
+    remoteNpmUris = [null, { name: '@common-intellisense/button' }, {}] as any
+    localUris = [undefined, './adapter.cjs', { name: './not-a-string.cjs' }] as any
+    const ofetchMod = await import('ofetch')
+    const npm = await import('@simon_he/fetch-npm')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { RemoteProps: () => ({ ok: true }) }')
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue('module.exports = { NpmProps: () => ({ ok: true }) }')
+    vi.mocked(fsp.readFile).mockResolvedValue('module.exports = { LocalProps: () => ({ ok: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [http, remoteNpm, local] = await Promise.all([
+      mod.fetchFromRemoteUrls(),
+      mod.fetchFromRemoteNpmUrls(),
+      mod.fetchFromLocalUris('/workspace'),
+    ])
+
+    expect(http.RemoteProps().ok).toBe(true)
+    expect(remoteNpm.NpmProps().ok).toBe(true)
+    expect(local.LocalProps().ok).toBe(true)
+  })
+
+  it('uses the canonical local adapter path without resolving it a second time', async () => {
+    localUris = ['./adapter.cjs']
+    vi.mocked(fsp.realpath)
+      .mockResolvedValueOnce('/workspace')
+      .mockResolvedValueOnce('/workspace/canonical-adapter.cjs')
+    vi.mocked(fsp.readFile).mockResolvedValue('module.exports = { LocalProps: () => ({ ok: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [result] = await mod.fetchLocalSourceResults('/workspace')
+
+    expect(result.status).toBe('success')
+    expect(vi.mocked(fsp.realpath)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fsp.stat)).toHaveBeenLastCalledWith('/workspace/canonical-adapter.cjs')
+    expect(vi.mocked(fsp.readFile)).toHaveBeenCalledWith('/workspace/canonical-adapter.cjs', 'utf8')
+  })
+
+  it('isolates mixed remote URI failures per configured source', async () => {
+    remoteUris = ['https://fake/good.js', 'https://fake/bad.js']
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockImplementation(async (uri: any) => {
+      if (String(uri).includes('bad'))
+        throw new Error('offline')
+      return 'module.exports = { GoodProps: () => ({ ok: true }) }'
+    })
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const results = await mod.fetchRemoteUrlSourceResults()
+    expect(results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: mod.getRemoteSourceIdentity('https://fake/good.js').id, status: 'success' }),
+      expect.objectContaining({ id: mod.getRemoteSourceIdentity('https://fake/bad.js').id, status: 'failed' }),
+    ]))
+    expect(results.find(item => item.status === 'success')?.value?.GoodProps().ok).toBe(true)
+  })
+
+  it('shares a remote source task between concurrent callers', async () => {
+    let resolveRemote!: (value: string) => void
+    const pending = new Promise<string>((resolve) => { resolveRemote = resolve })
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockReturnValue(pending as any)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const first = mod.fetchFromRemoteUrls()
+    const second = mod.fetchFromRemoteUrls()
+    expect(first).not.toBeUndefined()
+    expect(second).not.toBeUndefined()
+    resolveRemote('module.exports = { ButtonProps: () => ({ shared: true }) }')
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(firstResult?.ButtonProps().shared).toBe(true)
+    expect(secondResult?.ButtonProps().shared).toBe(true)
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not share in-flight results across different source configurations', async () => {
+    let resolveFirst!: (value: string) => void
+    const firstPending = new Promise<string>((resolve) => { resolveFirst = resolve })
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch)
+      .mockReturnValueOnce(firstPending as any)
+      .mockResolvedValueOnce('module.exports = { SecondProps: () => ({ source: "second" }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    remoteUris = ['https://fake/first.js']
+    const first = mod.fetchFromRemoteUrls()
+    remoteUris = ['https://fake/second.js']
+    const second = mod.fetchFromRemoteUrls()
+    resolveFirst('module.exports = { FirstProps: () => ({ source: "first" }) }')
+
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(firstResult?.FirstProps().source).toBe('first')
+    expect(secondResult?.SecondProps().source).toBe('second')
+    expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(2)
+  })
+
+  it('discards a source result completed after cache invalidation without executing it', async () => {
+    let resolveRemote!: (value: string) => void
+    const pending = new Promise<string>((resolve) => { resolveRemote = resolve })
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockReturnValue(pending as any)
+    const executionSpy = vi.spyOn(vm.Script.prototype, 'runInContext')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const resultPromise = mod.fetchFromRemoteUrls()
+    mod.clearFetchCaches()
+    resolveRemote('module.exports = { StaleProps: () => ({ stale: true }) }')
+
+    await expect(resultPromise).resolves.toEqual({})
+    expect(mod.cacheFetch.has('https://fake/remote.js')).toBe(false)
+    expect(executionSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not execute a stale cached remote fallback after invalidation', async () => {
+    const ofetchMod = await import('ofetch')
+    const executionSpy = vi.spyOn(vm.Script.prototype, 'runInContext')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+    mod.cacheFetch.set('https://fake/remote.js', 'module.exports = { StaleProps: () => ({ stale: true }) }')
+    vi.mocked(ofetchMod.ofetch).mockImplementation(async () => {
+      mod.clearFetchCaches()
+      throw new Error('offline')
+    })
+    vi.spyOn(Date, 'now').mockReturnValue(6 * 60 * 1000)
+
+    await expect(mod.fetchFromRemoteUrls()).resolves.toEqual({})
+    expect(executionSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps nullable metadata compatible on the legacy adapter path', async () => {
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(
+      'module.exports = { LegacyProps: () => ({ uiName: "legacy", lib: "legacy", map: [{ name: "Button", slots: [{ name: "default", description: null }] }] }) }',
+    )
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteUrls()
+    expect(result.LegacyProps()[0].slots[0].description).toBeNull()
+  })
+
+  it('rejects an oversized legacy export before parsing its inner JSON', async () => {
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue(
+      'module.exports = { HugeProps: () => ({ value: "x".repeat(9 * 1024 * 1024) }) }',
+    )
+    const parseSpy = vi.spyOn(JSON, 'parse')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+    parseSpy.mockClear()
+
+    await expect(mod.fetchFromRemoteUrls()).rejects.toThrow('too large')
+    // Manifest detection and the outer VM envelope may parse; the oversized inner JSON must not.
+    expect(parseSpy.mock.calls.some(([value]) => (
+      typeof value === 'string' && value.startsWith('{"value"') && value.length > 8 * 1024 * 1024
+    ))).toBe(false)
+  })
+
+  it('settles extension-owned deadlines even when a dependency never resolves', async () => {
+    vi.useFakeTimers()
+    const mod = await import('../../src/services/fetch')
+    const result = expect(mod.withDeadline(new Promise<string>(() => {}), 15_000, 'Resolving adapter'))
+      .rejects
+      .toThrow('Resolving adapter timed out after 15000ms')
+    await vi.advanceTimersByTimeAsync(15_000)
+    await result
+    vi.useRealTimers()
   })
 
   it('fetchFromRemoteUrls skips untrusted http hosts by default', async () => {

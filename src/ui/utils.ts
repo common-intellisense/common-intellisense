@@ -1,12 +1,140 @@
 import type { CompletionItemOptions } from '@vscode-use/utils'
+import type { DocumentEditIdentity } from './types'
 import type { CompletionItem } from 'vscode'
 import type { Component, Slots, SuggestionItem } from './ui-type'
 import { camelize, compareVersion, isContainCn, reduceAsync, replaceAsync } from 'lazy-js-utils'
-import { createCompletionItem, createHover, createMarkdownString, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLocale, getRootPath, setCommandParams } from '@vscode-use/utils'
+import { createCompletionItem, createHover, createMarkdownString, getConfiguration, getCurrentFileUrl, getLocale, setCommandParams } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { translate } from '../translate'
+import { resolveComponentSource } from '../services/imports'
 import { resolveInstalledPackageVersion } from '../services/package-version'
 import { logger } from '../ui/ui-find'
+import { findUniqueSuffixComponentKey } from './find-prefixed-only'
+
+const TRUSTED_COMMANDS = {
+  enabledCommands: [
+    'intellisense.openDocument',
+    'intellisense.openDocumentExternal',
+    'intellisense.copyDemo',
+  ],
+}
+
+function enableCommandTrust(documentation: vscode.MarkdownString) {
+  documentation.isTrusted = TRUSTED_COMMANDS
+  return documentation
+}
+
+export function escapeSnippetText(value: string) {
+  return value.replace(/[$}\\]/g, character => `\\${character}`)
+}
+
+export function escapeSnippetChoice(value: string) {
+  return value.replace(/[$\\,|}]/g, character => `\\${character}`)
+}
+
+export function escapeAttributeValue(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+export type CompletionFramework = 'vue' | 'vine' | 'react' | 'svelte'
+export interface CompletionRenderContext {
+  languageId: string
+  /** Host controls ref/import semantics; syntax controls emitted markup. */
+  hostFramework?: CompletionFramework
+  syntax?: 'template' | 'jsx'
+  /** @deprecated Prefer hostFramework/syntax. */
+  framework: CompletionFramework
+  uri: string
+  version?: number
+  /** Current template node, used by relation-aware prop snippets. */
+  parent?: any
+  vueBlock?: 'script' | 'scriptSetup'
+  blockLang?: string
+  packagePath?: string
+  contextGeneration?: number
+  contextRevision?: number
+  sourceId?: string
+  sourceSignature?: string
+  /** Template-only prefix override; import/export names remain unchanged. */
+  renderedPrefix?: string
+}
+export type CompletionRenderInput = CompletionRenderContext | boolean | undefined
+
+function getCompletionDocumentIdentity(context: CompletionRenderContext | undefined) {
+  if (!context || typeof context.version !== 'number')
+    return undefined
+  return {
+    uri: context.uri,
+    version: context.version,
+    vueBlock: context.vueBlock,
+    blockLang: context.blockLang,
+    packagePath: context.packagePath,
+    contextGeneration: context.contextGeneration,
+    contextRevision: context.contextRevision,
+    sourceId: context.sourceId,
+    sourceSignature: context.sourceSignature,
+  }
+}
+
+function getSyntaxFramework(context: CompletionRenderContext | undefined, fallback: CompletionFramework): CompletionFramework {
+  if (context?.syntax === 'jsx')
+    return 'react'
+  return context?.framework || fallback
+}
+
+export function renderComponentTag(componentName: string, framework: CompletionFramework, isSeparatedByHyphen: boolean, adapterPrefix = '', renderedPrefix?: string) {
+  const usesVueTemplateSyntax = framework === 'vue' || framework === 'vine'
+  if (!usesVueTemplateSyntax || renderedPrefix === undefined)
+    return usesVueTemplateSyntax && isSeparatedByHyphen ? hyphenate(componentName) : componentName
+
+  const baseName = adapterPrefix && componentName.toLowerCase().startsWith(adapterPrefix.toLowerCase())
+    ? componentName.slice(adapterPrefix.length)
+    : componentName
+  const renderedName = `${renderedPrefix}${baseName}`
+  return isSeparatedByHyphen ? hyphenate(renderedName) : renderedName
+}
+
+function getRenderedTagFromSnippet(snippet: string) {
+  return snippet.trimStart().match(/^<([^\s/>$]+)(?=[$\s/>])/)?.[1]
+}
+
+export function renderSvelteEventPropName(event: { name: string, kind?: 'dom' | 'component' }) {
+  if (event.kind !== 'dom')
+    return event.name
+  const normalized = event.name.toLowerCase()
+  return normalized.startsWith('on') ? normalized : `on${normalized}`
+}
+
+function normalizeSuggestionName(suggestion: string | SuggestionItem | undefined): string | undefined {
+  const name = typeof suggestion === 'string' ? suggestion : suggestion?.name
+  return typeof name === 'string' && name.trim() ? name.trim() : undefined
+}
+
+function normalizeRenderContext(input?: CompletionRenderInput): CompletionRenderContext {
+  if (typeof input === 'object' && input)
+    return input
+  return {
+    languageId: input ? 'vue' : 'typescriptreact',
+    hostFramework: input ? 'vue' : 'react',
+    syntax: input ? 'template' : 'jsx',
+    framework: input ? 'vue' : 'react',
+    uri: '',
+    version: -1,
+  }
+}
+
+function isVisibleForVersion(value: { version?: string } | undefined, installedVersion?: string, adapterMajor?: string) {
+  if (!value)
+    return true
+  const version = typeof value.version === 'string' ? value.version.match(/\d+\.\d+\.\d+/)?.[0] : undefined
+  if (!version)
+    return true
+  if (installedVersion)
+    return compareVersion(version, installedVersion) !== 1
+  if (adapterMajor)
+    return Number(version.split('.')[0]) <= Number(adapterMajor)
+  return true
+}
 
 export interface PropsOptions {
   uiName: string
@@ -15,6 +143,9 @@ export interface PropsOptions {
   extensionContext?: vscode.ExtensionContext
   prefix?: string
   dynamicLib?: string
+  resolveFrom?: string
+  installedVersion?: string
+  adapterMajor?: string
 }
 
 export type IconsItem = any
@@ -30,8 +161,8 @@ export type SubCompletionItem = CompletionItem & {
 }
 export interface PropsConfigItem {
   icons?: SubCompletionItem[] | vscode.CompletionList<SubCompletionItem> | PromiseLike<SubCompletionItem[] | vscode.CompletionList<SubCompletionItem> | null | undefined> | null | undefined
-  completions: ((isVue?: boolean) => SubCompletionItem[])[]
-  events: ((isVue?: boolean) => SubCompletionItem[])[]
+  completions: ((context?: CompletionRenderInput) => SubCompletionItem[])[]
+  events: ((context?: CompletionRenderInput) => SubCompletionItem[])[]
   methods: SubCompletionItem[]
   exposed: SubCompletionItem[]
   slots: SubCompletionItem[]
@@ -42,13 +173,23 @@ export interface PropsConfigItem {
   lib: string
 }
 
+export interface CompletionImportPlan {
+  localName: string
+  source: string
+  importWay: 'as default' | 'default' | 'specifier'
+}
+
 export interface FixParams {
-  data: Component
+  data: Component & { __imports?: CompletionImportPlan[] }
   lib: string
   isReact: boolean
   prefix: string
   dynamicLib: string
   importWay: string
+  requiresImport?: boolean
+  registerVueComponent?: boolean
+  renderedTag?: string
+  document?: DocumentEditIdentity
 }
 
 export type PropsConfig = Record<string, PropsConfigItem> & { icons?: Icons }
@@ -59,11 +200,10 @@ export function proxyCreateCompletionItem(options: CompletionItemOptions & {
   return createCompletionItem(options)
 }
 
-const cwd = getRootPath()
 export function propsReducer(options: PropsOptions) {
-  const { uiName, lib, map, prefix = '', dynamicLib } = options
+  const { uiName, lib, map, prefix = '', dynamicLib, resolveFrom, installedVersion, adapterMajor } = options
 
-  const result: PropsConfig = {}
+  const result: PropsConfig = Object.create(null)
   // 不再支持 icon, 或者考虑将 icon 生成字体图标，产生预览效果
   // let icons
   // if (iconData) {
@@ -76,69 +216,64 @@ export function propsReducer(options: PropsOptions) {
   //   })
   //   result.icons = icons
   // }
-  let localVersion: string | undefined
+  let localVersion = installedVersion
+  let effectiveAdapterMajor = adapterMajor
+  let versionResolved = !!installedVersion || !!adapterMajor
 
   return reduceAsync(map, async (result, item: Component) => {
-    const completions: ((isVue?: boolean) => SubCompletionItem[])[] = []
-    const events: ((isVue?: boolean) => SubCompletionItem[])[] = []
+    const completions: ((context?: CompletionRenderInput) => SubCompletionItem[])[] = []
+    const events: ((context?: CompletionRenderInput) => SubCompletionItem[])[] = []
     const methods: SubCompletionItem[] = []
     const exposed: SubCompletionItem[] = []
     const slots: SubCompletionItem[] = []
     const isZh = getLocale().includes('zh')
-    if (!localVersion) {
-      // 从本地安装去获取版本号，如果获取不到根据 uiName 后缀获取版本号，再找不到就是 0.0.0
-      localVersion = await resolveInstalledPackageVersion(lib, cwd) || uiName.match(/\d+(\.\d+\.\d+)?/)?.[0] || '0.0.0'
+    if (!versionResolved) {
+      localVersion = await resolveInstalledPackageVersion(lib, resolveFrom)
+      effectiveAdapterMajor ||= uiName.match(/\d+/)?.[0]
+      versionResolved = true
     }
 
-    if (item.version) {
-      // 过滤在某个版本才增加的新组件
-      if (localVersion && compareVersion(localVersion, item.version) === -1) {
-        return result
-      }
-    }
+    if (!isVisibleForVersion(item, localVersion, effectiveAdapterMajor))
+      return result
 
-    const completionsDeferCallback = (isVue?: any) => {
+    const visibleProps = Object.fromEntries(Object.entries(item.props || {}).filter(([, value]) => isVisibleForVersion(value as any, localVersion, effectiveAdapterMajor)))
+    const visibleEvents = (item.events || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
+    const visibleMethods = (item.methods || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
+    const visibleExposed = (item.exposed || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
+    const visibleSlots = (item.slots || []).filter(value => isVisibleForVersion(value, localVersion, effectiveAdapterMajor))
+
+    const completionsDeferCallback = (input?: CompletionRenderInput) => {
+      const renderContext = normalizeRenderContext(input)
+      const syntaxFramework = getSyntaxFramework(renderContext, 'vue')
+      const isVue = syntaxFramework === 'vue' || syntaxFramework === 'vine'
+      const isHtmlLike = isVue || syntaxFramework === 'svelte'
       const data: SubCompletionItem[] = [
         'id',
-        isVue ? 'class' : 'className',
+        isHtmlLike ? 'class' : 'className',
         'ref',
       ].map(item => proxyCreateCompletionItem({ content: item, snippet: `${item}="\${1:}"`, type: 5, params: [] }))
 
-      if (isVue)
+      if (isHtmlLike)
         data.push(proxyCreateCompletionItem({ content: 'style', snippet: 'style="$1"', type: 5, params: [] }))
       else
         data.push(proxyCreateCompletionItem({ content: 'style', snippet: 'style={$1}', type: 5, params: [] }))
 
       // 过滤 props 中有 version 并且当前版本小于组件版本的属性
-      const filterProps = localVersion
-        ? Object.keys(item.props || {}).reduce((result, key) => {
-            const value = (item.props as any)[key]
-            // value.version 只提取版本号
-            const version = value.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            if (version && compareVersion(version, localVersion!) === 1) {
-              return result
-            }
-            return { ...result, [key]: value }
-          }, {})
-        : item.props
-
-      Object.keys(filterProps).forEach((key) => {
-        const value = (item.props as any)[key]
+      Object.keys(visibleProps).forEach((key) => {
+        const value = (visibleProps as any)[key]
+        const normalizedDefault = value.default === undefined || value.default === '' ? undefined : String(value.default)
+        const normalizedType = Array.isArray(value.type) ? value.type.join(' / ') : value.type
         let type = vscode.CompletionItemKind.Property
         if (typeof value.value !== 'string')
           type = vscode.CompletionItemKind.Enum
 
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail = []
 
         detail.push(`**${uiName} [${item.name}]**`)
 
-        if (value.default !== undefined && value.default !== '') {
-          value.default = String(value.default)
-          detail.push(`- 💎 ${isZh ? '默认值' : 'default'}:    ***\`${value.default.replace(/[`\n]/g, '')}\`***`)
-        }
+        if (normalizedDefault !== undefined)
+          detail.push(`- 💎 ${isZh ? '默认值' : 'default'}:    ***\`${normalizedDefault.replace(/[`\n]/g, '')}\`***`)
 
         if (value.version) {
           if (isZh)
@@ -158,12 +293,8 @@ export function propsReducer(options: PropsOptions) {
             detail.push(`- 🔦 description:    ***\`${value.description}\`***`)
         }
 
-        if (value.type) {
-          if (Array.isArray(value.type)) {
-            value.type = value.type.join(' / ')
-          }
-          detail.push(`- 💡 ${isZh ? '类型' : 'type'}:    ***\`${value.type.replace(/`/g, '')}\`***`)
-        }
+        if (normalizedType)
+          detail.push(`- 💡 ${isZh ? '类型' : 'type'}:    ***\`${normalizedType.replace(/`/g, '')}\`***`)
 
         documentation.appendMarkdown(detail.join('\n\n'))
 
@@ -189,20 +320,20 @@ export function propsReducer(options: PropsOptions) {
 
         let _prefix = ''
         let _prefixKey = ''
-        if (isVue && value.related && value.related.length) {
+        if (isVue && renderContext.parent && value.related && value.related.length) {
           for (const _item of value.related) {
-            ;[_prefix, _prefixKey] = findValue(isVue, _item)
-            if (prefix)
+            ;[_prefix, _prefixKey] = findValue(renderContext.parent, _item)
+            if (_prefix)
               break
           }
         }
-        if (prefix && value[`$${_prefixKey}`]) {
+        if (_prefix && value[`$${_prefixKey}`]) {
           const prefixValue = value[`$${_prefixKey}`].replace(`$${_prefixKey}`, _prefix)
           // 替换 $()
           const fixedPrefixValue = prefixValue.replace(/\$\(([^)]+)\)/g, (_: string, m: string) => {
             // m 可能存在 xxx.a || xxx.b 的情况
             for (const splitItem of m.split(/\s*\|\|\s*/)) {
-              const [_prefix, _prefixKey] = findValue(isVue, splitItem)
+              const [_prefix, _prefixKey] = findValue(renderContext.parent, splitItem)
               if (_prefix) {
                 let result = _prefix
                 if (isContainCn(result)) {
@@ -216,7 +347,7 @@ export function propsReducer(options: PropsOptions) {
           content = key
           if (fixedPrefixValue === `${_prefix}.`) {
             const fixedKey = key.replace(/^:/, '')
-            snippet = `${key}="${prefix}.${fixedKey[0].toUpperCase()}${fixedKey.slice(1)}"`
+            snippet = `${key}="${_prefix}.${fixedKey[0].toUpperCase()}${fixedKey.slice(1)}"`
           }
           else {
             snippet = `${key}="${fixedPrefixValue}"`
@@ -224,16 +355,16 @@ export function propsReducer(options: PropsOptions) {
         }
         else if (Array.isArray(value.value)) {
           content = key
-          snippet = `${key}="\${1|${value.value.map((i: string) => i.replace(/['`\s]/g, '').replace(/,/g, '\\,')).join(',')}|}"`
+          snippet = `${key}="\${1|${value.value.map((i: string) => escapeSnippetChoice(escapeAttributeValue(i))).join(',')}|}"`
         }
         else if (value.value) {
           content = key
-          snippet = `${key}="${value.value}"`
+          snippet = `${key}="${escapeSnippetText(escapeAttributeValue(String(value.value)))}"`
         }
-        else if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'false') {
+        else if (normalizedType && normalizedType.toLowerCase().trim() === 'boolean' && normalizedDefault === 'false') {
           content = snippet = key
         }
-        else if (value.type && value.type.toLowerCase().trim() === 'boolean' && value.default === 'true') {
+        else if (normalizedType && normalizedType.toLowerCase().trim() === 'boolean' && normalizedDefault === 'true') {
           if (isVue) {
             content = key
             snippet = `:${key}="false"`
@@ -244,21 +375,27 @@ export function propsReducer(options: PropsOptions) {
           }
         }
         else if (key.startsWith(':')) {
+          const bareKey = key.slice(1)
+          if (!bareKey)
+            return
           if (isVue) {
             const _key = key.replace('v-model', 'model')
-            content = `${key.replace(':v-model', 'v-model')}="${getComponentTagName(item.name)}${_key[1].toUpperCase()}${toCamel(_key.slice(2))}"`
+            const keyHead = _key[1]
+            if (!keyHead)
+              return
+            content = `${key.replace(':v-model', 'v-model')}="${getComponentTagName(item.name)}${keyHead.toUpperCase()}${toCamel(_key.slice(2))}"`
             snippet = `${key.replace(':v-model', 'v-model')}="\${1|${generateSnippetNameOptions(item, _key, prefix)}|}"$2`
           }
           else {
-            content = `${key.slice(1)}={${getComponentTagName(item.name)}${key[1].toUpperCase()}${toCamel(key.slice(2))}}`
-            snippet = `${key.slice(1)}={\${1|${generateSnippetNameOptions(item, key, prefix)}|}}$2`
+            content = `${bareKey}={${getComponentTagName(item.name)}${bareKey[0].toUpperCase()}${toCamel(bareKey.slice(1))}}`
+            snippet = `${bareKey}={\${1|${generateSnippetNameOptions(item, key, prefix)}|}}$2`
           }
         }
         else {
           content = `${key}=""`
 
-          if (value.type?.includes('/'))
-            snippet = `${key}="\${1|${value.type.split('/').map((i: string) => i.replace(/['"`\s]/g, '').replace(/,/g, '\\,')).filter((i: string) => i.length).join(',')}|}"`
+          if (normalizedType?.includes('/'))
+            snippet = `${key}="\${1|${normalizedType.split('/').map((i: string) => escapeSnippetChoice(escapeAttributeValue(i.replace(/['"`\s]/g, '')))).filter((i: string) => i.length).join(',')}|}"`
           else
             snippet = `${key}="\${1}"`
         }
@@ -269,22 +406,22 @@ export function propsReducer(options: PropsOptions) {
             ? `***描述***: ${value.description_zh || value.description}`
             : `***description***: ${value.description}`)
         }
-        if (value.default !== undefined && value.default !== '') {
+        if (normalizedDefault !== undefined) {
           detailsLines.push(isZh
-            ? `***默认***: ${value.default.replace(/\n/g, '')}`
-            : `***default***: ${value.default.replace(/\n/g, '')}`)
+            ? `***默认***: ${normalizedDefault.replace(/\n/g, '')}`
+            : `***default***: ${normalizedDefault.replace(/\n/g, '')}`)
         }
-        if (value.type) {
+        if (normalizedType) {
           detailsLines.push(isZh
-            ? `***类型***: ${value.type.replace(/\n/g, '')}`
-            : `***type***: ${value.type.replace(/\n/g, '')}`)
+            ? `***类型***: ${normalizedType.replace(/\n/g, '')}`
+            : `***type***: ${normalizedType.replace(/\n/g, '')}`)
         }
         const details = detailsLines.join('\n-  ')
         const propDesc = isZh ? (value.description_zh || value.description) : value.description
         if (propDesc)
           content += `  ${propDesc}`
-        if (value.default)
-          content += `  ${isZh ? '默认' : 'default'}：${value.default.replace(/\n/g, '')}`
+        if (normalizedDefault)
+          content += `  ${isZh ? '默认' : 'default'}：${normalizedDefault.replace(/\n/g, '')}`
         data.push(createCompletionItem({
           content,
           details,
@@ -294,7 +431,7 @@ export function propsReducer(options: PropsOptions) {
           preselect: true,
           sortText: '0',
           params: [uiName, key.replace(/^:/, '')],
-          propType: Array.isArray(value.value) ? value.value.join(' / ') : value.type,
+          propType: Array.isArray(value.value) ? value.value.join(' / ') : normalizedType,
           command: {
             command: 'editor.action.triggerSuggest', // 这个命令会触发代码提示
             title: 'Trigger Suggest',
@@ -306,115 +443,104 @@ export function propsReducer(options: PropsOptions) {
 
     completions.push(completionsDeferCallback)
 
-    if (!item.events)
-      item.events = []
-
-    if (item.events) {
-      const deferEventsCall = (isVue?: boolean) => {
-        const lan = getActiveTextEditorLanguageId()
-        const originEvent = [
-          {
-            name: isVue
-              ? 'click'
-              : lan === 'svelte'
-                ? 'onclick'
-                : 'onClick',
-            description: 'click event',
-            description_zh: '点击事件',
-            params: [],
-          },
-        ]
-
-        originEvent.forEach((_event) => {
-          if (!item.events.find(event => event.name === _event.name))
-            item.events.push(_event)
-        })
-
-        // 过滤在某个版本才增加的新事件
-        const filterEvents = localVersion
-          ? item.events.filter((event) => {
-              const version = event.version?.match(/\d+\.\d+\.\d+/)?.[0]
-              return !(version && compareVersion(version, localVersion!) === 1)
-            })
-          : item.events
-
-        return filterEvents.map((events: any) => {
-          const detail: string[] = []
-          const { name, description, params, description_zh, platform } = events
-
-          detail.push(`**${uiName} [${item.name}]**`)
-
-          if (description) {
-            if (isZh)
-              detail.push(`- 🔦 说明:    ***\`${description_zh || description}\`***`)
-            else
-              detail.push(`- 🔦 description:    ***\`${description}\`***`)
-          }
-
-          if (platform)
-            detail.push(`- 🚀 平台:    ***\`${platform}\`***`)
-
-          if (params)
-            detail.push(`- 🔮 ${isZh ? '回调参数' : 'callback parameters'}:    ***\`${params}\`***`)
-
-          let snippet
-          let content
-          if (isVue) {
-            const [snippetEventNameOptions, _name] = generateScriptNames(name)
-            snippet = `${name}="\${1|${snippetEventNameOptions.join(',')}|}"`
-            content = `@${name}="on${_name}"`
-          }
-          else if (lan === 'svelte') {
-            snippet = `${name}={\${1:${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}}`
-            content = `${name}={${name.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())}}`
-          }
-          else {
-            const [snippetEventNameOptions, _name] = generateScriptNames(name)
-            snippet = `${name}={\${1|${snippetEventNameOptions.join(',')}|}}`
-            content = `${name}={${_name}}`
-          }
-
-          const eventDesc = isZh ? (description_zh || description) : description
-          if (eventDesc)
-            content += `  ${eventDesc}`
-          if (params)
-            content += `  ${isZh ? '参数' : 'params'}：${params}`
-          const detailsLines: string[] = []
-          detailsLines.push(`${isZh ? '***属性***' : '***prop***'}: ${content}`)
-          if (eventDesc) {
-            detailsLines.push(isZh
-              ? `***描述***: ${description_zh || description}`
-              : `***description***: ${description}`)
-          }
-          if (typeof params === 'string' && params) {
-            detailsLines.push(isZh
-              ? `***参数***: ${params.replace(/\n/g, '')}`
-              : `***params***: ${params.replace(/\n/g, '')}`)
-          }
-          const details = detailsLines.join('\n-  ')
-          const documentation = new vscode.MarkdownString()
-          documentation.isTrusted = true
-          documentation.supportHtml = true
-          documentation.appendMarkdown(detail.join('\n\n'))
-          return proxyCreateCompletionItem({ content, snippet, details, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
+    const deferEventsCall = (input?: CompletionRenderInput) => {
+      const renderContext = normalizeRenderContext(input)
+      const syntaxFramework = getSyntaxFramework(renderContext, 'react')
+      const isVue = syntaxFramework === 'vue' || syntaxFramework === 'vine'
+      const isSvelte = syntaxFramework === 'svelte'
+      const originEvent = [
+        {
+          name: isVue ? 'click' : isSvelte ? 'click' : 'onClick',
+          ...(isSvelte ? { kind: 'dom' as const } : {}),
+          description: 'click event',
+          description_zh: '点击事件',
+          params: [],
         },
-        )
-      }
-      events.push(deferEventsCall)
-    }
+      ]
+      const localEvents = [...visibleEvents]
 
-    if (item.methods) {
-      const filterMethods = localVersion
-        ? item.methods.filter((item) => {
-          // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
+      originEvent.forEach((_event) => {
+        const renderedName = isSvelte ? renderSvelteEventPropName(_event) : _event.name
+        const hasEquivalentEvent = localEvents.some(event => (isSvelte ? renderSvelteEventPropName(event) : event.name) === renderedName)
+        if (!hasEquivalentEvent)
+          localEvents.push(_event)
+      })
+
+      // 过滤在某个版本才增加的新事件
+      const filterEvents = localVersion
+        ? localEvents.filter((event) => {
+            const version = typeof event.version === 'string' ? event.version.match(/\d+\.\d+\.\d+/)?.[0] : undefined
             return !(version && compareVersion(version, localVersion!) === 1)
           })
-        : item.methods
-      methods.push(...filterMethods.map((method) => {
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+        : localEvents
+
+      return filterEvents.map((events: any) => {
+        const detail: string[] = []
+        const { name, description, params, description_zh, platform } = events
+
+        detail.push(`**${uiName} [${item.name}]**`)
+
+        if (description) {
+          if (isZh)
+            detail.push(`- 🔦 说明:    ***\`${description_zh || description}\`***`)
+          else
+            detail.push(`- 🔦 description:    ***\`${description}\`***`)
+        }
+
+        if (platform)
+          detail.push(`- 🚀 平台:    ***\`${platform}\`***`)
+
+        if (params)
+          detail.push(`- 🔮 ${isZh ? '回调参数' : 'callback parameters'}:    ***\`${params}\`***`)
+
+        let snippet
+        let content
+        if (isVue) {
+          const [snippetEventNameOptions, _name] = generateScriptNames(name)
+          snippet = `${name}="\${1|${snippetEventNameOptions.map(escapeSnippetChoice).join(',')}|}"`
+          content = `@${name}="on${_name}"`
+        }
+        else if (isSvelte) {
+          const eventPropName = renderSvelteEventPropName(events)
+          const handlerName = eventPropName.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())
+          snippet = `${eventPropName}={\${1:${escapeSnippetText(handlerName)}}}`
+          content = `${eventPropName}={${handlerName}}`
+        }
+        else {
+          const [snippetEventNameOptions, _name] = generateScriptNames(name)
+          snippet = `${name}={\${1|${snippetEventNameOptions.map(escapeSnippetChoice).join(',')}|}}`
+          content = `${name}={${_name}}`
+        }
+
+        const eventDesc = isZh ? (description_zh || description) : description
+        if (eventDesc)
+          content += `  ${eventDesc}`
+        if (params)
+          content += `  ${isZh ? '参数' : 'params'}：${params}`
+        const detailsLines: string[] = []
+        detailsLines.push(`${isZh ? '***属性***' : '***prop***'}: ${content}`)
+        if (eventDesc) {
+          detailsLines.push(isZh
+            ? `***描述***: ${description_zh || description}`
+            : `***description***: ${description}`)
+        }
+        if (typeof params === 'string' && params) {
+          detailsLines.push(isZh
+            ? `***参数***: ${params.replace(/\n/g, '')}`
+            : `***params***: ${params.replace(/\n/g, '')}`)
+        }
+        const details = detailsLines.join('\n-  ')
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
+        documentation.appendMarkdown(detail.join('\n\n'))
+        return proxyCreateCompletionItem({ content, snippet, details, documentation, type: vscode.CompletionItemKind.Event, sortText: '0', preselect: true, params: [uiName, name] })
+      },
+      )
+    }
+    events.push(deferEventsCall)
+
+    if (visibleMethods.length) {
+      methods.push(...visibleMethods.map((method) => {
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail: string[] = []
         const { name, description, params, description_zh } = method
 
@@ -439,18 +565,9 @@ export function propsReducer(options: PropsOptions) {
       }))
     }
 
-    if (item.exposed) {
-      const filterExposed = localVersion
-        ? item.exposed.filter((item) => {
-          // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === 1)
-          })
-        : item.exposed
-      exposed.push(...filterExposed.map((expose) => {
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+    if (visibleExposed.length) {
+      exposed.push(...visibleExposed.map((expose) => {
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const details: string[] = []
         const { name, description, detail, description_zh } = expose
 
@@ -471,23 +588,15 @@ export function propsReducer(options: PropsOptions) {
 
         documentation.appendMarkdown(details.join('\n\n'))
         const hover = createHover(documentation)
-        return proxyCreateCompletionItem({ content: expose.name, snippet: expose.detail.startsWith('()') ? `${expose.name}()` : expose.name, detail, documentation, type: 1, sortText: 'a', preselect: true, params: uiName, hover })
+        const exposedDetail = typeof expose.detail === 'string' ? expose.detail : ''
+        return proxyCreateCompletionItem({ content: expose.name, snippet: exposedDetail.startsWith('()') ? `${expose.name}()` : expose.name, detail: exposedDetail, documentation, type: 1, sortText: 'a', preselect: true, params: uiName, hover })
       }))
     }
 
-    if (item.slots) {
-      const filterSlots = localVersion
-        ? item.slots.filter((item) => {
-          // 过滤在某个版本才增加的新方法
-            const version = item.version?.match(/\d+\.\d+\.\d+/)?.[0]
-            return !(version && compareVersion(version, localVersion!) === 1)
-          })
-        : item.slots
-      filterSlots.forEach((slot) => {
+    if (visibleSlots.length) {
+      visibleSlots.forEach((slot) => {
         const { name, description, description_zh } = slot
-        const documentation = new vscode.MarkdownString()
-        documentation.isTrusted = true
-        documentation.supportHtml = true
+        const documentation = enableCommandTrust(new vscode.MarkdownString())
         const detail = []
         if (description) {
           if (isZh)
@@ -502,9 +611,7 @@ export function propsReducer(options: PropsOptions) {
     }
 
     const createTableDocument = () => {
-      const documentation = createMarkdownString()
-      documentation.isTrusted = true
-      documentation.supportHtml = true
+      const documentation = enableCommandTrust(createMarkdownString())
       const details: string[] = []
       let text = `**${uiName} [${item.name}]**`
       if (item.link) {
@@ -512,7 +619,7 @@ export function propsReducer(options: PropsOptions) {
       }
       details.push(text)
 
-      if (item.props) {
+      if (Object.keys(visibleProps).length) {
         if (isZh)
           details.push('**参数:**')
         else
@@ -524,8 +631,8 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...Object.keys(item.props).map((name) => {
-            const { default: defaultValue = '', type, description, description_zh } = item.props[name]
+          ...Object.keys(visibleProps).map((name) => {
+            const { default: defaultValue = '', type, description, description_zh } = (visibleProps as any)[name]
             let value = String(defaultValue).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()
             value = String(defaultValue).length > 20 ? '...' : value
             const safeType = String(type).replace(/\|/g, '\\|')
@@ -537,7 +644,7 @@ export function propsReducer(options: PropsOptions) {
         details.push(tableContent)
       }
 
-      if (item.methods && item.methods.length) {
+      if (visibleMethods.length) {
         if (isZh)
           details.push('**方法:**')
         else
@@ -549,7 +656,7 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...item.methods.map((m) => {
+          ...visibleMethods.map((m) => {
             const { name, params, description, description_zh } = m
             const safeName = String(name).replace(/\|/g, '\\|')
             const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
@@ -561,7 +668,7 @@ export function propsReducer(options: PropsOptions) {
         details.push(tableContent)
       }
 
-      if (item.events && item.events.length) {
+      if (visibleEvents.length) {
         if (isZh)
           details.push('**事件:**')
         else
@@ -573,7 +680,7 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...item.events.map((m) => {
+          ...visibleEvents.map((m) => {
             const { name, params, description, description_zh } = m
             const safeName = String(name).replace(/\|/g, '\\|')
             const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
@@ -585,7 +692,7 @@ export function propsReducer(options: PropsOptions) {
         details.push(tableContent)
       }
 
-      if (item.slots && item.slots.length) {
+      if (visibleSlots.length) {
         if (isZh)
           details.push('**插槽:**')
         else
@@ -597,7 +704,7 @@ export function propsReducer(options: PropsOptions) {
         const tableContent = [
           tableHeader,
           tableDivider,
-          ...item.slots.map((m) => {
+          ...visibleSlots.map((m) => {
             const { name, description, description_zh } = m
             const safeName = String(name).replace(/\|/g, '\\|')
             const safeDescription = String(isZh ? description_zh || description : description).replace(/\|/g, '\\|')
@@ -615,14 +722,14 @@ export function propsReducer(options: PropsOptions) {
       return documentation
     }
     const tableDocument = createTableDocument()
-    const name = item.name.split('.')[0]
-    const from = (item.dynamicLib || dynamicLib) ? (dynamicLib || item.dynamicLib)!.replace('${name}', hyphenate(name)) : lib
-    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: item.slots, uiName, lib: from }
+    const from = resolveComponentSource(item, lib, dynamicLib, hyphenate)
+    result[item.name!] = { completions, events, methods, exposed, slots, suggestions: item.suggestions || [], tableDocument, rawSlots: visibleSlots, uiName, lib: from }
     return result
   }, result)
 }
 export type Directives = {
   name: string
+  version?: string
   description: string
   description_zh: string
   documentation?: string
@@ -648,42 +755,89 @@ export interface ComponentOptions {
   dynamicLib?: string
   importWay?: 'as default' | 'default' | 'specifier'
   directives?: Directives
+  installedVersion?: string
+  adapterMajor?: string
 }
 
 export interface ComponentsConfigItem {
   prefix: string
   directives?: Directives
   lib: string
-  data: () => Promise<CompletionItem>[]
+  data: (parent?: any, context?: CompletionRenderContext) => Promise<CompletionItem>[]
   isReact?: boolean
   dynamicLib?: string
   importWay?: 'as default' | 'default' | 'specifier'
 }
 
 export type ComponentsConfig = ComponentsConfigItem[]
+
+function getImportBindingName(value: string) {
+  const root = value.split('.')[0]
+  const normalized = root
+    .split(/[^\w$]+/)
+    .filter(Boolean)
+    .map((segment, index) => index ? `${segment[0].toUpperCase()}${segment.slice(1)}` : segment)
+    .join('')
+  return /^[A-Z_$][\w$]*$/i.test(normalized) ? normalized : undefined
+}
+
+function createCompletionData(component: Component, componentByName: Map<string, Component>, lib: string, dynamicLib: string | undefined, importWay: 'as default' | 'default' | 'specifier', renderedName = component.name) {
+  const imports: CompletionImportPlan[] = []
+  const addImport = (target: Component, localName: string) => {
+    const binding = getImportBindingName(localName)
+    if (!binding)
+      return
+    imports.push({
+      localName: binding,
+      source: resolveComponentSource(target, lib, dynamicLib, hyphenate),
+      importWay: target.importWay || importWay,
+    })
+  }
+
+  addImport(component, renderedName)
+  if (component.suggestions?.length === 1) {
+    const suggestionName = normalizeSuggestionName(component.suggestions[0])
+    if (suggestionName) {
+      const suggestion = componentByName.get(normalizeSuggestionLookupName(suggestionName)) || { name: suggestionName } as Component
+      addImport(suggestion, suggestionName)
+    }
+  }
+  return { ...component, name: renderedName, __imports: imports }
+}
+
 export function componentsReducer(options: ComponentOptions): ComponentsConfig {
-  let { map, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives } = options
+  const { map: inputMap, isSeperatorByHyphen = true, prefix = '', lib, isReact = false, dynamicLib, importWay = 'specifier', directives, installedVersion, adapterMajor } = options
+  const map = (inputMap as [Component | string, string, string?][]).map(([content, detail, demo]) => [
+    typeof content === 'string' ? { name: content } : content,
+    detail,
+    demo,
+  ] as [Component, string, string?]).filter(([component]) => isVisibleForVersion(component, installedVersion, adapterMajor))
+  const visibleDirectives = directives?.filter(directive => isVisibleForVersion(directive, installedVersion, adapterMajor))
+  // Suggestions are resolved while rendering every component completion. Build the
+  // immutable lookup once so a manifest with N suggestions does not scan N rows
+  // for every rendered item.
+  const componentByName = createComponentSuggestionIndex(map, prefix)
   const isZh = getLocale().includes('zh')
 
   if (!isReact && prefix) {
     return [
       {
         prefix,
-        directives,
+        directives: visibleDirectives,
         lib,
-        data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const isVue = isVueOrVine()
+        data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
+          const framework = getSyntaxFramework(context, 'vue')
           let snippet = ''
           let _content = ''
           let description = ''
+          let itemDynamicLib = dynamicLib
+          let itemImportWay = importWay
           if (typeof content === 'object') {
-            if (content.dynamicLib)
-              dynamicLib = content.dynamicLib
-            if (content.importWay)
-              importWay = content.importWay
+            itemDynamicLib = content.dynamicLib || dynamicLib
+            itemImportWay = content.importWay || importWay
 
-            const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
-            snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
+            const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen, prefix, context?.renderedPrefix)
+            snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent, new Set(), prefix, context?.renderedPrefix)
             _content = `${tag}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
@@ -693,49 +847,55 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           }
           if (!demo)
             demo = snippet
-          const documentation = new vscode.MarkdownString()
-          documentation.isTrusted = true
-          documentation.supportHtml = true
+          const documentation = enableCommandTrust(new vscode.MarkdownString())
 
           documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
           if (typeof content === 'object' && content.suggestions?.length) {
             documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
             // FIXME: suggestions的Item有对象形式的vant4里面,里面的文案要怎么展示
-            documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${item}`).join('\n')}\n`)
+            documentation.appendMarkdown(`${content.suggestions.map(normalizeSuggestionName).filter((name): name is string => !!name).map(name => `- ${name}`).join('\n')}\n`)
           }
-          const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
           documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
           // FIXME: 要求输入数组，但是demo类型是字符串，但是都通过JSON.stringify处理了，所以这里转成[demo]?
           const params = setCommandParams(demo as any)
-          documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
+          documentation.appendMarkdown(`\n[Copy](command:intellisense.copyDemo?${params})\n`)
 
           // FIXME: params要求string| string[]
           // const fixParams: FixParams = [content as Component, lib, isReact, prefix, dynamicLib || '', importWay || '']
           const fixParams: any = {
-            data: content,
+            data: createCompletionData(content as Component, componentByName, lib, dynamicLib, itemImportWay || 'specifier'),
             lib,
             isReact,
+            requiresImport: context?.syntax === 'jsx' || context?.hostFramework === 'svelte' || isReact,
             prefix,
-            dynamicLib,
-            importWay,
+            dynamicLib: itemDynamicLib || '',
+            importWay: itemImportWay || 'specifier',
+            registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
+            renderedTag: getRenderedTagFromSnippet(snippet),
+            document: getCompletionDocumentIdentity(context),
           }
           return createCompletionItem({ content: _content, preselect: true, snippet, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
         }),
       },
       {
         prefix: '',
-        directives,
+        directives: visibleDirectives,
         lib,
-        data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-          const isVue = isVueOrVine()
+        data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
+          const framework = getSyntaxFramework(context, 'vue')
           let snippet = ''
           let _content = ''
           let description = ''
+          let itemDynamicLib = dynamicLib
+          let itemImportWay = importWay
           if (typeof content === 'object') {
-            snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
-            const tag = content.name.slice(prefix.length)
-            _content = `${tag}  ${content.tag || detail}`
+            itemDynamicLib = content.dynamicLib || dynamicLib
+            itemImportWay = content.importWay || importWay
+            const importName = content.name.slice(prefix.length)
+            const renderedName = framework === 'react' ? importName : content.name
+            snippet = await getTemplateStr(componentByName, { ...content, name: renderedName }, 0, framework, isSeperatorByHyphen, parent, new Set(), prefix, context?.renderedPrefix)
+            _content = `${renderComponentTag(renderedName, framework, isSeperatorByHyphen, prefix, context?.renderedPrefix)}  ${content.tag || detail}`
             description = isZh && content.description_zh ? content.description_zh : content.description || ''
           }
           else {
@@ -744,29 +904,30 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
           }
           if (!demo)
             demo = snippet
-          const documentation = new vscode.MarkdownString()
-          documentation.isTrusted = true
-          documentation.supportHtml = true
+          const documentation = enableCommandTrust(new vscode.MarkdownString())
           documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
           if (typeof content === 'object' && content.suggestions?.length) {
             documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
-            documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
+            documentation.appendMarkdown(`${content.suggestions.map(normalizeSuggestionName).filter((name): name is string => !!name).map(name => `- ${name}`).join('\n')}\n`)
           }
-          const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
           documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
           documentation.appendCodeblock(demo, 'html')
           // FIXME: 同上
           const params = setCommandParams(demo as any)
-          documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
+          documentation.appendMarkdown(`\n[Copy](command:intellisense.copyDemo?${params})\n`)
 
           // FIXME: params要求string| string[]
           const fixParams: any = {
-            data: { ...(content as any), name: (content as any).name?.slice(prefix.length) },
+            data: createCompletionData(content as Component, componentByName, lib, dynamicLib, itemImportWay || 'specifier', (content as Component).name.slice(prefix.length)),
             lib,
             isReact: true,
+            requiresImport: true,
             prefix,
-            dynamicLib,
-            importWay,
+            dynamicLib: itemDynamicLib,
+            importWay: itemImportWay,
+            registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
+            renderedTag: getRenderedTagFromSnippet(snippet),
+            document: getCompletionDocumentIdentity(context),
           }
           // const fixParams: any = [{ ...(content as any), name: (content as any).name?.slice(prefix.length) }, lib, true, prefix, dynamicLib, importWay]
           return createCompletionItem({ content: _content, detail: description, snippet, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
@@ -776,20 +937,20 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
   }
   return [{
     prefix,
-    directives,
+    directives: visibleDirectives,
     lib,
-    data: (parent?: any) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
-      const isVue = isVueOrVine()
+    data: (parent?: any, context?: CompletionRenderContext) => (map as [Component | string, string, string?][]).map(async ([content, detail, demo]) => {
+      const framework = getSyntaxFramework(context, 'react')
       let snippet = ''
       let _content = ''
       let description = ''
+      let itemDynamicLib = dynamicLib
+      let itemImportWay = importWay
       if (typeof content === 'object') {
-        if (content.dynamicLib)
-          dynamicLib = content.dynamicLib
-        if (content.importWay)
-          importWay = content.importWay
-        snippet = await getTemplateStr(map, content, 0, isVue, isSeperatorByHyphen, parent)
-        const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
+        itemDynamicLib = content.dynamicLib || dynamicLib
+        itemImportWay = content.importWay || importWay
+        snippet = await getTemplateStr(componentByName, content, 0, framework, isSeperatorByHyphen, parent, new Set(), prefix, context?.renderedPrefix)
+        const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen, prefix, context?.renderedPrefix)
         _content = `${tag}  ${content.tag || detail}`
         description = isZh && content.description_zh ? content.description_zh : content.description || ''
       }
@@ -800,30 +961,31 @@ export function componentsReducer(options: ComponentOptions): ComponentsConfig {
       if (!demo)
         demo = snippet
 
-      const documentation = new vscode.MarkdownString()
-      documentation.isTrusted = true
-      documentation.supportHtml = true
+      const documentation = enableCommandTrust(new vscode.MarkdownString())
       documentation.appendMarkdown(`**🍀 ${lib} ${detail}**\n`)
       if (typeof content === 'object' && content.suggestions?.length) {
         documentation.appendMarkdown(`\n**👗 ${isZh ? '常用搭配' : 'Common collocation'}** \n`)
-        documentation.appendMarkdown(`${content.suggestions.map((item: string | SuggestionItem) => `- ${typeof item === 'string' ? item : item.name}`).join('\n')}\n`)
+        documentation.appendMarkdown(`${content.suggestions.map(normalizeSuggestionName).filter((name): name is string => !!name).map(name => `- ${name}`).join('\n')}\n`)
       }
-      const copyIcon = '<img width="12" height="12" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2UyOWNkMCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjEuNSI+PHBhdGggZD0iTTIwLjk5OCAxMGMtLjAxMi0yLjE3NS0uMTA4LTMuMzUzLS44NzctNC4xMjFDMTkuMjQzIDUgMTcuODI4IDUgMTUgNWgtM2MtMi44MjggMC00LjI0MyAwLTUuMTIxLjg3OUM2IDYuNzU3IDYgOC4xNzIgNiAxMXY1YzAgMi44MjggMCA0LjI0My44NzkgNS4xMjFDNy43NTcgMjIgOS4xNzIgMjIgMTIgMjJoM2MyLjgyOCAwIDQuMjQzIDAgNS4xMjEtLjg3OUMyMSAyMC4yNDMgMjEgMTguODI4IDIxIDE2di0xIi8+PHBhdGggZD0iTTMgMTB2NmEzIDMgMCAwIDAgMyAzTTE4IDVhMyAzIDAgMCAwLTMtM2gtNEM3LjIyOSAyIDUuMzQzIDIgNC4xNzIgMy4xNzJDMy41MTggMy44MjUgMy4yMjkgNC43IDMuMTAyIDYiLz48L2c+PC9zdmc+" />'
       documentation.appendMarkdown(`**🌰 ${isZh ? '例子' : 'example'}**\n`)
       documentation.appendCodeblock(demo, 'html')
       // FIXME: setCommandParams要求 string[]
       const params = setCommandParams(demo as any)
-      documentation.appendMarkdown(`\n<a href="command:intellisense.copyDemo?${params}">${copyIcon}</a>\n`)
+      documentation.appendMarkdown(`\n[Copy](command:intellisense.copyDemo?${params})\n`)
 
       // FIXME: params要求string| string[]
       // const fixParams: any = [content, lib, isReact, prefix, dynamicLib || '', importWay || '']
       const fixParams: any = {
-        data: content,
+        data: createCompletionData(content as Component, componentByName, lib, dynamicLib, itemImportWay || 'specifier'),
         lib,
         isReact,
+        requiresImport: context?.syntax === 'jsx' || context?.hostFramework === 'svelte' || isReact,
         prefix,
-        dynamicLib,
-        importWay,
+        dynamicLib: itemDynamicLib,
+        importWay: itemImportWay,
+        registerVueComponent: context?.hostFramework === 'vue' && context.syntax === 'template',
+        renderedTag: getRenderedTagFromSnippet(snippet),
+        document: getCompletionDocumentIdentity(context),
       }
       const completionItem: CompletionItem = createCompletionItem({ content: _content, snippet, preselect: true, detail: description, documentation, type: vscode.CompletionItemKind.TypeParameter, sortText: '0', params: fixParams, demo })
       return completionItem
@@ -880,8 +1042,14 @@ export function convertPrefixedComponentName(componentName: string, prefix: stri
  * @returns Matched component or null
  */
 export function findPrefixedComponent(componentName: string, prefixes: string[], UiCompletions: any): any {
-  // Try each prefix
+  // Try each prefix. Construct the expected prefixed key first so `Button`
+  // resolves to `ElButton`, never a longer suffix such as `ElRadioButton`.
   for (const prefix of prefixes) {
+    const pascalPrefix = prefix[0]?.toUpperCase() + prefix.slice(1)
+    const exactPrefixedKey = `${pascalPrefix}${componentName[0]?.toUpperCase()}${componentName.slice(1)}`
+    if (UiCompletions[exactPrefixedKey])
+      return UiCompletions[exactPrefixedKey]
+
     const standardName = convertPrefixedComponentName(componentName, prefix)
     if (standardName) {
       if (UiCompletions[standardName])
@@ -899,32 +1067,28 @@ export function findPrefixedComponent(componentName: string, prefixes: string[],
   // without prefix (e.g. "Pagination" or "pagination") can match prefixed
   // completion keys like "ElPagination".
   if (UiCompletions) {
-    const want = componentName.toLowerCase()
-    let bestKey: string | null = null
-    for (const key of Object.keys(UiCompletions)) {
-      const k = key.toLowerCase()
-      if (!k.endsWith(want))
-        continue
-      // prefer longer key (more specific prefix), e.g. ElPagination over Pagination
-      if (!bestKey || key.length > bestKey.length)
-        bestKey = key
-    }
-    if (bestKey)
-      return UiCompletions[bestKey]
+    const match = findUniqueSuffixComponentKey(componentName, Object.keys(UiCompletions))
+    if (match)
+      return UiCompletions[match]
   }
 
   return null
 }
 
-export async function getRequireProp(content: any, index = 0, isVue: boolean, parent: any = null): Promise<[string[], number]> {
+export async function getRequireProp(content: any, index = 0, framework: CompletionFramework | boolean, parent: any = null): Promise<[string[], number]> {
+  const isVue = framework === true || framework === 'vue' || framework === 'vine'
+  const isHtmlLike = isVue || framework === 'svelte'
   const requiredProps: string[] = []
   if (!content?.props)
     return [requiredProps, index]
 
   for (let key of Object.keys(content.props)) {
     const item = content.props[key]
-    if (!item.required)
+    if (!item?.required)
       continue
+    const typeText = typeof item.type === 'string' ? item.type : ''
+    const defaultText = item.default == null ? '' : String(item.default)
+    const valueText = item.value == null ? '' : String(item.value)
     let prefix = ''
     let prefixKey = ''
     if (item.related && item.related.length && parent) {
@@ -935,7 +1099,7 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
       }
     }
     let attr = ''
-    const v = item.value
+    const v = valueText
     if (key.startsWith(':')) {
       const tagName = getComponentTagName(content.name)
       const keyName = toCamel(key.split(':').slice(-1)[0])
@@ -990,20 +1154,19 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
           if (isVue)
             attr = `${key}="\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
           else
-            attr = `${key.slice(1)}={\${${index}:${v}}}`
+            attr = `${key.slice(1)}={\${${index}:${escapeSnippetText(v)}}}`
         }
       }
     }
-    else if (item.type && item.type.toLowerCase().includes('boolean') && item.default?.toLowerCase() === 'false') {
-      // 还要进一步看它的 type 如果 type === boolean 提供 true or false 如果是字符串，使用 / 或着 ｜ 分割，作为提示
-      if (isVue)
+    else if (typeText.toLowerCase().includes('boolean')) {
+      if (isHtmlLike)
         attr = key
       else
-        attr = `${key}="true"`
+        attr = `${key}={true}`
     }
     else {
       const tempMap: any = {}
-      const types = item.type.replace(/\s+/g, ' ').replace(/\{((?:[^{}]|\{[^{}]*\})*)\}|<((?:[^<>]|<[^<>]*>)*)>/g, (_: string) => {
+      const types = typeText.replace(/\s+/g, ' ').replace(/\{((?:[^{}]|\{[^{}]*\})*)\}|<((?:[^<>]|<[^<>]*>)*)>/g, (_: string) => {
         const key = hash(_)
         tempMap[key] = _.replace(/,/g, '\,')
         return key
@@ -1021,20 +1184,19 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
         attr = `${key}="${item[`$${prefixKey}`].replace(`$${prefixKey}`, prefix)}"`
       }
       else {
-        if (item.default && types.includes(item.default)) {
-          // 如果 item.default 并且在 type 中，将 types 的 default 值，放到
-          const i = types.findIndex((i: string) => i === item.default)
+        if (defaultText && types.includes(defaultText)) {
+          const i = types.findIndex((i: string) => i === defaultText)
           types.splice(i, 1)
-          types.unshift(item.default)
+          types.unshift(defaultText)
         }
         const typeTips = types
-          .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))
+          .map((item: string) => escapeSnippetChoice(escapeAttributeValue(item)))
           .join(',')
 
         if (v)
-          attr = `${key}="${v}"`
+          attr = `${key}="${escapeSnippetText(escapeAttributeValue(v))}"`
         else
-          attr = `${key}="\${${++index}|${prefix ? item.value + prefix : typeTips}|}"`
+          attr = `${key}="\${${++index}|${prefix ? escapeSnippetChoice(escapeAttributeValue(String(item.value) + prefix)) : typeTips}|}"`
       }
     }
     requiredProps.push(attr)
@@ -1045,25 +1207,44 @@ export async function getRequireProp(content: any, index = 0, isVue: boolean, pa
       continue
     index++
     const [snippetEventNameOptions] = generateScriptNames(e.name)
-    const snippetVue = `@${e.name}="\${${index}|${snippetEventNameOptions.join(',')}|}"`
-    const snippetJsx = `${e.name}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
-    requiredProps.push(isVue ? snippetVue : snippetJsx)
+    const handlerChoices = snippetEventNameOptions.map(escapeSnippetChoice).join(',')
+    const snippetVue = `@${e.name}="\${${index}|${handlerChoices}|}"`
+    const snippetJsx = `${e.name}={\${${index}|${handlerChoices}|}}`
+    const svelteName = renderSvelteEventPropName(e)
+    const snippetSvelte = `${svelteName}={\${${index}|${handlerChoices}|}}`
+    requiredProps.push(isVue ? snippetVue : framework === 'svelte' ? snippetSvelte : snippetJsx)
   }
 
   return [requiredProps, index]
 }
 
-function findTargetMap(maps: any, suggestionTag: string | SuggestionItem) {
-  let label = typeof suggestionTag === 'string' ? suggestionTag : suggestionTag.name
-  label = toCamel(`-${label}`)
+function normalizeSuggestionLookupName(name: string) {
+  return toCamel(`-${name}`)
+}
+
+export function createComponentSuggestionIndex(maps: [Component, string, string?][], prefix = '') {
+  const index = new Map<string, Component>()
+  for (const [component] of maps) {
+    const name = component?.name
+    if (typeof name !== 'string' || !name)
+      continue
+    index.set(normalizeSuggestionLookupName(name), component)
+    index.set(normalizeSuggestionLookupName(hyphenate(name)), component)
+    if (prefix && name.startsWith(prefix) && name.length > prefix.length) {
+      const unprefixed = name.slice(prefix.length)
+      index.set(normalizeSuggestionLookupName(unprefixed), component)
+      index.set(normalizeSuggestionLookupName(hyphenate(unprefixed)), component)
+    }
+  }
+  return index
+}
+
+export function findTargetMap(maps: any, suggestionTag: string) {
+  const label = normalizeSuggestionLookupName(suggestionTag)
   for (const map of maps) {
-    if (typeof map[0] === 'object') {
-      if (toCamel(`-${map[0].name}`) === label)
-        return map[0]
-    }
-    else if (toCamel(`-${map[0].name}`) === label) {
-      return map
-    }
+    const component = Array.isArray(map) ? map[0] : undefined
+    if (component && typeof component === 'object' && normalizeSuggestionLookupName(component.name) === label)
+      return component
   }
 }
 
@@ -1075,9 +1256,15 @@ function generateSnippetNameOptions(item: any, keyName: string, prefix: string) 
   if (keyName[0] === ':')
     keyName = keyName.slice(1)
   keyName = toCamel(keyName.replace(/:.*/, ''))
-  const componentName = prefix ? item.name[prefix.length].toLowerCase() + item.name.slice(prefix.length + 1) : item.name
-  const splitNames = componentName.split(/(?=[A-Z])/).map((i: string) => `${i.toLocaleLowerCase()}${keyName[0].toUpperCase()}${keyName.slice(1)}`)
-  const splitNamesReverse = componentName.split(/(?=[A-Z])/).map((i: string) => `${keyName.toLocaleLowerCase()}${i}`)
+  if (!keyName)
+    return ''
+  const itemName = typeof item?.name === 'string' ? item.name : ''
+  const unprefixed = prefix && itemName.startsWith(prefix) && itemName.length > prefix.length
+    ? itemName.slice(prefix.length)
+    : itemName
+  const componentName = unprefixed ? `${unprefixed[0].toLowerCase()}${unprefixed.slice(1)}` : itemName
+  const splitNames = componentName.split(/(?=[A-Z])/).filter(Boolean).map((i: string) => `${i.toLocaleLowerCase()}${keyName[0].toUpperCase()}${keyName.slice(1)}`)
+  const splitNamesReverse = componentName.split(/(?=[A-Z])/).filter(Boolean).map((i: string) => `${keyName.toLocaleLowerCase()}${i}`)
   return [
     keyName,
     `${keyName}Value`,
@@ -1152,37 +1339,40 @@ export function generateScriptNames(name: string): [string[], string] {
 }
 
 // 防止递归出现重复tag
-async function getTemplateStr(map: any, content: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>()): Promise<string> {
-  const tag = isSeperatorByHyphen ? hyphenate(content.name) : content.name
+async function getTemplateStr(componentByName: Map<string, Component>, content: any, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent?: any, tags = new Set<string>(), adapterPrefix = '', renderedPrefix?: string): Promise<string> {
+  const tag = renderComponentTag(content.name, framework, isSeperatorByHyphen, adapterPrefix, renderedPrefix)
   if (tags.has(tag))
     return `$${++index}`
 
-  let [requiredProps, __index] = await getRequireProp(content, index, isVue, parent)
+  let [requiredProps, __index] = await getRequireProp(content, index, framework, parent)
   tags.add(tag)
 
   const isFirst = tags.size > 1
-  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, map, __index, isVue, isSeperatorByHyphen, parent, tags)}</${tag}>${isFirst ? '\n' : ''}`
+  return `${isFirst ? '\n  ' : ''}<${tag}${requiredProps.length ? ' ' : ''}${requiredProps.join(' ')}$${++__index}>${await getSuggestionsTemplateStr(content, componentByName, __index, framework, isSeperatorByHyphen, parent, tags, adapterPrefix, renderedPrefix)}</${tag}>${isFirst ? '\n' : ''}`
 }
 
-async function getSuggestionsTemplateStr(content: any, map: any, index: number, isVue: boolean, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>) {
-  if (content.suggestions?.length) {
-    const suggestionTag = content.suggestions[0]
-    tags.add(suggestionTag)
-    const suggestion = findTargetMap(map, suggestionTag)
-    let [childRequiredProps, _index] = await getRequireProp(suggestion, index, isVue, parent)
+async function getSuggestionsTemplateStr(content: any, componentByName: Map<string, Component>, index: number, framework: CompletionFramework, isSeperatorByHyphen: boolean, parent: any, tags: Set<string>, adapterPrefix = '', renderedPrefix?: string) {
+  if (content.suggestions?.length === 1) {
+    const suggestionName = normalizeSuggestionName(content.suggestions[0])
+    if (!suggestionName)
+      return `$${++index}`
+    const suggestion = componentByName.get(normalizeSuggestionLookupName(suggestionName))
+    const suggestionTag = renderComponentTag(suggestionName, framework, isSeperatorByHyphen, adapterPrefix, renderedPrefix)
 
     if (suggestion) {
-      const children = await getTemplateStr(map, suggestion, ++_index, isVue, isSeperatorByHyphen, parent, tags)
-      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${_index}>${children}</${suggestionTag}>\n`
+      if (tags.has(suggestionTag))
+        return `$${index + 1}`
+      return getTemplateStr(componentByName, suggestion, index, framework, isSeperatorByHyphen, parent, tags, adapterPrefix, renderedPrefix)
     }
-    else {
-      return `\n  <${suggestionTag}${childRequiredProps.length ? ' ' : ''}${childRequiredProps.join(' ')}$${++_index}>$${++_index}</${suggestionTag}>\n`
-    }
+    tags.add(suggestionTag)
+    return `\n  <${suggestionTag}$${index + 1}>$${index + 2}</${suggestionTag}>\n`
   }
   return `$${++index}`
 }
 
-function findValue(parent: any, item: string) {
+function findValue(parent: any, item: unknown) {
+  if (typeof item !== 'string' || !item.includes('.'))
+    return ['', '']
   let p = parent
   const name = item.split('.').slice(0, -1).join('.')
   const prop = item.split('.').slice(-1)[0]
@@ -1190,14 +1380,14 @@ function findValue(parent: any, item: string) {
   const prefixKey = prop
   outerLoop: while (p) {
     if (p.tag === name) {
-      const props = p.props
+      const props = Array.isArray(p.props) ? p.props : []
       if (props.length) {
         for (const p of props) {
-          if (p.name === 'bind' && p.arg && p.arg.content === prop) {
+          if (p?.name === 'bind' && p.arg?.content === prop && typeof p.exp?.content === 'string') {
             prefix = p.exp.content
             break outerLoop
           }
-          else if (p.name === prop) {
+          else if (p?.name === prop && typeof p.value?.content === 'string') {
             prefix = p.value.content
             break outerLoop
           }

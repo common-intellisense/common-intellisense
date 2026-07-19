@@ -1,24 +1,21 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getActiveText, getActiveTextEditorLanguageId, getCurrentFileUrl } from '@vscode-use/utils'
-import { detectSlots, registerCodeLensProviderFn } from '../../src/parser'
+import { clearDocumentAnalysis, detectSlots, registerCodeLensProviderFn } from '../../src/parser'
 import { propsReducer } from '../../src/ui/utils'
 
-const mockActiveText = getActiveText as any
-const mockCurrentFileUrl = getCurrentFileUrl as any
-const mockLanguageId = getActiveTextEditorLanguageId as any
+function createDocument(code: string) {
+  return {
+    languageId: 'vue',
+    version: 1,
+    uri: { toString: () => 'file:///fixtures/App.vue' },
+    getText: () => code,
+  } as any
+}
 
-afterEach(async () => {
-  mockActiveText.mockReturnValue('')
-  mockCurrentFileUrl.mockReturnValue('')
-  mockLanguageId.mockReturnValue('')
-  await detectSlots({}, {}, [])
-})
+afterEach(() => clearDocumentAnalysis())
 
 describe('issue 40 regressions', () => {
   it('keeps CodeLens working when a template slot has no value', async () => {
-    mockCurrentFileUrl.mockReturnValue('/fixtures/App.vue')
-    mockLanguageId.mockReturnValue('vue')
-    mockActiveText.mockReturnValue(`
+    const document = createDocument(`
 <template>
   <MyComp>
     <template slot></template>
@@ -27,7 +24,7 @@ describe('issue 40 regressions', () => {
 </template>
 `)
 
-    await detectSlots({
+    await detectSlots(document, {
       MyComp: {
         rawSlots: [
           { name: 'default', description: 'default slot' },
@@ -38,7 +35,7 @@ describe('issue 40 regressions', () => {
     }, {}, [])
 
     const provider = registerCodeLensProviderFn() as any
-    const lenses = provider.provideCodeLenses()
+    const lenses = provider.provideCodeLenses(document)
 
     expect(lenses.map((lens: any) => lens.command.title)).toEqual([
       'Slots: default',

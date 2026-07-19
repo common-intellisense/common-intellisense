@@ -16,6 +16,10 @@ vi.mock('@vscode-use/utils', () => ({
       return ['https://fake/remote.js']
     if (k === 'common-intellisense.localUris')
       return []
+    if (k === 'common-intellisense.allowLegacyAdapters')
+      return true
+    if (k === 'common-intellisense.trustedHosts')
+      return ['fake']
     if (k === 'common-intellisense.remoteNpmUris')
       return []
     return undefined
@@ -35,6 +39,8 @@ describe('fetch service (mocked)', () => {
 
   it('fetchFromRemoteUrls parses script content returned by ofetch', async () => {
     const mod = await import('../../src/services/fetch')
+    const { ofetch } = await import('ofetch')
+    mod.setRemoteTransportForTest(async uri => ({ status: 200, body: String(await vi.mocked(ofetch)(uri)), location: undefined }), async () => [{ address: '8.8.8.8', family: 4 }])
     // ensure cache is clean
     if (mod.cacheFetch && typeof mod.cacheFetch.clear === 'function')
       mod.cacheFetch.clear()

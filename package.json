@@ -69,62 +69,141 @@
       "title": "%configurationTitle%",
       "properties": {
         "common-intellisense.ui": {
-          "type": "array",
           "default": [
             "auto"
           ],
-          "items": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "elementUi2",
-              "elementPlus2",
-              "antd4",
-              "antd5",
-              "vant4",
-              "naiveUi2",
-              "antDesignVue4",
-              "antDesignVue3",
-              "antDesignVue2",
-              "antDesignVue1",
-              "varlet2",
-              "varlet3",
-              "vuetify3",
-              "chakraUiReact2",
-              "primevue3",
-              "primevue4",
-              "quasar2",
-              "nextui2",
-              "nuxtui2",
-              "shadcnVue0",
-              "shadcnSvelte0",
-              "bitsUi0",
-              "radixVue1",
-              "arcoDesign2",
-              "arcoDesignVue2",
-              "uview1",
-              "uview2",
-              "@opentiny/vue3",
-              "@tarojs/components3",
-              "@nutui/nutui4",
-              "@vant/weapp1",
-              "tdesignReact1",
-              "tdesignMobileVue1",
-              "tdesinVueNext1",
-              "tdesignMiniprogram1",
-              "@headlessui/react2",
-              "@headlessui/vue1",
-              "@mui/material5",
-              "@chakraUi/react2",
-              "@mantine/core7",
-              "@mantine/dates7",
-              "@mantine/charts7",
-              "wotDesignUi1",
-              "arkUi4",
-              "dcloudioUniUi"
-            ]
-          },
-          "description": "%uiDescription%"
+          "description": "%uiDescription%",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "auto",
+                      "elementUi2",
+                      "elementPlus2",
+                      "antd4",
+                      "antd5",
+                      "vant4",
+                      "naiveUi2",
+                      "antDesignVue4",
+                      "antDesignVue3",
+                      "antDesignVue2",
+                      "antDesignVue1",
+                      "varlet2",
+                      "varlet3",
+                      "vuetify3",
+                      "chakraUiReact2",
+                      "primevue3",
+                      "primevue4",
+                      "quasar2",
+                      "nextUi2",
+                      "nuxtUi2",
+                      "shadcnVue0",
+                      "shadcnSvelte0",
+                      "bitsUi0",
+                      "radixVue1",
+                      "arcoDesign2",
+                      "arcoDesignVue2",
+                      "uview1",
+                      "uview2",
+                      "@opentiny/vue3",
+                      "@tarojs/components3",
+                      "@nutui/nutui4",
+                      "@vant/weapp1",
+                      "tdesignReact1",
+                      "tdesignMobileVue1",
+                      "tdesinVueNext1",
+                      "tdesignMiniprogram1",
+                      "@headlessui/react2",
+                      "@headlessui/vue1",
+                      "@mui/material5",
+                      "@chakraUi/react2",
+                      "@mantine/core7",
+                      "@mantine/dates7",
+                      "@mantine/charts7",
+                      "wotDesignUi1",
+                      "arkVue4",
+                      "dcloudioUniUi1",
+                      "nuxtUiPro1",
+                      "uviewPlus3",
+                      "dcloudioUniUi2"
+                    ]
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "auto",
+                        "elementUi2",
+                        "elementPlus2",
+                        "antd4",
+                        "antd5",
+                        "vant4",
+                        "naiveUi2",
+                        "antDesignVue4",
+                        "antDesignVue3",
+                        "antDesignVue2",
+                        "antDesignVue1",
+                        "varlet2",
+                        "varlet3",
+                        "vuetify3",
+                        "chakraUiReact2",
+                        "primevue3",
+                        "primevue4",
+                        "quasar2",
+                        "nextUi2",
+                        "nuxtUi2",
+                        "shadcnVue0",
+                        "shadcnSvelte0",
+                        "bitsUi0",
+                        "radixVue1",
+                        "arcoDesign2",
+                        "arcoDesignVue2",
+                        "uview1",
+                        "uview2",
+                        "@opentiny/vue3",
+                        "@tarojs/components3",
+                        "@nutui/nutui4",
+                        "@vant/weapp1",
+                        "tdesignReact1",
+                        "tdesignMobileVue1",
+                        "tdesinVueNext1",
+                        "tdesignMiniprogram1",
+                        "@headlessui/react2",
+                        "@headlessui/vue1",
+                        "@mui/material5",
+                        "@chakraUi/react2",
+                        "@mantine/core7",
+                        "@mantine/dates7",
+                        "@mantine/charts7",
+                        "wotDesignUi1",
+                        "arkVue4",
+                        "dcloudioUniUi1",
+                        "nuxtUiPro1",
+                        "uviewPlus3",
+                        "dcloudioUniUi2"
+                      ]
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
         },
         "common-intellisense.translate": {
           "type": "boolean",
@@ -157,22 +236,66 @@
         "common-intellisense.remoteUris": {
           "type": "array",
           "default": [],
-          "description": "%remoteUris%"
+          "description": "%remoteUris%",
+          "items": {
+            "type": "string"
+          }
         },
         "common-intellisense.remoteNpmUris": {
           "type": "array",
           "default": [],
-          "description": "%remoteNpmUris%"
+          "description": "%remoteNpmUris%",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "resource": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
         },
         "common-intellisense.localUris": {
           "type": "array",
           "default": [],
-          "description": "%localUris%"
+          "description": "%localUris%",
+          "items": {
+            "type": "string"
+          }
         },
         "common-intellisense.trustedHosts": {
           "type": "array",
           "default": [],
-          "description": "%trustedHosts%"
+          "description": "%trustedHosts%",
+          "items": {
+            "type": "string"
+          }
+        },
+        "common-intellisense.legacyAdapterAllowlist": {
+          "type": "array",
+          "default": [],
+          "description": "Exact source-and-SHA256 approvals for legacy executable adapters. Copy the approval entry shown in the warning only after verifying the source and digest.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "common-intellisense.allowLegacyAdapters": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated emergency escape hatch that allows executable CommonJS from every configured custom source. Prefer legacyAdapterAllowlist; executable adapters are not a security sandbox."
         }
       }
     },
@@ -195,7 +318,8 @@
     "translate:report:diff": "node scripts/translate-directives.js --report --diff",
     "translate:apply": "node scripts/translate-directives.js --apply --report",
     "test:translate": "vitest run test/scripts/translate-directives.test.ts",
-    "build": "tsup src/index.ts --external vscode --minify --format cjs",
+    "build": "tsup src/index.ts --external vscode --minify --format cjs && pnpm run check:bundle",
+    "check:bundle": "node scripts/check-extension-bundle.cjs",
     "pack": "vsce package --no-dependencies",
     "lint": "eslint . --cache",
     "prepare": "husky install",
@@ -204,6 +328,9 @@
     "publish": "vsce publish --no-dependencies",
     "typecheck": "tsc --noEmit",
     "release": "bumpp && pnpm run publish"
+  },
+  "dependencies": {
+    "semver": "7.7.3"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^5.4.1",
@@ -217,6 +344,7 @@
     "@simon_he/translate": "^0.0.13",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^18.19.130",
+    "@types/semver": "^7.7.1",
     "@types/vscode": "1.75.1",
     "@typescript-eslint/typescript-estree": "^8.48.1",
     "@vscode-use/createwebview": "^0.0.13",
@@ -240,5 +368,19 @@
     "tsup": "^6.7.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Component metadata remains available, but executable custom sources are disabled in Restricted Mode.",
+      "restrictedConfigurations": [
+        "common-intellisense.remoteUris",
+        "common-intellisense.remoteNpmUris",
+        "common-intellisense.localUris",
+        "common-intellisense.trustedHosts",
+        "common-intellisense.legacyAdapterAllowlist",
+        "common-intellisense.allowLegacyAdapters"
+      ]
+    }
   }
 }

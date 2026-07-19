@@ -133,7 +133,21 @@
 
 ## 如何支持私有库
 
-如果你的项目是私有库，你同样可以参考 [vuetify](https://github.com/common-intellisense/vuetify3), 提供一个导出的 uri，如果你的 uri 是一个可访问的的打包后的 `dist/index.cjs` 的地址，在 vscode `common-intellisense.remoteUris`，配置这个链接，插件会去请求这个链接，获取对应的提示信息。你也可以直接配置一个 npm 包名(@xx/yy-ui)， 在 `common-intellisense.remoteNpmUris` 中配置，这样插件会去请求 npm 包产出的 `dist/index.cjs`，获取对应的提示信息。[B 站视频](https://www.bilibili.com/video/BV1zn2oYUEQG/)
+私有库建议通过 `remoteUris`、`remoteNpmUris` 或 `localUris` 提供纯数据 manifest。为保证 SSRF 防护，`remoteUris` 使用直连且固定 DNS 解析结果的传输方式，目前不会继承 VS Code、`HTTP_PROXY` 或 `HTTPS_PROXY` 代理配置；仅能通过企业代理联网时，请优先使用 `remoteNpmUris` 或工作区内的 `localUris` 数据 manifest：
+
+```json
+{
+  "schemaVersion": 1,
+  "exports": {
+    "myUiComponents": { "map": [], "lib": "my-ui" },
+    "myUi": { "uiName": "myUi", "lib": "my-ui", "map": [] }
+  }
+}
+```
+
+**迁移提示：**自定义来源的旧 CommonJS 适配器属于可执行代码，现已默认禁用，并且在 Restricted Mode 中始终禁用。请将现有私有适配器迁移到上面的 data-only manifest。仅通过 `common-intellisense.legacyAdapterAllowlist` 按迁移警告中显示的精确来源身份和 SHA-256 摘要批准可信旧来源。已弃用的 `common-intellisense.allowLegacyAdapters` 只是紧急兼容开关，会授权所有已配置的自定义来源并扩大可执行代码信任边界。`localUris` 只允许工作区内部文件。
+
+Slot CodeLens 当前仅支持 Vue 与 Vine；在提供 React 专属子节点插入语法前，React/TSX Slot CodeLens 保持禁用。
 
 ## 如何配置组件的json
 ```json

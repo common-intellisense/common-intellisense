@@ -1,0 +1,792 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { findUpMock, fetchMock, localFetchMock, localSourceId, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock, resolveInstalledVersionMock, readFileMock } = vi.hoisted(() => ({
+  findUpMock: vi.fn(),
+  fetchMock: vi.fn(),
+  localFetchMock: vi.fn(async (_root?: string) => ({})),
+  localSourceId: { value: 'local:test' },
+  remoteFetchMock: vi.fn(async () => ({})),
+  npmFetchMock: vi.fn(async () => ({})),
+  resolveLocalAdapterFileMock: vi.fn(),
+  getConfigurationMock: vi.fn<(key: string) => unknown>(() => null),
+  watchFileMock: vi.fn(() => () => {}),
+  resolveInstalledVersionMock: vi.fn(async () => '5.0.0'),
+  readFileMock: vi.fn<(filePath?: string) => Promise<string>>(async () => JSON.stringify({ dependencies: { antd: '^5.0.0' } })),
+}))
+
+vi.mock('find-up', () => ({ findUp: findUpMock }))
+vi.mock('@vscode-use/utils', () => ({
+  createLog: () => ({ info: vi.fn(), error: vi.fn() }),
+  getConfiguration: getConfigurationMock,
+  getCurrentFileUrl: vi.fn(),
+  getRootPath: () => '/workspace',
+  watchFile: watchFileMock,
+}))
+vi.mock('node:fs/promises', () => ({
+  default: {
+    readFile: readFileMock,
+    writeFile: vi.fn(),
+    access: vi.fn(),
+  },
+}))
+vi.mock('../../src/services/fetch', () => ({
+  fetchFromCommonIntellisense: fetchMock,
+  resolveLocalAdapterFile: resolveLocalAdapterFileMock,
+  fetchLocalSourceResults: async (root?: string) => [{ id: localSourceId.value, status: 'success', value: await localFetchMock(root) }],
+  fetchRemoteNpmSourceResults: async () => [{ id: 'npm:test', status: 'success', value: await npmFetchMock() }],
+  fetchRemoteUrlSourceResults: async () => {
+    const value = await remoteFetchMock()
+    return Array.isArray(value) ? value : [{ id: 'http:test', status: 'success', value, configurationIndex: 0 }]
+  },
+  getLocalCache: Promise.resolve('done'),
+  writeLocalCache: vi.fn(async () => {}),
+}))
+vi.mock('../../src/services/package-version', () => ({
+  clearPackageVersionCache: vi.fn(),
+  resolveInstalledPackageVersion: resolveInstalledVersionMock,
+}))
+vi.mock('../../src/type-extract/cache', () => ({ clearTypeCache: vi.fn() }))
+vi.mock('../../src/constants', () => ({ UINames: ['antd'], nameMap: {} }))
+
+describe('package context generations', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    findUpMock.mockReset()
+    fetchMock.mockReset()
+    localFetchMock.mockReset().mockResolvedValue({})
+    localSourceId.value = 'local:test'
+    remoteFetchMock.mockReset().mockResolvedValue({})
+    npmFetchMock.mockReset().mockResolvedValue({})
+    resolveLocalAdapterFileMock.mockReset().mockImplementation(async (root: string, uri: string) => `${root}/${uri}`)
+    getConfigurationMock.mockReset().mockReturnValue(null)
+    watchFileMock.mockReset().mockImplementation(() => () => {})
+    resolveInstalledVersionMock.mockReset().mockResolvedValue('5.0.0')
+    readFileMock.mockReset().mockResolvedValue(JSON.stringify({ dependencies: { antd: '^5.0.0' } }))
+  })
+
+  it('does not let a context started before global invalidation commit later', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveFetch!: (value: any) => void
+    fetchMock.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    const pending = mod.ensureContextForPath('/workspace/src/App.tsx', context, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidateContexts()
+    resolveFetch({})
+
+    await expect(pending).resolves.toBeUndefined()
+    expect(mod.getContextForDocumentPath('/workspace/src/App.tsx')).toBeUndefined()
+  })
+
+  it('rejects every waiter joined to a globally invalidated context load', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveOld!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const first = mod.ensureContextForPath(documentPath, context, () => {})
+    const joined = mod.ensureContextForPath(documentPath, context, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidateContexts()
+    resolveOld({})
+
+    await expect(first).resolves.toBeUndefined()
+    await expect(joined).resolves.toBeUndefined()
+    expect(mod.getContextForDocumentPath(documentPath)).toBeUndefined()
+
+    await expect(mod.ensureContextForPath(documentPath, context, () => {})).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a package context invalidated while its first load is in flight', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveFirst!: (value: any) => void
+    let resolveSecond!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const first = mod.ensureContextForPath(documentPath, context, () => {})
+    const joined = mod.ensureContextForPath(documentPath, context, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidatePackageContext(documentPath)
+    const second = mod.ensureContextForPath(documentPath, context, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    resolveFirst({})
+    await expect(first).resolves.toBeUndefined()
+    await expect(joined).resolves.toBeUndefined()
+    expect(mod.getContextForDocumentPath(documentPath)).toBeUndefined()
+
+    resolveSecond({})
+    await expect(second).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
+    expect(mod.getContextForDocumentPath(documentPath)?.pkgPath).toBe('/workspace/package.json')
+  })
+
+  it('registers every document that joins an in-flight package load', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveFetch!: (value: any) => void
+    fetchMock.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const firstDocument = '/workspace/src/A.tsx'
+    const secondDocument = '/workspace/src/B.tsx'
+
+    const first = mod.ensureContextForPath(firstDocument, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    const second = mod.ensureContextForPath(secondDocument, {} as any, () => {}, false, '/workspace')
+    resolveFetch({})
+    const [firstContext, secondContext] = await Promise.all([first, second])
+
+    expect(secondContext).toBe(firstContext)
+    expect(mod.getContextForDocumentPath(firstDocument)).toBe(firstContext)
+    expect(mod.getContextForDocumentPath(secondDocument)).toBe(firstContext)
+  })
+
+  it('rebuilds when package.json changes before the first context commits', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    resolveInstalledVersionMock.mockResolvedValue(undefined as any)
+    let manifest = JSON.stringify({ dependencies: { antd: '^4.0.0' } })
+    readFileMock.mockImplementation(async () => manifest)
+    let resolveFirst!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const pending = mod.ensureContextForPath('/workspace/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    manifest = JSON.stringify({ dependencies: { antd: '^5.0.0' } })
+    resolveFirst({})
+    const context = await pending
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toBe('antd4')
+    expect(fetchMock.mock.calls[1][0]).toBe('antd5')
+    expect(context?.uiNames).toEqual(['antd5'])
+    expect(mod.getContextRegistryStats().watchers).toBe(1)
+  })
+
+  it('rebuilds when a monorepo root package.json changes before the first context commits', async () => {
+    const rootManifestPath = '/workspace/package.json'
+    const leafManifestPath = '/workspace/packages/app/package.json'
+    findUpMock.mockResolvedValue(leafManifestPath)
+    resolveInstalledVersionMock.mockResolvedValue(undefined as any)
+    let rootManifest = JSON.stringify({ workspaces: ['packages/*'], dependencies: { antd: '^4.0.0' } })
+    const leafManifest = JSON.stringify({ name: 'app' })
+    readFileMock.mockImplementation(async (filePath: any) => filePath === rootManifestPath ? rootManifest : leafManifest)
+    let resolveFirst!: (value: any) => void
+    fetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const pending = mod.ensureContextForPath('/workspace/packages/app/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    rootManifest = JSON.stringify({ workspaces: ['packages/*'], dependencies: { antd: '^5.0.0' } })
+    resolveFirst({})
+    const context = await pending
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toBe('antd4')
+    expect(fetchMock.mock.calls[1][0]).toBe('antd5')
+    expect(context?.uiNames).toEqual(['antd5'])
+    expect(mod.getContextRegistryStats().watchers).toBe(1)
+  })
+
+  it('does not register package watchers after an in-flight load is invalidated', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    let resolveFetch!: (value: any) => void
+    fetchMock.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    const pending = mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidatePackageContext(documentPath)
+    resolveFetch({})
+
+    await expect(pending).resolves.toBeUndefined()
+    expect(watchFileMock).not.toHaveBeenCalledWith('/workspace/package.json', expect.anything())
+    expect(mod.getContextRegistryStats().watchers).toBe(0)
+  })
+
+  it('notifies listeners when a package context is invalidated and rebuilt', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const invalidated = vi.fn()
+    const updated = vi.fn()
+    const invalidationSubscription = mod.onPackageContextsInvalidated(invalidated)
+    const updateSubscription = mod.onPackageContextUpdated(updated)
+
+    await mod.ensureContextForPath('/workspace/src/App.tsx', context, () => {})
+    mod.invalidatePackageContext('/workspace/src/App.tsx')
+
+    expect(updated).toHaveBeenCalledTimes(1)
+    expect(invalidated).toHaveBeenCalledWith(['/workspace/package.json'])
+    invalidationSubscription.dispose()
+    updateSubscription.dispose()
+  })
+
+  it('publishes official completions before a custom source resolves', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({
+      antd5: () => ({ Button: { completions: [], events: [], methods: [], exposed: [], slots: [], suggestions: [] } }),
+    })
+    remoteFetchMock.mockReturnValue(new Promise(() => {}))
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    const result = await Promise.race([
+      mod.ensureContextForPath('/workspace/src/App.tsx', context, () => {}, false, '/workspace'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('official baseline was blocked')), 100)),
+    ]) as any
+
+    expect(result?.uiCompletions?.Button).toBeDefined()
+    expect(remoteFetchMock).toHaveBeenCalled()
+  })
+
+  it('publishes fast custom sources without waiting for a pending remote URL', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    remoteFetchMock.mockReturnValue(new Promise(() => {}))
+    localFetchMock.mockResolvedValue({ LocalProps: () => ({ LocalButton: { source: 'local' } }) })
+    npmFetchMock.mockResolvedValue({ NpmProps: () => ({ NpmButton: { source: 'npm' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const updated = vi.fn()
+    mod.onPackageContextUpdated(updated)
+
+    await mod.ensureContextForPath('/workspace/src/App.tsx', {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => {
+      const contexts = updated.mock.calls.map(call => call[0])
+      expect(contexts.some(value => value.uiCompletions?.LocalButton)).toBe(true)
+      expect(contexts.some(value => value.uiCompletions?.NpmButton)).toBe(true)
+    })
+    expect(remoteFetchMock).toHaveBeenCalledTimes(1)
+    const latestLocalContext = updated.mock.calls.map(call => call[0]).find(value => value.uiCompletions?.LocalButton)
+    expect(mod.getSourceScope(latestLocalContext, 'local-props')).toMatchObject({ key: 'custom:local:test:LocalProps', lib: 'LocalProps' })
+  })
+
+  it('starts custom sources for a new package generation while the old generation is pending', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    let resolveOldRemote!: (value: any) => void
+    remoteFetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOldRemote = resolve }))
+      .mockResolvedValueOnce({ Gen2Props: () => ({ Gen2Button: { source: 'gen2' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    const first = await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidatePackageContext(documentPath)
+    const second = await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+
+    expect(second?.generation).toBeGreaterThan(first?.generation || 0)
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Gen2Button).toBeDefined())
+
+    resolveOldRemote({ OldProps: () => ({ OldButton: { source: 'gen1' } }) })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldButton).toBeUndefined()
+  })
+
+  it('maps a custom manifest canonical package name to its completion scope', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    localFetchMock.mockResolvedValue({
+      VendorProps: () => ({ VendorButton: { lib: '@vendor/ui', source: 'manifest' } }),
+    })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.VendorButton).toBeDefined())
+
+    const context = mod.getContextForDocumentPath(documentPath)!
+    expect(mod.getSourceScope(context, '@vendor/ui/button')).toMatchObject({ key: 'custom:local:test:VendorProps', exactLib: '@vendor/ui' })
+  })
+
+  it('merges same-class custom sources in configuration order instead of source-id order', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    remoteFetchMock.mockResolvedValue([
+      { id: 'http:zzz', status: 'success', configurationIndex: 0, value: { privateUi: () => ({ Button: { marker: 'first' } }) } },
+      { id: 'http:aaa', status: 'success', configurationIndex: 1, value: { privateUi: () => ({ Button: { marker: 'second' } }) } },
+    ])
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toMatchObject({ marker: 'second' }))
+  })
+
+  it('keeps source-scoped caches when custom sources reuse an export key', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    const sourceA = { lib: '@a/ui', marker: 'a', methods: [{ name: 'a' }] }
+    const sourceB = { lib: '@b/ui', marker: 'b', methods: [{ name: 'b' }] }
+    localFetchMock.mockResolvedValue({ privateUi: () => ({ Button: sourceA }) })
+    remoteFetchMock.mockResolvedValue({ privateUi: () => ({ Button: sourceB }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getSourceScope(mod.getContextForDocumentPath(documentPath)!, '@b/ui')).toBeDefined())
+
+    const context = mod.getContextForDocumentPath(documentPath)!
+    const scopeA = mod.getSourceScope(context, '@a/ui')!
+    const scopeB = mod.getSourceScope(context, '@b/ui')!
+    expect(scopeA.key).toBe('custom:local:test:privateUi')
+    expect(scopeB.key).toBe('custom:http:test:privateUi')
+    expect(context.cacheMap.get(scopeA.key).Button).toBe(sourceA)
+    expect(context.cacheMap.get(scopeB.key).Button).toBe(sourceB)
+    expect(context.uiCompletions?.Button).toBe(sourceB)
+  })
+
+  it('removes metadata deleted by a successful custom-source refresh', async () => {
+    let now = 3_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    localFetchMock
+      .mockResolvedValueOnce({ CustomProps: () => ({ OldButton: { source: 'old' } }) })
+      .mockResolvedValueOnce({ CustomProps: () => ({ NewButton: { source: 'new' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldButton).toBeDefined())
+    now += 6 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.NewButton).toBeDefined())
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldButton).toBeUndefined()
+    nowSpy.mockRestore()
+  })
+
+  it('keeps the last-known-good source snapshot when refreshed exports fail reduction', async () => {
+    let now = 3_250_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    localFetchMock
+      .mockResolvedValueOnce({ CustomProps: () => ({ StableButton: { source: 'old' } }) })
+      .mockResolvedValueOnce({ CustomProps: () => { throw new Error('broken reducer') } })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.StableButton).toBeDefined())
+    const checkedAt = mod.getContextForDocumentPath(documentPath)!.customSourcesCheckedAt
+    now += 6 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customFailureCount).toBe(1))
+    const context = mod.getContextForDocumentPath(documentPath)!
+    expect(context.uiCompletions?.StableButton).toMatchObject({ source: 'old' })
+    expect(context.customSourcesCheckedAt).toBe(checkedAt)
+    expect(context.customNextRetryAt).toBeGreaterThan(now)
+    nowSpy.mockRestore()
+  })
+
+  it('keeps a slow failing local snapshot while a fast HTTP refresh publishes', async () => {
+    let now = 3_400_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    let rejectLocal!: (error: Error) => void
+    localFetchMock
+      .mockResolvedValueOnce({ LocalProps: () => ({ LocalButton: { source: 'local-old' } }) })
+      .mockResolvedValueOnce({ LocalProps: () => new Promise((_resolve, reject) => { rejectLocal = reject }) })
+    remoteFetchMock
+      .mockResolvedValueOnce({ RemoteProps: () => ({ RemoteV1: { source: 'remote-old' } }) })
+      .mockResolvedValueOnce({ RemoteProps: () => ({ RemoteV2: { source: 'remote-new' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => {
+      const context = mod.getContextForDocumentPath(documentPath)
+      expect(context?.uiCompletions?.LocalButton).toBeDefined()
+      expect(context?.uiCompletions?.RemoteV1).toBeDefined()
+    })
+
+    now += 6 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => {
+      const context = mod.getContextForDocumentPath(documentPath)
+      expect(context?.uiCompletions?.RemoteV2).toBeDefined()
+      expect(context?.uiCompletions?.LocalButton).toMatchObject({ source: 'local-old' })
+    })
+
+    rejectLocal(new Error('slow local reduction failed'))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customFailureCount).toBe(1))
+    const finalContext = mod.getContextForDocumentPath(documentPath)
+    expect(finalContext?.uiCompletions?.LocalButton).toMatchObject({ source: 'local-old' })
+    expect(finalContext?.uiCompletions?.RemoteV2).toMatchObject({ source: 'remote-new' })
+    nowSpy.mockRestore()
+  })
+
+  it('replays the last successful custom snapshot onto a refreshed official baseline', async () => {
+    let now = 3_500_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV1: { lib: 'antd' } }) })
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV2: { lib: 'antd' } }) })
+    localFetchMock
+      .mockResolvedValueOnce({ CustomProps: () => ({ CustomButton: { source: 'custom' } }) })
+      .mockReturnValueOnce(new Promise(() => {}))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.CustomButton).toBeDefined())
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV2).toBeDefined())
+    const refreshed = mod.getContextForDocumentPath(documentPath)
+    expect(refreshed?.uiCompletions?.CustomButton).toBeDefined()
+    expect(refreshed?.uiCompletions?.OfficialV1).toBeUndefined()
+    nowSpy.mockRestore()
+  })
+
+  it('re-reduces custom snapshots when official runtime version context changes', async () => {
+    let now = 3_750_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    resolveInstalledVersionMock.mockResolvedValueOnce('5.1.0').mockResolvedValue('5.2.0')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    localFetchMock
+      .mockResolvedValueOnce({ antd5: (options: any) => ({ CustomButton: { versionMarker: options.installedVersion } }) })
+      .mockReturnValueOnce(new Promise(() => {}))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.CustomButton?.versionMarker).toBe('5.1.0'))
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.CustomButton?.versionMarker).toBe('5.2.0'))
+    nowSpy.mockRestore()
+  })
+
+  it('does not let an old custom reduction overwrite a newer official context', async () => {
+    let now = 4_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV1: { lib: 'antd' } }) })
+      .mockResolvedValueOnce({ antd5: () => ({ OfficialV2: { lib: 'antd' } }) })
+    let resolveOld!: (value: any) => void
+    localFetchMock
+      .mockResolvedValueOnce({ SlowProps: () => new Promise((resolve) => { resolveOld = resolve }) })
+      .mockResolvedValueOnce({})
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(localFetchMock).toHaveBeenCalledTimes(1))
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV2).toBeDefined())
+
+    resolveOld({ OldCustom: { source: 'stale' } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV2).toBeDefined()
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OfficialV1).toBeUndefined()
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.OldCustom).toBeUndefined()
+    nowSpy.mockRestore()
+  })
+
+  it('does not republish stale custom enhancement after global invalidation', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    let resolveRemote!: (value: any) => void
+    remoteFetchMock
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRemote = resolve }))
+      .mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(1))
+    mod.invalidateContexts()
+    resolveRemote({ StaleProps: () => ({ stale: true }) })
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, '/workspace')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache a missing package root', async () => {
+    findUpMock.mockResolvedValueOnce(undefined).mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/new-package/src/App.tsx'
+
+    await expect(mod.ensureContextForPath(documentPath, context, () => {})).resolves.toBeUndefined()
+    await expect(mod.ensureContextForPath(documentPath, context, () => {})).resolves.toMatchObject({ pkgPath: '/workspace/package.json' })
+    expect(findUpMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('refreshes a cached parent when a nearer package is created', async () => {
+    findUpMock.mockImplementation(async () => '/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/packages/new/src/App.tsx'
+
+    const parent = await mod.ensureContextForPath(documentPath, context, () => {})
+    findUpMock.mockImplementation(async () => '/workspace/packages/new/package.json')
+    mod.invalidateDocumentPackageMappingsForManifest('/workspace/packages/new/package.json')
+    const nested = await mod.ensureContextForPath(documentPath, context, () => {})
+
+    expect(parent?.pkgPath).toBe('/workspace/package.json')
+    expect(nested?.pkgPath).toBe('/workspace/packages/new/package.json')
+  })
+
+  it('reuses positive package discovery across repeated provider requests', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    for (let index = 0; index < 100; index++)
+      await mod.ensureContextForPath(documentPath, context, () => {})
+
+    // One lookup resolves the document; findPkgUI performs one lookup while the
+    // context is initially built. Subsequent provider calls perform neither.
+    expect(findUpMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns cached context and revalidates stale custom sources once in the background', async () => {
+    let now = 1_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({ antd5: () => ({}) })
+    remoteFetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const baseline = await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customSourcesCheckedAt).toBe(now))
+    now += 6 * 60 * 1000
+
+    const existing = await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+    await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+
+    expect(existing?.generation).toBe(baseline?.generation)
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalledTimes(2))
+    nowSpy.mockRestore()
+  })
+
+  it('deduplicates stale official source revalidation while returning cached context', async () => {
+    let now = 2_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+    const documentPath = '/workspace/src/App.tsx'
+
+    const baseline = await mod.ensureContextForPath(documentPath, extensionContext, () => {})
+    await vi.waitFor(() => expect(remoteFetchMock).toHaveBeenCalled())
+    now += 11 * 60 * 1000
+    const [first, second] = await Promise.all([
+      mod.ensureContextForPath(documentPath, extensionContext, () => {}),
+      mod.ensureContextForPath(documentPath, extensionContext, () => {}),
+    ])
+
+    expect(first).toBe(second)
+    expect(first?.generation).toBe(baseline?.generation)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    nowSpy.mockRestore()
+  })
+
+  it('bounds inactive package contexts after documents close', async () => {
+    findUpMock.mockImplementation(async (_name: string, options: any) => {
+      const match = String(options.cwd).match(/\/workspace\/pkg-(\d+)/)
+      return match ? `/workspace/pkg-${match[1]}/package.json` : '/workspace/package.json'
+    })
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const extensionContext = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    for (let index = 0; index < 25; index++) {
+      const documentPath = `/workspace/pkg-${index}/src/App.tsx`
+      await mod.ensureContextForPath(documentPath, extensionContext, () => {}, false, `/workspace/pkg-${index}`)
+      mod.releaseDocumentContext(documentPath)
+    }
+
+    expect(mod.getContextRegistryStats()).toMatchObject({ contexts: 20, documents: 0, rootWorkspaces: 20 })
+  })
+
+  it('does not install a local-source watcher after its context is invalidated', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    getConfigurationMock.mockImplementation((key: string) => key === 'common-intellisense.localUris' ? ['adapter.js'] : null)
+    let resolveAdapter!: (value: string) => void
+    resolveLocalAdapterFileMock.mockReturnValue(new Promise<string>((resolve) => { resolveAdapter = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(resolveLocalAdapterFileMock).toHaveBeenCalled())
+    mod.invalidatePackageContext(documentPath)
+    resolveAdapter('/workspace/adapter.js')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(watchFileMock).not.toHaveBeenCalledWith('/workspace/adapter.js', expect.anything())
+    expect(mod.getContextRegistryStats().localWatchers).toBe(0)
+  })
+
+  it('watches local-source aliases and removes their lexical snapshot after deletion', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    getConfigurationMock.mockImplementation((key: string) => key === 'common-intellisense.localUris' ? ['adapter-link.js'] : null)
+    localSourceId.value = 'local:/workspace/adapter-link.js'
+    localFetchMock.mockResolvedValue({ LocalProps: () => ({ LocalButton: { lib: 'local' } }) })
+    resolveLocalAdapterFileMock.mockResolvedValue('/workspace/real/adapter.js')
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customSourceSnapshots.has(localSourceId.value)).toBe(true))
+    await vi.waitFor(() => {
+      expect(watchFileMock).toHaveBeenCalledWith('/workspace/adapter-link.js', expect.objectContaining({ onDelete: expect.any(Function) }))
+      expect(watchFileMock).toHaveBeenCalledWith('/workspace/real/adapter.js', expect.objectContaining({ onDelete: expect.any(Function) }))
+    })
+
+    resolveLocalAdapterFileMock.mockResolvedValue(undefined)
+    await mod.handleLocalSourceChanged('/workspace', '/workspace/adapter-link.js')
+
+    expect(mod.getContextForDocumentPath(documentPath)?.customSourceSnapshots.has(localSourceId.value)).toBe(false)
+  })
+
+  it('retains root resources while a sibling context is still loading', async () => {
+    findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/pkg-a/')
+      ? '/workspace/pkg-a/package.json'
+      : '/workspace/pkg-b/package.json')
+    let resolveSibling!: (value: any) => void
+    fetchMock
+      .mockResolvedValueOnce({})
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSibling = resolve }))
+    const mod = await import('../../src/ui/ui-find')
+    const firstDocument = '/workspace/pkg-a/src/App.tsx'
+    const siblingDocument = '/workspace/pkg-b/src/App.tsx'
+
+    await mod.ensureContextForPath(firstDocument, {} as any, () => {}, false, '/workspace')
+    const sibling = mod.ensureContextForPath(siblingDocument, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    mod.invalidatePackageContext(firstDocument)
+
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(1)
+    resolveSibling({})
+    await expect(sibling).resolves.toMatchObject({ pkgPath: '/workspace/pkg-b/package.json' })
+  })
+
+  it('retains shared workspace resources until its last context is removed', async () => {
+    findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/pkg-a/')
+      ? '/workspace/pkg-a/package.json'
+      : '/workspace/pkg-b/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+
+    await mod.ensureContextForPath('/workspace/pkg-a/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    await mod.ensureContextForPath('/workspace/pkg-b/src/App.tsx', {} as any, () => {}, false, '/workspace')
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(1)
+
+    mod.invalidatePackageContext('/workspace/pkg-a/src/App.tsx')
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(1)
+    mod.invalidatePackageContext('/workspace/pkg-b/src/App.tsx')
+    expect(mod.getContextRegistryStats().rootWorkspaces).toBe(0)
+  })
+
+  it('backs off an initial undefined official result and retries after 30 seconds', async () => {
+    let now = 4_500_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ antd5: () => ({ Button: { lib: 'antd' } }) })
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    const initial = await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(initial?.officialFailureCount).toBe(1)
+    expect(initial?.officialCheckedAt).toBe(0)
+    for (let index = 0; index < 100; index++)
+      await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    now += 31_000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toBeDefined())
+    nowSpy.mockRestore()
+  })
+
+  it('retains last-known-good official metadata when a stale refresh fails', async () => {
+    let now = 5_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock
+      .mockResolvedValueOnce({ antd5: () => ({ Button: { lib: 'antd' } }) })
+      .mockRejectedValueOnce(new Error('registry offline'))
+      .mockRejectedValueOnce(new Error('still offline'))
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toBeDefined()
+    now += 11 * 60 * 1000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.officialNextRetryAt).toBeGreaterThan(now))
+    for (let index = 0; index < 100; index++)
+      await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    now += 31_000
+    await mod.ensureContextForPath(documentPath, {} as any, () => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(mod.getContextForDocumentPath(documentPath)?.uiCompletions?.Button).toBeDefined()
+    nowSpy.mockRestore()
+  })
+
+  it('discovers a nested package instead of reusing a loaded parent context', async () => {
+    findUpMock.mockImplementation(async (_name: string, options: any) => options.cwd.includes('/nested/')
+      ? '/workspace/nested/package.json'
+      : '/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    const mod = await import('../../src/ui/ui-find')
+    const context = { globalStorageUri: { fsPath: '/tmp' } } as any
+
+    const parent = await mod.ensureContextForPath('/workspace/src/App.tsx', context, () => {})
+    const nested = await mod.ensureContextForPath('/workspace/nested/src/App.tsx', context, () => {})
+
+    expect(parent?.pkgPath).toBe('/workspace/package.json')
+    expect(nested?.pkgPath).toBe('/workspace/nested/package.json')
+  })
+})

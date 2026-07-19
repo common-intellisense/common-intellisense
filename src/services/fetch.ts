@@ -1,32 +1,204 @@
-import { existsSync } from 'node:fs'
+import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
+import dns from 'node:dns/promises'
 import fsp from 'node:fs/promises'
+import http from 'node:http'
+import https from 'node:https'
+import os from 'node:os'
+import process from 'node:process'
 import path from 'node:path'
-import vm from 'node:vm'
+import { isIP } from 'node:net'
+import * as vscode from 'vscode'
 import { fetchAndExtractPackage } from '@simon_he/fetch-npm'
 import { latestVersion } from '@simon_he/latest-version'
 import { createFakeProgress, getConfiguration, getLocale, getRootPath, message } from '@vscode-use/utils'
-import { ofetch } from 'ofetch'
 import { componentsReducer, propsReducer } from '../ui/utils'
 import { logger } from '../ui/ui-find'
 import { fetchFromCjsForCommonIntellisense } from '@simon_he/fetch-npm-cjs'
-import { getPrefix } from '../ui/ui-utils'
 import { fetchFromTypes } from '../type-extract'
+import { normalizeAdapterManifestExports } from './adapter-manifest'
+import { runLegacyAdapterInWorker } from './legacy-adapter-worker'
 
 const prefix = '@common-intellisense/'
 
-export const cacheFetch = new Map()
-export const localCacheUri = path.resolve(__dirname, 'mapping.json')
+interface AdapterRuntimeOptions {
+  resolveFrom?: string
+  installedVersion?: string
+  adapterMajor?: string
+}
+
+export const cacheFetch = new Map<string, string>()
+const warnedLegacyAdapterSources = new Set<string>()
+const legacyMigrationUrl = 'https://github.com/common-intellisense/common-intellisense#explain-configuration'
+
+export function displayAdapterSource(source: string) {
+  try {
+    const target = new URL(source)
+    target.username = ''
+    target.password = ''
+    target.search = ''
+    target.hash = ''
+    return target.toString()
+  }
+  catch {
+    return source.split(/[?#]/, 1)[0]
+  }
+}
+
+function sanitizeRemoteError(error: unknown) {
+  const message = String(error instanceof Error ? error.message : error)
+    .replace(/https?:\/\/\S+/g, value => displayAdapterSource(value))
+  return new Error(message)
+}
+
+function requireRemoteUri(value: unknown) {
+  if (typeof value !== 'string' || !value.trim())
+    throw new Error('Invalid remote URI configuration')
+  try {
+    const target = new URL(value)
+    if (target.protocol !== 'http:' && target.protocol !== 'https:')
+      throw new Error('Unsupported remote URI protocol')
+  }
+  catch {
+    throw new Error('Invalid remote URI configuration')
+  }
+  return value
+}
+
+export function getRemoteSourceIdentity(uri: string) {
+  const digest = createHash('sha256').update(uri).digest('hex')
+  return {
+    requestUri: uri,
+    cacheKey: `remote:${digest}`,
+    id: `http:${digest}`,
+    displayName: displayAdapterSource(uri),
+  }
+}
+
+/** Warn once per source and session when a custom executable adapter is blocked. */
+export function notifyLegacyAdapterBlocked(source: string, approval?: string) {
+  const warningKey = approval || source
+  if (warnedLegacyAdapterSources.has(warningKey))
+    return
+  warnedLegacyAdapterSources.add(warningKey)
+  const visibleSource = displayAdapterSource(source)
+  const restricted = vscode.workspace?.isTrusted === false
+  const reason = restricted ? 'Executable adapters are disabled in Restricted Mode.' : 'Executable adapters require source-scoped approval.'
+  const approvalHint = approval ? ` Add this exact entry to common-intellisense.legacyAdapterAllowlist: ${approval}.` : ''
+  const warning = `${reason} Blocked ${visibleSource}.${approvalHint} Migrate to a data-only manifest, or use the deprecated global escape hatch only for fully trusted configurations.`
+  const showWarningMessage = vscode.window?.showWarningMessage
+  if (typeof showWarningMessage !== 'function')
+    return
+  void Promise.resolve(showWarningMessage(warning, 'Open Settings', 'Migration Guide')).then((action) => {
+    if (action === 'Open Settings')
+      return vscode.commands?.executeCommand?.('workbench.action.openSettings', 'common-intellisense.legacyAdapterAllowlist')
+    if (action === 'Migration Guide' && vscode.env?.openExternal && vscode.Uri?.parse)
+      return vscode.env.openExternal(vscode.Uri.parse(legacyMigrationUrl))
+  }).catch(error => logger.error(`Failed to show legacy adapter migration warning: ${String(error)}`))
+}
+const cacheSchemaVersion = 3
+const maxCacheSize = 16 * 1024 * 1024
+const maxCacheEntrySize = 8 * 1024 * 1024
+const maxCacheEntries = 100
+
+function isPersistentFetchCacheKey(key: string) {
+  return key.startsWith('official:') || key.startsWith('remote:') || key.startsWith('remote-npm:')
+}
+
+function cacheEntrySize(key: string, value: string) {
+  return Buffer.byteLength(key) + Buffer.byteLength(value)
+}
+
+function getCacheByteSize() {
+  let total = 0
+  for (const [key, value] of cacheFetch)
+    total += cacheEntrySize(key, value)
+  return total
+}
+
+function pruneFetchCache() {
+  let bytes = getCacheByteSize()
+  while (cacheFetch.size > maxCacheEntries || bytes > maxCacheSize) {
+    const oldest = cacheFetch.entries().next().value as [string, string] | undefined
+    if (!oldest)
+      break
+    cacheFetch.delete(oldest[0])
+    bytes -= cacheEntrySize(oldest[0], oldest[1])
+  }
+}
+
+export function setFetchCacheEntry(key: string, value: string) {
+  if (cacheEntrySize(key, value) > maxCacheEntrySize) {
+    cacheFetch.delete(key)
+    return false
+  }
+  cacheFetch.delete(key)
+  cacheFetch.set(key, value)
+  pruneFetchCache()
+  return cacheFetch.get(key) === value
+}
+
+export function getFetchCacheEntry(key: string) {
+  if (!cacheFetch.has(key))
+    return
+  const value = cacheFetch.get(key)!
+  cacheFetch.delete(key)
+  cacheFetch.set(key, value)
+  return value
+}
+
+export function deleteFetchCacheEntry(key: string) {
+  return cacheFetch.delete(key)
+}
+
+export function getFetchCacheStats() {
+  return { entries: cacheFetch.size, bytes: getCacheByteSize() }
+}
+export let localCacheUri = path.join(os.tmpdir(), 'common-intellisense', 'mapping.json')
+let cacheReadTask: Promise<string> | null = null
+let cacheReadEpoch = 0
+let cacheWriteTask: Promise<void> = Promise.resolve()
+let cacheWriteEpoch = 0
+
+export function configureCacheStorage(storageUri: vscode.Uri | string) {
+  const storagePath = typeof storageUri === 'string' ? storageUri : storageUri.fsPath
+  localCacheUri = path.join(storagePath, 'mapping.json')
+  cacheReadEpoch++
+  cacheWriteEpoch++
+  cacheReadTask = null
+}
+
 const commonIntellisenseInFlight = new Map<string, Promise<any>>()
-let isRemoteHttpUrisInProgress = false
-let isRemoteNpmUrisInProgress = false
-let isLocalUrisInProgress = false
+// Third-party npm helpers do not expose cancellation. Preserve each raw task until
+// it actually settles so caller deadlines and cache resets cannot multiply it.
+const rawLatestVersionTasks = new Map<string, Promise<string>>()
+const rawNpmChannelTasks = new Map<string, Promise<string>>()
+const remoteHttpTasks = new Map<string, Promise<Record<string, any>>>()
+const remoteNpmTasks = new Map<string, Promise<Record<string, any>>>()
+const localTasks = new Map<string, Promise<Record<string, any>>>()
+const perSourceTasks = new Map<string, Promise<Omit<CustomSourceResult, 'configurationIndex'>>>()
+let sourceEpoch = 0
 const retry = 3
-const timeout = 600000 // 如果 10 分钟拿不到就认为是 proxy 问题
+const remoteRequestTimeout = 5_000
+const remoteTotalTimeout = 30_000
+const npmVersionDeadline = 15_000
+const npmDownloadDeadline = 30_000
 const remoteUriCacheTTL = 5 * 60 * 1000
+const latestVersionCacheTTL = 10 * 60 * 1000
+const latestVersionCache = new Map<string, { value: string, at: number }>()
 const remoteExecTimeout = 1200
 const maxRemoteScriptSize = 8 * 1024 * 1024
-const blockedExportKeys = new Set(['__proto__', 'prototype', 'constructor'])
+const maxAdapterResultSize = 8 * 1024 * 1024
+const maxTotalAdapterResultSize = 16 * 1024 * 1024
+const maxAdapterDepth = 30
+const maxAdapterArrayLength = 20_000
+const maxAdapterStringLength = 1_000_000
+const maxAdapterObjectKeys = 10_000
+const maxAdapterExports = 500
+const blockedExportKeys = new Set(['__proto__', 'prototype', 'constructor', 'then'])
 const remoteUriFetchedAt = new Map<string, number>()
+const remoteUriRetry = new Map<string, { failureCount: number, nextRetryAt: number }>()
+const remoteRetryDelays = [30_000, 2 * 60_000, 5 * 60_000]
 const isZh = getLocale()?.includes('zh')
 
 function mergeComponentsWithTypeFallback(remote: any[], fallback: any[]) {
@@ -55,6 +227,168 @@ function mergeComponentsWithTypeFallback(remote: any[], fallback: any[]) {
   })
 }
 
+function getLegacyConfigurationIdentity() {
+  return {
+    emergency: getConfiguration('common-intellisense.allowLegacyAdapters') === true,
+    allowlist: (getConfiguration('common-intellisense.legacyAdapterAllowlist') as string[] | undefined) || [],
+  }
+}
+
+export function getLegacyAdapterApproval(sourceId: string, content: string) {
+  return `${sourceId}#sha256:${createHash('sha256').update(content).digest('hex')}`
+}
+
+function isLegacyAdapterApproved(sourceId: string, content: string) {
+  if (vscode.workspace?.isTrusted === false)
+    return false
+  const configuration = getLegacyConfigurationIdentity()
+  return configuration.emergency || configuration.allowlist.includes(getLegacyAdapterApproval(sourceId, content))
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value))
+    return `[${value.map(stableStringify).join(',')}]`
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+    return `{${entries.join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
+}
+
+function getSourceTaskKey(kind: string, configuration: unknown, workspaceRoot?: string) {
+  return stableStringify({
+    kind,
+    root: workspaceRoot || getRootPath() || '',
+    configuration,
+    trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [],
+    legacy: getLegacyConfigurationIdentity(),
+    workspaceTrusted: vscode.workspace?.isTrusted !== false,
+  })
+}
+
+function parseIpv4(address: string) {
+  const parts = address.split('.').map(Number)
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255))
+    return
+  return parts.reduce((value, part) => (value << 8n) | BigInt(part), 0n)
+}
+
+function parseIpv6(address: string) {
+  if (address.includes('%'))
+    return
+  let input = address.toLowerCase()
+  const dottedIndex = input.lastIndexOf(':')
+  if (input.includes('.') && dottedIndex >= 0) {
+    const ipv4 = parseIpv4(input.slice(dottedIndex + 1))
+    if (ipv4 === undefined)
+      return
+    input = `${input.slice(0, dottedIndex)}:${(ipv4 >> 16n).toString(16)}:${(ipv4 & 0xFFFFn).toString(16)}`
+  }
+  const halves = input.split('::')
+  if (halves.length > 2)
+    return
+  const left = halves[0] ? halves[0].split(':') : []
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : []
+  const missing = 8 - left.length - right.length
+  if (missing < (halves.length === 2 ? 1 : 0))
+    return
+  const groups = [...left, ...Array.from({ length: missing }, () => '0'), ...right]
+  if (groups.length !== 8 || groups.some(group => !/^[0-9a-f]{1,4}$/.test(group)))
+    return
+  return groups.reduce((value, group) => (value << 16n) | BigInt(`0x${group}`), 0n)
+}
+
+function isInCidr(value: bigint, base: bigint, prefix: number, bits: number) {
+  const shift = BigInt(bits - prefix)
+  return (value >> shift) === (base >> shift)
+}
+
+const nonGlobalIpv4Cidrs: Array<[string, number]> = [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+]
+
+const nonGlobalIpv6Cidrs: Array<[string, number]> = [
+  ['::', 128],
+  ['::1', 128],
+  ['::ffff:0:0', 96],
+  ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  ['100::', 64],
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['3fff::', 20],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['fec0::', 10],
+  ['ff00::', 8],
+]
+
+/** Return true only for globally routable unicast IP addresses. */
+export function isGloballyRoutableAddress(address: string) {
+  const host = normalizeHostname(address)
+  if (isIP(host) === 4) {
+    const value = parseIpv4(host)
+    return value !== undefined && !nonGlobalIpv4Cidrs.some(([base, prefix]) => isInCidr(value, parseIpv4(base)!, prefix, 32))
+  }
+  if (isIP(host) === 6) {
+    const value = parseIpv6(host)
+    if (value === undefined)
+      return false
+    // Globally routable IPv6 unicast currently lives in 2000::/3. Keeping this
+    // allowlist conservative prevents new special-purpose ranges being accepted
+    // merely because they are absent from a denylist.
+    const globalUnicast = isInCidr(value, parseIpv6('2000::')!, 3, 128)
+    return globalUnicast && !nonGlobalIpv6Cidrs.some(([base, prefix]) => isInCidr(value, parseIpv6(base)!, prefix, 128))
+  }
+  return false
+}
+
+export function normalizeHostname(hostname: string) {
+  return hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
+}
+
+function isPrivateNetworkHost(hostname: string) {
+  const host = normalizeHostname(hostname)
+  if (host === 'localhost' || host.endsWith('.localhost'))
+    return true
+  return isIP(host) !== 0 && !isGloballyRoutableAddress(host)
+}
+
+export function isTrustedRedirectUri(uri: string) {
+  try {
+    const target = new URL(uri)
+    return target.protocol === 'https:' && !isPrivateNetworkHost(target.hostname)
+  }
+  catch {
+    return false
+  }
+}
+
+type ResolveHost = (hostname: string) => Promise<Array<{ address: string, family: number }>>
+
+function isExplicitlyTrustedHost(hostname: string) {
+  const trustedHosts = getConfiguration('common-intellisense.trustedHosts') as string[] | undefined
+  const normalized = normalizeHostname(hostname)
+  return Array.isArray(trustedHosts) && trustedHosts.some(host => normalizeHostname(host) === normalized)
+}
+
 function isTrustedRemoteUri(uri: string) {
   try {
     const target = new URL(uri)
@@ -63,93 +397,310 @@ function isTrustedRemoteUri(uri: string) {
     if (target.protocol !== 'http:')
       return false
 
-    if (['localhost', '127.0.0.1', '::1'].includes(target.hostname))
+    const hostname = normalizeHostname(target.hostname)
+    if (['localhost', '127.0.0.1', '::1'].includes(hostname))
       return true
 
-    const trustedHosts = getConfiguration('common-intellisense.trustedHosts') as string[] | undefined
-    return Array.isArray(trustedHosts) && trustedHosts.includes(target.hostname)
+    return isExplicitlyTrustedHost(hostname)
   }
   catch {
     return false
   }
 }
 
-function evaluateRemoteModule(scriptContent: string, source: string) {
-  if (typeof scriptContent !== 'string' || !scriptContent.trim())
-    throw new Error(`Remote module is empty: ${source}`)
-  if (scriptContent.length > maxRemoteScriptSize)
-    throw new Error(`Remote module is too large: ${source}`)
-
-  const module = { exports: {} as Record<string, any> }
-  const sandbox: Record<string, any> = {
-    module,
-    exports: module.exports,
-    require: undefined,
-    process: undefined,
-    global: undefined,
-    Function: undefined,
-    eval: undefined,
+function validateAdapterData(value: unknown, source: string, depth = 0): void {
+  if (depth > maxAdapterDepth)
+    throw new Error(`Adapter result is too deeply nested: ${source}`)
+  if (typeof value === 'string' && value.length > maxAdapterStringLength)
+    throw new Error(`Adapter string is too large: ${source}`)
+  if (Array.isArray(value)) {
+    if (value.length > maxAdapterArrayLength)
+      throw new Error(`Adapter array is too large: ${source}`)
+    value.forEach(item => validateAdapterData(item, source, depth + 1))
   }
-  const context = vm.createContext(sandbox)
-  const script = new vm.Script(scriptContent, { filename: source })
-  script.runInContext(context, { timeout: remoteExecTimeout })
-  return module.exports
-}
-
-function appendReducedExports(target: Record<string, any>, moduleExports: Record<string, any>, localeZh: boolean, source: string) {
-  for (const key in moduleExports) {
-    if (blockedExportKeys.has(key)) {
-      logger.error(isZh ? `已跳过不安全导出 key: ${key} (${source})` : `Skipped unsafe export key: ${key} (${source})`)
-      continue
-    }
-    const handler = moduleExports[key]
-    if (typeof handler !== 'function') {
-      logger.error(isZh ? `已跳过非函数导出 key: ${key} (${source})` : `Skipped non-function export: ${key} (${source})`)
-      continue
-    }
-
-    if (key.endsWith('Components')) {
-      target[key] = () => componentsReducer(handler(localeZh))
-    }
-    else {
-      target[key] = () => propsReducer(handler())
+  else if (value && typeof value === 'object') {
+    const entries = Object.entries(value)
+    if (entries.length > maxAdapterObjectKeys)
+      throw new Error(`Adapter object has too many keys: ${source}`)
+    for (const [key, child] of entries) {
+      if (blockedExportKeys.has(key))
+        throw new Error(`Unsafe adapter key: ${key} (${source})`)
+      validateAdapterData(child, source, depth + 1)
     }
   }
 }
 
-export const getLocalCache = new Promise((resolve) => {
-  if (existsSync(localCacheUri)) {
-    fsp.readFile(localCacheUri, 'utf-8').then((res) => {
-      logger.info(isZh ? `正在读取 ${localCacheUri} 中的数据` : `Reading data from ${localCacheUri}`)
-      try {
-        const oldMap = JSON.parse(res) as [string, string][]
-        oldMap.forEach(([key, value]) => {
-          if (value)
-            cacheFetch.set(key, value)
-        })
-      }
-      catch (error) {
-        logger.error(String(error))
-      }
-      resolve('done reading')
-      // 列出已有的 key
-      const cacheKey = Array.from(cacheFetch.keys()).join(' | ')
-      logger.info(isZh ? `缓存读取完成, 已缓存的 key: ${cacheKey}` : `Cache read complete, cached keys: ${cacheKey}`)
-    })
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+export function validateLegacyAdapterLimits(keys: string[], resultSizes: number[], source: string, limits = {
+  maxExports: maxAdapterExports,
+  maxSingleResultSize: maxAdapterResultSize,
+  maxTotalResultSize: maxTotalAdapterResultSize,
+}) {
+  if (keys.length > limits.maxExports)
+    throw new Error(`Adapter has too many exports: ${source}`)
+  let totalResultSize = 0
+  for (let index = 0; index < resultSizes.length; index++) {
+    const size = resultSizes[index]
+    if (size > limits.maxSingleResultSize)
+      throw new Error(`Adapter result is invalid or too large: ${source}#${keys[index] || index}`)
+    totalResultSize += size
+    if (totalResultSize > limits.maxTotalResultSize)
+      throw new Error(`Adapter results are too large in total: ${source}`)
   }
-  else {
-    resolve('done reading')
+  return totalResultSize
+}
+
+function assertAdapterInputSize(content: string, source: string) {
+  if (Buffer.byteLength(content, 'utf8') > maxRemoteScriptSize)
+    throw new Error(`Adapter is too large: ${source}`)
+}
+
+async function evaluateAdapter(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean) {
+  if (typeof scriptContent !== 'string')
+    throw new Error(`Adapter is empty: ${source}`)
+  assertAdapterInputSize(scriptContent, source)
+  // Normalize one UTF-8 BOM for parsing/evaluation. Source signatures remain
+  // based on the original bytes, so adding or removing a BOM still invalidates.
+  const normalizedContent = scriptContent.charCodeAt(0) === 0xFEFF ? scriptContent.slice(1) : scriptContent
+  if (!normalizedContent.trim())
+    throw new Error(`Adapter is empty: ${source}`)
+
+  // Prefer the data-only JSON protocol. Legacy CommonJS remains supported for compatibility.
+  try {
+    const manifest = JSON.parse(normalizedContent)
+    if (!isPlainObject(manifest) || manifest.schemaVersion !== 1 || !isPlainObject(manifest.exports))
+      throw new Error(`Unsupported adapter manifest schema: ${source}`)
+    const exportsData = manifest.exports as Record<string, unknown>
+    if (Object.keys(exportsData).length > maxAdapterExports)
+      throw new Error(`Adapter has too many exports: ${source}`)
+    validateAdapterData(exportsData, source)
+    return normalizeAdapterManifestExports(exportsData, source)
   }
-})
+  catch (error) {
+    if (!(error instanceof SyntaxError))
+      throw error
+  }
+
+  if (!allowLegacyCode) {
+    throw new Error(`Executable adapter blocked: ${source}`)
+  }
+
+  // Execute compatibility code in a terminable Worker. This is not a security
+  // sandbox, but the parent-owned wall-clock deadline protects Extension Host
+  // responsiveness even if code escapes node:vm into nextTick/timer queues.
+  const entries = await runLegacyAdapterInWorker(normalizedContent, source, localeZh, remoteExecTimeout, {
+    maxExports: maxAdapterExports,
+    maxSingleResultSize: maxAdapterResultSize,
+    maxTotalResultSize: maxTotalAdapterResultSize,
+  })
+  const keys = entries.map(([key]) => key)
+  const resultSizes = entries.map(([, json]) => Buffer.byteLength(json))
+  // Validate every byte budget before parsing any individual export.
+  validateLegacyAdapterLimits(keys, resultSizes, source)
+
+  const result: Record<string, unknown> = {}
+  for (const [key, json] of entries) {
+    const data = JSON.parse(json)
+    validateAdapterData(data, `${source}#${key}`)
+    result[key] = data
+  }
+  return result
+}
+
+async function evaluateAdapterForEpoch(scriptContent: string, source: string, localeZh: boolean, allowLegacyCode: boolean, expectedEpoch: number) {
+  if (sourceEpoch !== expectedEpoch)
+    throw new Error(`Adapter source invalidated before evaluation: ${source}`)
+  const result = await evaluateAdapter(scriptContent, source, localeZh, allowLegacyCode)
+  if (sourceEpoch !== expectedEpoch)
+    throw new Error(`Adapter source invalidated during evaluation: ${source}`)
+  return result
+}
+
+function appendReducedExports(target: Record<string, any>, exportsData: Record<string, unknown>, source: string) {
+  for (const [key, data] of Object.entries(exportsData)) {
+    if (blockedExportKeys.has(key))
+      continue
+    try {
+      target[key] = (runtimeOptions?: AdapterRuntimeOptions) => key.endsWith('Components')
+        ? componentsReducer(
+            runtimeOptions && data && typeof data === 'object' && !Array.isArray(data)
+              ? {
+                  ...(data as any),
+                  installedVersion: runtimeOptions.installedVersion ?? (data as any).installedVersion,
+                  adapterMajor: runtimeOptions.adapterMajor ?? (data as any).adapterMajor,
+                }
+              : data as any,
+          )
+        : propsReducer(
+            runtimeOptions && data && typeof data === 'object' && !Array.isArray(data)
+              ? { ...(data as any), ...runtimeOptions }
+              : data as any,
+          )
+    }
+    catch (error) {
+      logger.error(`Failed to reduce adapter export ${source}#${key}: ${String(error)}`)
+    }
+  }
+}
+
+async function readLocalCache() {
+  const epoch = cacheReadEpoch
+  const cachePath = localCacheUri
+  try {
+    const stat = await fsp.stat(cachePath)
+    if (stat.size > maxCacheSize)
+      throw new Error(`Cache is too large: ${stat.size}`)
+    const text = await fsp.readFile(cachePath, 'utf8')
+    const parsed = JSON.parse(text)
+    const entries = parsed?.schemaVersion === cacheSchemaVersion ? parsed.entries : null
+    if (!Array.isArray(entries))
+      throw new Error('Unsupported cache schema')
+    const pendingEntries = new Map<string, string>()
+    for (const entry of entries) {
+      if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && isPersistentFetchCacheKey(entry[0]))
+        pendingEntries.set(entry[0], entry[1])
+    }
+    if (epoch === cacheReadEpoch && cachePath === localCacheUri) {
+      for (const [key, value] of pendingEntries)
+        setFetchCacheEntry(key, value)
+    }
+  }
+  catch (error: any) {
+    if (error?.code !== 'ENOENT')
+      logger.error(`Failed to read cache ${cachePath}: ${String(error)}`)
+  }
+  return 'done reading'
+}
+
+export const getLocalCache: PromiseLike<string> = {
+  then(onfulfilled, onrejected) {
+    cacheReadTask ||= readLocalCache()
+    return cacheReadTask.then(onfulfilled, onrejected)
+  },
+}
+
+export function awaitCacheWrites() {
+  return cacheWriteTask
+}
+
+export function writeLocalCache() {
+  const epoch = cacheWriteEpoch
+  cacheWriteTask = cacheWriteTask.then(async () => {
+    if (epoch !== cacheWriteEpoch)
+      return
+    pruneFetchCache()
+    const persistentEntries = Array.from(cacheFetch.entries()).filter(([key]) => isPersistentFetchCacheKey(key))
+    let payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: persistentEntries })
+    while (Buffer.byteLength(payload) > maxCacheSize && persistentEntries.length) {
+      persistentEntries.shift()
+      payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: persistentEntries })
+    }
+    await fsp.mkdir(path.dirname(localCacheUri), { recursive: true })
+    const temporary = `${localCacheUri}.${process.pid}.${Date.now()}.tmp`
+    try {
+      await fsp.writeFile(temporary, payload, 'utf8')
+      if (epoch !== cacheWriteEpoch)
+        return
+      await fsp.rename(temporary, localCacheUri)
+    }
+    finally {
+      await fsp.rm(temporary, { force: true }).catch(() => {})
+    }
+  }).catch(error => logger.error(`Failed to write cache ${localCacheUri}: ${String(error)}`))
+  return cacheWriteTask
+}
+
+export async function withDeadline<T>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+        timer.unref?.()
+      }),
+    ])
+  }
+  finally {
+    if (timer)
+      clearTimeout(timer)
+  }
+}
+
+function getRawLatestVersionTask(name: string) {
+  const pending = rawLatestVersionTasks.get(name)
+  if (pending)
+    return pending
+  const epoch = sourceEpoch
+  const task = Promise.resolve(latestVersion(name, { concurrency: 3 })).then((value) => {
+    if (sourceEpoch === epoch)
+      latestVersionCache.set(name, { value, at: Date.now() })
+    return value
+  }).finally(() => {
+    if (rawLatestVersionTasks.get(name) === task)
+      rawLatestVersionTasks.delete(name)
+  })
+  rawLatestVersionTasks.set(name, task)
+  return task
+}
+
+async function getLatestVersion(name: string) {
+  const cached = latestVersionCache.get(name)
+  if (cached && Date.now() - cached.at < latestVersionCacheTTL)
+    return cached.value
+  return withDeadline(getRawLatestVersionTask(name), npmVersionDeadline, `Resolving ${name}`)
+}
+
+function getRawNpmChannelTask(key: string, factory: () => Promise<string>) {
+  const pending = rawNpmChannelTasks.get(key)
+  if (pending)
+    return pending
+  const task = Promise.resolve().then(factory).finally(() => {
+    if (rawNpmChannelTasks.get(key) === task)
+      rawNpmChannelTasks.delete(key)
+  })
+  rawNpmChannelTasks.set(key, task)
+  return task
+}
+
+async function getRawNpmDownloadTask(key: string, name: string, version: string, resource: string) {
+  try {
+    return await getRawNpmChannelTask(`${key}:extract`, () => fetchAndExtractPackage({ name: `${name}@${version}`, dist: resource, retry, logger }))
+  }
+  catch (error) {
+    if (resource !== 'index.cjs')
+      throw error
+    return getRawNpmChannelTask(`${key}:cjs`, () => fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>)
+  }
+}
+
+function getOfficialAdapterScript(scriptKey: string, name: string, version: string, epoch: number, forceNetwork = false) {
+  if (!forceNetwork) {
+    const cached = getFetchCacheEntry(scriptKey)
+    if (cached !== undefined) {
+      logger.info(isZh ? `已缓存的 ${scriptKey}` : `cachedKey: ${scriptKey}`)
+      return Promise.resolve({ content: cached, fromCache: true })
+    }
+  }
+  logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
+  return withDeadline(getRawNpmDownloadTask(scriptKey, name, version, 'index.cjs'), npmDownloadDeadline, `Downloading ${name}`).then((content) => {
+    if (sourceEpoch !== epoch)
+      throw new Error(`Adapter source invalidated before validation: ${scriptKey}`)
+    return { content, fromCache: false }
+  })
+}
 
 // todo: add result type replace any
-export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string }) {
+export async function fetchFromCommonIntellisense(tag: string, options?: { pkgName?: string, uiName?: string, resolveFrom?: string, installedVersion?: string, adapterMajor?: string }) {
   const uiName = options?.uiName || tag.replace(/-(\w)/g, (_, v) => v.toUpperCase())
   const name = prefix + tag
   let version = ''
   logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
   try {
-    version = await latestVersion(name, { concurrency: 3 })
+    version = await getLatestVersion(name)
   }
   catch (error: any) {
     if (error.message.includes('404 Not Found')) {
@@ -172,15 +723,24 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     return
   }
   logger.info(isZh ? `找到 ${name} 的最新版本: ${version}` : `Found the latest version of ${name}: ${version}`)
-  const key = `${name}@${version}`
+  const scriptKey = `official:${name}@${version}`
+  const key = JSON.stringify({
+    scriptKey,
+    pkgName: options?.pkgName || '',
+    uiName,
+    resolveFrom: options?.resolveFrom || '',
+    installedVersion: options?.installedVersion || '',
+    adapterMajor: options?.adapterMajor || '',
+  })
   const inFlightTask = commonIntellisenseInFlight.get(key)
   if (inFlightTask)
     return inFlightTask
 
+  const epoch = sourceEpoch
   const task = (async () => {
     let resolver: () => void = () => { }
     let rejecter: (msg?: string) => void = () => { }
-    if (!cacheFetch.has(key)) {
+    if (!cacheFetch.has(scriptKey)) {
       createFakeProgress({
         title: isZh ? `正在拉取远程的 ${tag}` : `Pulling remote ${tag}`,
         message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
@@ -192,66 +752,93 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     }
 
     try {
-      let scriptContent = ''
-      if (cacheFetch.has(key)) {
-        logger.info(isZh ? `已缓存的 ${key}` : `cachedKey: ${key}`)
-        scriptContent = cacheFetch.get(key)
-      }
-      else {
-        logger.info(isZh ? `准备拉取的资源: ${key}` : `ready fetchingKey: ${key}`)
-        scriptContent = await Promise.any([
-          fetchAndExtractPackage({
-            name,
-            dist: 'index.cjs',
-            retry,
-            logger,
-          }),
-          fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
-        ])
-      }
-      if (scriptContent)
-        cacheFetch.set(key, scriptContent)
-      const moduleExports = evaluateRemoteModule(scriptContent, key)
-      const result: any = {}
-      let fallbackRaw: any[] | undefined
-      if (options?.pkgName && options?.resolveFrom) {
-        try {
-          const fallback = await fetchFromTypes({ pkgName: options.pkgName, uiName, resolveFrom: options.resolveFrom })
-          const rawKey = `${uiName}Raw`
-          fallbackRaw = fallback?.[rawKey]?.()
+      const reduceOfficialAdapter = async (scriptContent: string) => {
+        // Official @common-intellisense packages remain a trusted compatibility source.
+        // Custom executable adapters are opt-in and should migrate to data-only manifests.
+        const exportsData = await evaluateAdapterForEpoch(scriptContent, scriptKey, !!isZh, true, epoch)
+        const adapterName = tag.replace(/-(\w)/g, (_, value) => value.toUpperCase())
+        const expectedBases = new Set([adapterName, uiName].map(value => value.toLowerCase()))
+        const hasExpectedExport = Object.keys(exportsData).some(key => expectedBases.has(key.replace(/Components$|Props$/, '').toLowerCase()))
+        if (!hasExpectedExport)
+          throw new Error(`Missing expected adapter exports: ${uiName}`)
+        const result: any = {}
+        let fallbackRaw: any[] | undefined
+        if (options?.pkgName && options?.resolveFrom) {
+          try {
+            const fallback = await fetchFromTypes({ pkgName: options.pkgName, uiName, resolveFrom: options.resolveFrom })
+            const rawKey = `${uiName}Raw`
+            fallbackRaw = fallback?.[rawKey]?.()
+          }
+          catch {}
         }
-        catch {}
+        for (const key in exportsData) {
+          if (blockedExportKeys.has(key)) {
+            logger.error(isZh ? `已跳过不安全导出 key: ${key} (${name})` : `Skipped unsafe export key: ${key} (${name})`)
+            continue
+          }
+          const data = exportsData[key]
+          if (key.endsWith('Components')) {
+            result[key] = (runtimeOptions?: AdapterRuntimeOptions) => {
+              const reducerOptions = data && typeof data === 'object' && !Array.isArray(data)
+                ? {
+                    ...(data as any),
+                    installedVersion: runtimeOptions?.installedVersion ?? options?.installedVersion,
+                    adapterMajor: runtimeOptions?.adapterMajor ?? options?.adapterMajor,
+                  }
+                : data as any
+              return componentsReducer(reducerOptions)
+            }
+          }
+          else {
+            let propsData = data
+            if (Array.isArray(fallbackRaw) && fallbackRaw.length) {
+              if (Array.isArray(propsData)) {
+                propsData = mergeComponentsWithTypeFallback(propsData, fallbackRaw)
+              }
+              else if (propsData && typeof propsData === 'object' && Array.isArray((propsData as any).map)) {
+                propsData = {
+                  ...(propsData as any),
+                  map: mergeComponentsWithTypeFallback((propsData as any).map, fallbackRaw),
+                }
+              }
+            }
+            const reducedProps = Array.isArray(propsData)
+              ? propsReducer({
+                  uiName,
+                  lib: options?.pkgName || name,
+                  map: propsData,
+                  resolveFrom: options?.resolveFrom,
+                  installedVersion: options?.installedVersion,
+                  adapterMajor: options?.adapterMajor,
+                })
+              : propsReducer({
+                  ...(propsData as any),
+                  resolveFrom: options?.resolveFrom,
+                  installedVersion: options?.installedVersion,
+                  adapterMajor: options?.adapterMajor,
+                })
+            result[key] = () => reducedProps
+          }
+        }
+        return result
       }
-      for (const key in moduleExports) {
-        if (blockedExportKeys.has(key)) {
-          logger.error(isZh ? `已跳过不安全导出 key: ${key} (${name})` : `Skipped unsafe export key: ${key} (${name})`)
-          continue
-        }
-        const v = moduleExports[key]
-        if (typeof v !== 'function') {
-          logger.error(isZh ? `已跳过非函数导出 key: ${key} (${name})` : `Skipped non-function export: ${key} (${name})`)
-          continue
-        }
-        if (key.endsWith('Components')) {
-          const lib = key.slice(0, -'Components'.length)
-          const userPrefix = getPrefix?.() as Record<string, string> | undefined
-          let components = componentsReducer(v(isZh))
 
-          if (userPrefix && userPrefix[lib]) {
-            const customPrefix = userPrefix[lib]
-            components = components.map((item: any) => ({ ...item, prefix: customPrefix }))
-          }
-          result[key] = () => components
-        }
-        else {
-          result[key] = () => {
-            let data = v()
-            if (Array.isArray(fallbackRaw) && fallbackRaw.length)
-              data = mergeComponentsWithTypeFallback(data, fallbackRaw)
-            return propsReducer(data)
-          }
-        }
+      let loaded = await getOfficialAdapterScript(scriptKey, name, version, epoch)
+      let result: any
+      try {
+        result = await reduceOfficialAdapter(loaded.content)
       }
+      catch (error) {
+        if (!loaded.fromCache)
+          throw error
+        deleteFetchCacheEntry(scriptKey)
+        loaded = await getOfficialAdapterScript(scriptKey, name, version, epoch, true)
+        result = await reduceOfficialAdapter(loaded.content)
+      }
+      if (sourceEpoch !== epoch)
+        return undefined
+      if (!loaded.fromCache)
+        setFetchCacheEntry(scriptKey, loaded.content)
       resolver()
       return result
     }
@@ -265,7 +852,10 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
         logger.info(isZh ? `已从类型兜底: ${options?.pkgName || uiName}` : `Type fallback loaded: ${options?.pkgName || uiName}`)
         return fallback
       }
-      return fetchFromLocalUris()
+      // Workspace-local adapters are custom sources and are loaded independently
+      // by the package enhancement pipeline. Never treat unrelated local exports
+      // as a successful official adapter fallback.
+      return undefined
       // todo：增加重试机制
     }
   })()
@@ -274,250 +864,618 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     return await task
   }
   finally {
-    commonIntellisenseInFlight.delete(key)
+    if (commonIntellisenseInFlight.get(key) === task)
+      commonIntellisenseInFlight.delete(key)
   }
 }
 
-const tempCache = new Map()
-export async function fetchFromRemoteUrls() {
-  // 读取 urls
-  const uris = getConfiguration('common-intellisense.remoteUris') as string[]
-  if (!uris.length)
-    return
+const maxRemoteRedirects = 5
 
-  const result: any = {}
+type RemoteTrustClass
+  = | { kind: 'publicHttps', initialProtocol: 'https:' }
+    | { kind: 'localhostHttp', hostname: string, origin: string, initialProtocol: 'http:' }
+    | { kind: 'explicitTrustedHost', hostname: string, origin: string, initialProtocol: 'http:' | 'https:' }
 
-  if (isRemoteHttpUrisInProgress)
-    return
-
-  const now = Date.now()
-  const plans = uris.map((uri) => {
-    if (!isTrustedRemoteUri(uri)) {
-      logger.error(isZh
-        ? `已跳过不受信任的 remoteUri: ${uri}（仅允许 https，或 localhost/127.0.0.1 的 http；可通过 trustedHosts 放行）`
-        : `Skipped untrusted remoteUri: ${uri} (only https, or localhost/127.0.0.1 http; use trustedHosts to allow)`)
-      return null
-    }
-    const cached = cacheFetch.has(uri) ? cacheFetch.get(uri) : ''
-    const lastFetchedAt = remoteUriFetchedAt.get(uri) || 0
-    const needsRefresh = !cached || now - lastFetchedAt >= remoteUriCacheTTL
-    return { uri, cached, needsRefresh }
-  }).filter(Boolean) as Array<{ uri: string, cached: string, needsRefresh: boolean }>
-
-  if (!plans.length)
-    return result
-
-  let resolver: () => void = () => { }
-  let rejecter: (msg?: string) => void = () => { }
-  isRemoteHttpUrisInProgress = true
-  createFakeProgress({
-    title: isZh ? `正在拉取远程文件` : 'Pulling remote files',
-    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
-    callback(resolve, reject) {
-      resolver = resolve
-      rejecter = reject
-    },
-  })
-  logger.info(isZh ? '从 remoteUris 中拉取数据...' : 'Fetching data from remoteUris...')
-  try {
-    const scriptContents = await Promise.all(plans.map(async ({ uri, cached, needsRefresh }) => {
-      if (!needsRefresh && cached)
-        return [uri, cached] as const
-
-      logger.info(isZh ? `正在加载 ${uri}` : `Loading ${uri}`)
-      try {
-        const fetched = await ofetch(uri, { responseType: 'text', retry, timeout })
-        if (fetched)
-          cacheFetch.set(uri, fetched)
-        remoteUriFetchedAt.set(uri, Date.now())
-        return [uri, fetched] as const
-      }
-      catch (error) {
-        if (cached) {
-          logger.error(isZh ? `刷新失败，使用缓存: ${uri}` : `Refresh failed, using cached module: ${uri}`)
-          remoteUriFetchedAt.set(uri, Date.now())
-          return [uri, cached] as const
-        }
-        throw error
-      }
-    }))
-    scriptContents.forEach(([uri, scriptContent]) => {
-      const moduleExports = evaluateRemoteModule(scriptContent, uri)
-      appendReducedExports(result, moduleExports, getLocale()!.includes('zh'), uri)
-    })
-    resolver()
-  }
-  catch (error) {
-    rejecter(String(error))
-    logger.error(String(error))
-  }
-  isRemoteHttpUrisInProgress = false
-
-  return result
+async function getRemoteTrustClass(uri: string): Promise<RemoteTrustClass | undefined> {
+  const target = new URL(uri)
+  const hostname = normalizeHostname(target.hostname)
+  if (target.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname))
+    return { kind: 'localhostHttp', hostname, origin: target.origin, initialProtocol: 'http:' }
+  // Public HTTPS keeps the stricter public trust class even when explicitly listed.
+  if (isTrustedRedirectUri(uri))
+    return { kind: 'publicHttps', initialProtocol: 'https:' }
+  if ((target.protocol === 'http:' || target.protocol === 'https:') && isExplicitlyTrustedHost(hostname))
+    return { kind: 'explicitTrustedHost', hostname, origin: target.origin, initialProtocol: target.protocol }
 }
 
-export async function fetchFromRemoteNpmUrls() {
-  // 读取 urls
-  const uris = getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[]
-  if (!uris.length)
-    return
-
-  const result: any = {}
-
-  if (isRemoteNpmUrisInProgress)
-    return
-
-  const fixedUris = (await Promise.all(uris.map(async (item) => {
-    let name = ''
-    if (typeof item === 'string') {
-      name = item
-    }
-    else {
-      name = item.name
-    }
-    let version = ''
-    logger.info(isZh ? `正在查找 ${name} 的最新版本...` : `Looking for the latest version of ${name}...`)
-    try {
-      version = await latestVersion(name, { concurrency: 3 })
-    }
-    catch (error: any) {
-      if (error.message.includes('404 Not Found')) {
-        logger.error(isZh ? `当前版本并未支持` : `The current version is not supported`)
-      }
-      else {
-        logger.error(String(error))
-      }
-    }
-    const key = `remote-npm-uri:${name}`
-    const cachedVersion = tempCache.get(key)
-    if (cachedVersion === version)
-      return ''
-    tempCache.set(key, version)
-    return [name, version]
-  }))).filter(Boolean) as [string, string][]
-
-  if (!fixedUris.length)
-    return
-
-  let resolver: () => void = () => { }
-  let rejecter: (msg?: string) => void = () => { }
-  isRemoteNpmUrisInProgress = true
-
-  createFakeProgress({
-    title: isZh ? `正在拉取远程 NPM 文件` : 'Pulling remote NPM files',
-    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
-    callback(resolve, reject) {
-      resolver = resolve
-      rejecter = reject
-    },
-  })
-  logger.info(isZh ? '从 remoteNpmUris 中拉取数据...' : 'Fetching data from remoteNpmUris...')
-
-  try {
-    (await Promise.all(fixedUris.map(async ([name, version]) => {
-      const key = `${name}@${version}`
-      if (cacheFetch.has(key))
-        return [key, cacheFetch.get(key)] as const
-
-      const scriptContent = await Promise.any([
-        fetchAndExtractPackage({ name, dist: 'index.cjs', logger }),
-        fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>,
-      ])
-
-      if (scriptContent)
-        cacheFetch.set(key, scriptContent)
-      return [key, scriptContent] as const
-    }))).forEach(([key, scriptContent]) => {
-      const moduleExports = evaluateRemoteModule(scriptContent, key)
-      appendReducedExports(result, moduleExports, getLocale()!.includes('zh'), key)
-    })
-    resolver()
-  }
-  catch (error) {
-    rejecter(String(error))
-    logger.error(String(error))
-  }
-  isRemoteNpmUrisInProgress = false
-
-  return result
+function isRedirectAllowed(uri: string, trust: RemoteTrustClass) {
+  const target = new URL(uri)
+  const hostname = normalizeHostname(target.hostname)
+  if (trust.kind === 'publicHttps')
+    return isTrustedRedirectUri(uri)
+  if (trust.initialProtocol === 'https:' && target.protocol !== 'https:')
+    return false
+  return hostname === trust.hostname && target.origin === trust.origin
 }
 
-const localUrisMap = new Map<string, any>()
-export async function fetchFromLocalUris() {
-  const uris = getConfiguration('common-intellisense.localUris') as string[]
-  if (!uris.length)
-    return
-  logger.info(`localUris: ${uris}`)
-  const result: any = {}
-  // 查找本地文件 是否存在
-  const scriptContents = (await Promise.all(uris.map(async (uri) => {
-    // 如果是相对路径，转换为绝对路径，否则直接用
-    if (uri.startsWith('./'))
-      uri = path.resolve(getRootPath()!, uri)
+function normalizeAddress(address: string) {
+  const normalized = address.toLowerCase().replace(/^\[|\]$/g, '')
+  return normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized
+}
 
-    if (existsSync(uri)) {
-      // 如果缓存中已存在, 比较内容是否改变, 没改变则不再处理, 直接通过
-      const scriptContent = await fsp.readFile(uri, 'utf-8')
-      if (cacheFetch.has(uri) && cacheFetch.get(uri) === scriptContent && localUrisMap.has(uri)) {
-        const temp = localUrisMap.get(uri)!
-        Object.assign(result, temp)
+export function isLoopbackAddress(address: string) {
+  const normalized = normalizeAddress(address)
+  if (normalized === '::1')
+    return true
+  if (isIP(normalized) !== 4)
+    return false
+  const firstOctet = Number(normalized.split('.')[0])
+  return firstOctet === 127
+}
+
+async function resolvePinnedAddresses(uri: string, trust: RemoteTrustClass, resolveHost: ResolveHost) {
+  const target = new URL(uri)
+  const hostname = normalizeHostname(target.hostname)
+  const addresses = isIP(hostname)
+    ? [{ address: hostname, family: isIP(hostname) }]
+    : await resolveHost(hostname)
+  if (!addresses.length)
+    throw new Error(`Remote adapter hostname did not resolve: ${hostname}`)
+  if (trust.kind === 'publicHttps' && addresses.some(({ address }) => isPrivateNetworkHost(address)))
+    throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
+  if (trust.kind === 'localhostHttp' && addresses.some(({ address }) => !isLoopbackAddress(address)))
+    throw new Error(`Localhost adapter resolved to a non-loopback address: ${uri}`)
+  return addresses
+}
+
+interface PinnedResponse {
+  status: number
+  location?: string
+  body: string
+}
+
+export type PinnedRequester = (uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass, signal?: AbortSignal) => Promise<PinnedResponse>
+let requesterOverride: PinnedRequester | undefined
+let resolverOverride: ResolveHost | undefined
+
+export function setRemoteTransportForTest(requester?: PinnedRequester, resolver?: ResolveHost) {
+  requesterOverride = requester
+  resolverOverride = resolver
+}
+
+function requestPinnedText(uri: string, pinned: { address: string, family: number }, trust: RemoteTrustClass, signal?: AbortSignal): Promise<PinnedResponse> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(uri)
+    const transport = target.protocol === 'https:' ? https : http
+    const request = transport.request(target, {
+      method: 'GET',
+      servername: target.protocol === 'https:' ? target.hostname : undefined,
+      lookup(_hostname, options, callback: any) {
+        if (typeof options === 'object' && options.all)
+          callback(null, [pinned])
+        else
+          callback(null, pinned.address, pinned.family)
+      },
+      headers: { accept: 'text/plain, application/json' },
+    }, (response) => {
+      const status = response.statusCode || 0
+      const location = response.headers.location
+      if (status >= 300 && status < 400) {
+        response.destroy()
+        resolve({ status, location, body: '' })
         return
       }
-      else if (localUrisMap.has(uri)) {
-        localUrisMap.delete(uri)
+      const contentLength = Number(response.headers['content-length'])
+      if (Number.isFinite(contentLength) && contentLength > maxRemoteScriptSize) {
+        response.destroy()
+        reject(new Error(`Remote adapter is too large: ${uri}`))
+        return
       }
-      cacheFetch.set(uri, scriptContent)
-      return [uri, scriptContent]
-    }
-    else {
-      logger.error(isZh ? `加载本地文件不存在: [${uri}]` : `Local file does not exist: [${uri}]`)
-      return false
-    }
-  }))).filter(Boolean) as [string, string][]
-
-  if (!scriptContents.length)
-    return result
-
-  if (isLocalUrisInProgress)
-    return
-  let resolver!: () => void
-  let rejecter!: (msg?: string) => void
-  isLocalUrisInProgress = true
-  createFakeProgress({
-    title: isZh ? `正在加载本地文件` : 'Loading local files',
-    message: v => isZh ? `已完成 ${v}%` : `Completed ${v}%`,
-    callback(resolve, reject) {
-      resolver = resolve
-      rejecter = reject
-    },
-  })
-  try {
-    scriptContents.forEach(async ([uri, scriptContent]) => {
-      const module: any = {}
-      const runModule = new Function('module', scriptContent)
-      runModule(module)
-      const moduleExports = module.exports
-      const temp: any = {}
-      const isZh = getLocale()!.includes('zh')
-      for (const key in moduleExports) {
-        const v = moduleExports[key]
-        if (key.endsWith('Components')) {
-          temp[key] = () => componentsReducer(v(isZh))
+      const chunks: Buffer[] = []
+      let size = 0
+      response.on('data', (chunk: Buffer | string) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        size += buffer.length
+        if (size > maxRemoteScriptSize) {
+          response.destroy(new Error(`Remote adapter is too large: ${uri}`))
+          return
         }
-        else {
-          temp[key] = () => propsReducer(v())
-        }
-      }
-      localUrisMap.set(uri, temp)
-      Object.assign(result, temp)
+        chunks.push(buffer)
+      })
+      response.on('end', () => resolve({ status, location, body: Buffer.concat(chunks).toString('utf8') }))
+      response.on('error', reject)
     })
-    resolver()
+    const abort = () => request.destroy(new Error(`Remote adapter request deadline exceeded: ${uri}`))
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    request.once('close', () => signal?.removeEventListener('abort', abort))
+    request.setTimeout(remoteRequestTimeout, () => request.destroy(new Error(`Remote adapter request timed out: ${uri}`)))
+    request.on('socket', (socket) => {
+      socket.once('connect', () => {
+        const remoteAddress = normalizeAddress(socket.remoteAddress || '')
+        if (remoteAddress !== normalizeAddress(pinned.address)
+          || (trust.kind === 'publicHttps' && isPrivateNetworkHost(remoteAddress))
+          || (trust.kind === 'localhostHttp' && !isLoopbackAddress(remoteAddress))) {
+          request.destroy(new Error(`Remote adapter connected to an untrusted address: ${socket.remoteAddress || 'unknown'}`))
+        }
+      })
+    })
+    request.on('error', reject)
+    request.end()
+  })
+}
+
+export async function fetchRemoteText(
+  uri: string,
+  resolveHost: ResolveHost = resolverOverride || (hostname => dns.lookup(hostname, { all: true, verbatim: true })),
+  requestText: PinnedRequester = requesterOverride || requestPinnedText,
+  totalTimeout = remoteTotalTimeout,
+) {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(`Remote adapter request deadline exceeded: ${uri}`))
+    }, totalTimeout)
+  })
+  const load = async () => {
+    const trust = await getRemoteTrustClass(uri)
+    if (!trust)
+      throw new Error(`Remote adapter URL is not a trusted public target: ${uri}`)
+    let current = uri
+    for (let redirects = 0; redirects <= maxRemoteRedirects; redirects++) {
+      if (controller.signal.aborted)
+        throw new Error(`Remote adapter request deadline exceeded: ${uri}`)
+      const pinnedAddresses = await resolvePinnedAddresses(current, trust, resolveHost)
+      let response: PinnedResponse | undefined
+      let lastConnectionError: unknown
+      for (const pinned of pinnedAddresses) {
+        if (controller.signal.aborted)
+          throw new Error(`Remote adapter request deadline exceeded: ${uri}`)
+        try {
+          response = await requestText(current, pinned, trust, controller.signal)
+          break
+        }
+        catch (error) {
+          lastConnectionError = error
+        }
+      }
+      if (!response)
+        throw lastConnectionError || new Error(`Remote adapter request failed: ${current}`)
+      const { status, location, body } = response
+      if (status >= 300 && status < 400) {
+        if (!location)
+          throw new Error(`Remote adapter redirect is missing Location: ${current}`)
+        if (redirects === maxRemoteRedirects)
+          throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
+        const next = new URL(location, current).toString()
+        if (!isRedirectAllowed(next, trust))
+          throw new Error(`Remote adapter redirected to an untrusted URL: ${next}`)
+        current = next
+        continue
+      }
+      if (status >= 400)
+        throw new Error(`Remote adapter request failed (${status}): ${current}`)
+      return body
+    }
+    throw new Error(`Remote adapter exceeded ${maxRemoteRedirects} redirects: ${uri}`)
+  }
+  try {
+    return await Promise.race([load(), deadline])
   }
   catch (error) {
-    rejecter(String(error))
-    logger.error(String(error))
+    throw sanitizeRemoteError(error)
   }
+  finally {
+    if (timer)
+      clearTimeout(timer)
+    controller.abort()
+  }
+}
 
-  isLocalUrisInProgress = false
-  return result
+export interface CustomSourceResult {
+  id: string
+  status: 'success' | 'failed'
+  signature?: string
+  value?: Record<string, any>
+  error?: unknown
+  /** Position in the corresponding local/HTTP/npm configuration array. */
+  configurationIndex?: number
+}
+
+interface CustomSourceLoadValue {
+  value?: Record<string, any>
+  signature: string
+}
+
+function getOrCreateSourceTask(key: string, id: string, load: () => Promise<CustomSourceLoadValue>): Promise<Omit<CustomSourceResult, 'configurationIndex'>> {
+  const existing = perSourceTasks.get(key)
+  if (existing)
+    return existing
+  const task = Promise.resolve()
+    .then(load)
+    .then(result => ({ id, status: 'success' as const, value: result.value || {}, signature: result.signature }))
+    .catch(error => ({ id, status: 'failed' as const, error }))
+    .finally(() => {
+      if (perSourceTasks.get(key) === task)
+        perSourceTasks.delete(key)
+    })
+  perSourceTasks.set(key, task)
+  return task
+}
+
+interface CustomSourceDescriptor {
+  id: string
+  taskKey: string
+  load: () => Promise<CustomSourceLoadValue>
+}
+
+async function settleCustomSources(items: readonly unknown[], kind: 'http' | 'npm' | 'local', createDescriptor: (item: unknown, index: number) => CustomSourceDescriptor): Promise<CustomSourceResult[]> {
+  return Promise.all(items.map(async (item, configurationIndex) => {
+    try {
+      const { id, taskKey, load } = createDescriptor(item, configurationIndex)
+      return {
+        ...await getOrCreateSourceTask(taskKey, id, load),
+        configurationIndex,
+      }
+    }
+    catch {
+      return {
+        id: `${kind}:invalid:${configurationIndex}`,
+        status: 'failed' as const,
+        error: new Error('Invalid custom source configuration'),
+        configurationIndex,
+      }
+    }
+  }))
+}
+
+async function evaluateCustomAdapterForEpoch(content: string, sourceId: string, displayName: string, epoch: number) {
+  const approval = getLegacyAdapterApproval(sourceId, content)
+  try {
+    return await evaluateAdapterForEpoch(content, displayName, getLocale()!.includes('zh'), isLegacyAdapterApproved(sourceId, content), epoch)
+  }
+  catch (error) {
+    if (String(error).includes('Executable adapter blocked'))
+      notifyLegacyAdapterBlocked(displayName, approval)
+    throw error
+  }
+}
+
+async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSourceLoadValue> {
+  const identity = getRemoteSourceIdentity(uri)
+  const { requestUri, cacheKey, displayName } = identity
+  if (!isTrustedRemoteUri(uri))
+    throw new Error(`Skipped untrusted remoteUri: ${displayName}`)
+  const now = Date.now()
+  const cached = getFetchCacheEntry(cacheKey) || ''
+  const retryState = remoteUriRetry.get(cacheKey)
+  const retryDeferred = !!cached && !!retryState && now < retryState.nextRetryAt
+  const needsRefresh = !cached || (!retryDeferred && now - (remoteUriFetchedAt.get(cacheKey) || 0) >= remoteUriCacheTTL)
+  const evaluate = async (scriptContent: string) => {
+    const reduced: Record<string, any> = {}
+    appendReducedExports(reduced, await evaluateCustomAdapterForEpoch(scriptContent, identity.id, displayName, epoch), displayName)
+    return reduced
+  }
+  let scriptContent = cached
+  if (needsRefresh) {
+    try {
+      const fetched = await fetchRemoteText(requestUri)
+      if (typeof fetched !== 'string')
+        throw new Error(`Remote adapter is invalid or too large: ${displayName}`)
+      assertAdapterInputSize(fetched, displayName)
+      if (sourceEpoch !== epoch)
+        throw new Error(`Remote adapter configuration changed while loading: ${displayName}`)
+      // Evaluate the exact bytes before they become the last-known-good cache.
+      const value = await evaluate(fetched)
+      setFetchCacheEntry(cacheKey, fetched)
+      remoteUriFetchedAt.set(cacheKey, Date.now())
+      remoteUriRetry.delete(cacheKey)
+      return { value, signature: createHash('sha256').update(fetched).digest('hex') }
+    }
+    catch (error) {
+      if (!cached)
+        throw sanitizeRemoteError(error)
+      const failureCount = (remoteUriRetry.get(cacheKey)?.failureCount || 0) + 1
+      const delay = remoteRetryDelays[Math.min(failureCount - 1, remoteRetryDelays.length - 1)]
+      remoteUriRetry.set(cacheKey, { failureCount, nextRetryAt: Date.now() + delay })
+      logger.error(isZh ? `刷新失败，使用缓存: ${displayName}` : `Refresh failed, using cached module: ${displayName}`)
+      scriptContent = cached
+    }
+  }
+  return { value: await evaluate(scriptContent), signature: createHash('sha256').update(scriptContent).digest('hex') }
+}
+
+export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
+  const configured = getConfiguration('common-intellisense.remoteUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
+  const epoch = sourceEpoch
+  const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: getLegacyConfigurationIdentity() })
+  return settleCustomSources(uris, 'http', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid remote URI configuration at index ${index}`)
+    const uri = requireRemoteUri(raw)
+    const identity = getRemoteSourceIdentity(uri)
+    return { id: identity.id, taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`, load: () => loadRemoteUrlSource(uri, epoch) }
+  })
+}
+
+export function fetchFromRemoteUrls() {
+  const configured = getConfiguration('common-intellisense.remoteUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
+  const key = getSourceTaskKey('http', uris)
+  const existing = remoteHttpTasks.get(key)
+  if (existing)
+    return existing
+  const epoch = sourceEpoch
+  const task = fetchFromRemoteUrlsInternal(uris, epoch)
+  remoteHttpTasks.set(key, task)
+  return task.finally(() => {
+    if (remoteHttpTasks.get(key) === task)
+      remoteHttpTasks.delete(key)
+  })
+}
+
+async function fetchFromRemoteUrlsInternal(uris: readonly unknown[], epoch: number) {
+  if (!uris.length)
+    return {}
+  const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: getLegacyConfigurationIdentity() })
+  const results = await settleCustomSources(uris, 'http', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid remote URI configuration at index ${index}`)
+    const uri = requireRemoteUri(raw)
+    const identity = getRemoteSourceIdentity(uri)
+    if (!isTrustedRemoteUri(uri)) {
+      logger.error(`Skipped untrusted remoteUri: ${identity.displayName}`)
+      return {
+        id: identity.id,
+        taskKey: `${epoch}\0${identity.id}\0${trustIdentity}\0skipped`,
+        load: async () => ({ value: {}, signature: `skipped:${identity.id}` }),
+      }
+    }
+    return { id: identity.id, taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`, load: () => loadRemoteUrlSource(uri, epoch) }
+  })
+  if (sourceEpoch !== epoch)
+    return {}
+  const failed = results.find(result => result.status === 'failed' && !result.id.startsWith('http:invalid:'))
+  if (failed)
+    throw failed.error
+  return Object.assign({}, ...results.filter(result => result.status === 'success').map(result => result.value || {}))
+}
+
+export function normalizeNpmResource(input: string) {
+  if (!input || input.length > 256 || input.includes('\0') || input.includes('\\') || path.posix.isAbsolute(input))
+    throw new Error('Invalid npm adapter resource')
+  const normalized = path.posix.normalize(input)
+  if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized.split('/').includes('..'))
+    throw new Error('Invalid npm adapter resource')
+  return normalized
+}
+
+async function loadRemoteNpmSource(item: { name: string, resource?: string } | string, epoch: number): Promise<CustomSourceLoadValue> {
+  const name = typeof item === 'string' ? item : item.name
+  const resource = normalizeNpmResource(typeof item === 'string' ? 'index.cjs' : item.resource || 'index.cjs')
+  const version = await getLatestVersion(name)
+  if (!version)
+    throw new Error(`No supported remote npm adapter version: ${name}`)
+  const key = `remote-npm:${name}@${version}::${resource}`
+  const cached = getFetchCacheEntry(key)
+  const scriptContent = cached !== undefined
+    ? cached
+    : await withDeadline(getRawNpmDownloadTask(key, name, version, resource), npmDownloadDeadline, `Downloading ${name}/${resource}`)
+  const reduced: Record<string, any> = {}
+  appendReducedExports(reduced, await evaluateCustomAdapterForEpoch(scriptContent || '', `npm:${name}::${resource}`, key, epoch), key)
+  if (sourceEpoch !== epoch)
+    throw new Error('Remote npm adapter configuration changed')
+  if (cached === undefined && scriptContent)
+    setFetchCacheEntry(key, scriptContent)
+  const signature = createHash('sha256').update(`${key}\0${scriptContent || ''}`).digest('hex')
+  return { value: reduced, signature }
+}
+
+export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
+  const configured = getConfiguration('common-intellisense.remoteNpmUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
+  const epoch = sourceEpoch
+  return settleCustomSources(uris, 'npm', (raw, index) => {
+    if (typeof raw !== 'string' && !isPlainObject(raw))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const name = typeof raw === 'string' ? raw : raw.name
+    const rawResource = typeof raw === 'string' ? undefined : raw.resource
+    if (typeof name !== 'string' || !name.trim() || (rawResource !== undefined && typeof rawResource !== 'string'))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const item = { name, resource: normalizeNpmResource(rawResource || 'index.cjs') }
+    const id = `npm:${item.name}::${item.resource}`
+    return {
+      id,
+      taskKey: `${epoch}\0${id}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
+      load: () => loadRemoteNpmSource(item, epoch),
+    }
+  })
+}
+
+export function fetchFromRemoteNpmUrls() {
+  const configured = getConfiguration('common-intellisense.remoteNpmUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
+  const key = getSourceTaskKey('npm', uris)
+  const existing = remoteNpmTasks.get(key)
+  if (existing)
+    return existing
+  const epoch = sourceEpoch
+  const task = fetchFromRemoteNpmUrlsInternal(uris, epoch)
+  remoteNpmTasks.set(key, task)
+  return task.finally(() => {
+    if (remoteNpmTasks.get(key) === task)
+      remoteNpmTasks.delete(key)
+  })
+}
+
+async function fetchFromRemoteNpmUrlsInternal(uris: readonly unknown[], epoch: number) {
+  if (!uris.length)
+    return {}
+  const results = await settleCustomSources(uris, 'npm', (raw, index) => {
+    if (typeof raw !== 'string' && !isPlainObject(raw))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const name = typeof raw === 'string' ? raw : raw.name
+    const rawResource = typeof raw === 'string' ? undefined : raw.resource
+    if (typeof name !== 'string' || !name.trim() || (rawResource !== undefined && typeof rawResource !== 'string'))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const item = { name, resource: normalizeNpmResource(rawResource || 'index.cjs') }
+    const id = `npm:${item.name}::${item.resource}`
+    return {
+      id,
+      taskKey: `${epoch}\0${id}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
+      load: () => loadRemoteNpmSource(item, epoch),
+    }
+  })
+  const failed = results.find(result => result.status === 'failed' && !result.id.startsWith('npm:invalid:'))
+  if (failed)
+    throw failed.error
+  return Object.assign({}, ...results.filter(result => result.status === 'success').map(result => result.value || {}))
+}
+
+export function resolveLocalAdapterPath(workspaceRoot: string, configuredUri: string) {
+  const root = path.resolve(workspaceRoot)
+  const target = path.resolve(root, configuredUri)
+  const relative = path.relative(root, target)
+  return relative.startsWith('..') || path.isAbsolute(relative) ? undefined : target
+}
+
+/** Resolve a local adapter using the same trust and workspace boundary for loading and watching. */
+export async function resolveLocalAdapterFile(workspaceRoot: string, configuredUri: string, options: { allowMissing?: boolean } = {}) {
+  if (vscode.workspace?.isTrusted === false || !configuredUri.trim() || configuredUri.trim() === '.')
+    return
+  const root = path.resolve(workspaceRoot)
+  const target = resolveLocalAdapterPath(root, configuredUri)
+  if (!target)
+    return
+  let realRoot: string
+  try {
+    realRoot = await fsp.realpath(root)
+  }
+  catch {
+    return
+  }
+  try {
+    const realTarget = await fsp.realpath(target)
+    const stat = await fsp.stat(realTarget)
+    const relative = path.relative(realRoot, realTarget)
+    if (!stat.isFile() || relative.startsWith('..') || path.isAbsolute(relative))
+      return
+    return realTarget
+  }
+  catch {
+    if (!options.allowMissing)
+      return
+    try {
+      const realParent = await fsp.realpath(path.dirname(target))
+      const relative = path.relative(realRoot, realParent)
+      if (relative.startsWith('..') || path.isAbsolute(relative))
+        return
+      return target
+    }
+    catch {}
+  }
+}
+
+async function loadLocalSource(configuredUri: string, epoch: number, workspaceRoot?: string): Promise<CustomSourceLoadValue> {
+  if (vscode.workspace && vscode.workspace.isTrusted === false)
+    throw new Error('Local adapters are disabled in untrusted workspaces')
+  const root = workspaceRoot || getRootPath()
+  if (!root)
+    throw new Error('Local adapter workspace root is unavailable')
+  const normalizedRoot = path.resolve(root)
+  const uri = await resolveLocalAdapterFile(normalizedRoot, configuredUri)
+  if (!uri)
+    throw new Error(`Skipped unsafe local adapter: ${configuredUri}`)
+  const stat = await fsp.stat(uri)
+  if (stat.size > maxRemoteScriptSize)
+    throw new Error(`Local adapter is too large: ${uri}`)
+  const scriptContent = await fsp.readFile(uri, 'utf8')
+  assertAdapterInputSize(scriptContent, uri)
+  const signature = createHash('sha256').update(scriptContent).digest('hex')
+  // Always re-check the current source/digest approval before reusing executable
+  // output. A configuration change must not inherit code authorized earlier.
+  const sourceId = `local:${uri}`
+  const exportsData = await evaluateCustomAdapterForEpoch(scriptContent, sourceId, uri, epoch)
+  const reduced: Record<string, any> = {}
+  appendReducedExports(reduced, exportsData, uri)
+  if (sourceEpoch !== epoch)
+    throw new Error('Local adapter configuration changed')
+  return { value: reduced, signature }
+}
+
+export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomSourceResult[]> {
+  const configured = getConfiguration('common-intellisense.localUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
+  const epoch = sourceEpoch
+  const root = workspaceRoot || getRootPath() || ''
+  return settleCustomSources(uris, 'local', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid local adapter configuration at index ${index}`)
+    const id = `local:${resolveLocalAdapterPath(root, raw) || raw}`
+    return {
+      id,
+      taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
+      load: () => loadLocalSource(raw, epoch, workspaceRoot),
+    }
+  })
+}
+
+export function fetchFromLocalUris(workspaceRoot?: string) {
+  const configured = getConfiguration('common-intellisense.localUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
+  const key = getSourceTaskKey('local', uris, workspaceRoot)
+  const existing = localTasks.get(key)
+  if (existing)
+    return existing
+  const epoch = sourceEpoch
+  const task = fetchFromLocalUrisInternal(uris, epoch, workspaceRoot)
+  localTasks.set(key, task)
+  return task.finally(() => {
+    if (localTasks.get(key) === task)
+      localTasks.delete(key)
+  })
+}
+
+async function fetchFromLocalUrisInternal(uris: readonly unknown[], epoch: number, workspaceRoot?: string) {
+  if (!uris.length)
+    return {}
+  const root = workspaceRoot || getRootPath() || ''
+  const results = await settleCustomSources(uris, 'local', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid local adapter configuration at index ${index}`)
+    const id = `local:${resolveLocalAdapterPath(root, raw) || raw}`
+    return {
+      id,
+      taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
+      load: () => loadLocalSource(raw, epoch, workspaceRoot),
+    }
+  })
+  const failed = results.find(result => result.status === 'failed' && !result.id.startsWith('local:invalid:'))
+  if (failed)
+    throw failed.error
+  return Object.assign({}, ...results.filter(result => result.status === 'success').map(result => result.value || {}))
+}
+
+export function clearFetchCaches() {
+  sourceEpoch++
+  cacheReadEpoch++
+  cacheWriteEpoch++
+  cacheFetch.clear()
+  commonIntellisenseInFlight.clear()
+  latestVersionCache.clear()
+  // Intentionally keep unresolved raw npm tasks: the helpers expose no abort
+  // interface, and dropping these entries would allow retries to multiply them.
+  remoteUriFetchedAt.clear()
+  remoteUriRetry.clear()
+  perSourceTasks.clear()
+  remoteHttpTasks.clear()
+  remoteNpmTasks.clear()
+  localTasks.clear()
+  cacheReadTask = null
 }

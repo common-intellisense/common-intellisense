@@ -130,9 +130,31 @@ Install the supported ui component library in your project and install the plug-
 ```
 
 ## Explain Configuration
-- remoteUris: When you deploy the index.cjs configuration file to an online address
-- remoteNpmUris：When you deploy the index.cjs configuration file to npm, you only need to provide the package name instead of the full URL.
-- localUris：When you want to test your configuration, you can read the generated index.cjs locally
+- `remoteUris`: HTTPS URLs that provide component metadata. Requests use a direct DNS-pinned transport for SSRF protection and currently do not inherit VS Code, `HTTP_PROXY`, or `HTTPS_PROXY` proxy settings. In proxy-only environments, prefer `remoteNpmUris` or a workspace-local data manifest via `localUris`.
+- `remoteNpmUris`: npm packages that provide component metadata.
+- `localUris`: metadata files inside the current workspace. These are disabled in Restricted Mode.
+- Slot CodeLens currently targets Vue and Vine only. React/TSX Slot CodeLens is disabled until framework-specific child insertion is available.
+
+Custom sources should use the data-only manifest format:
+
+```json
+{
+  "schemaVersion": 1,
+  "exports": {
+    "myUiComponents": {
+      "map": [],
+      "lib": "my-ui"
+    },
+    "myUi": {
+      "uiName": "myUi",
+      "lib": "my-ui",
+      "map": []
+    }
+  }
+}
+```
+
+**Migration notice:** Legacy CommonJS adapters are executable code and are disabled for custom sources by default; they are always disabled in Restricted Mode. Migrate existing private adapters to the data-only manifest above. Approve a legacy source only through `common-intellisense.legacyAdapterAllowlist`, using the exact source identity and SHA-256 digest shown by the migration warning. The deprecated `common-intellisense.allowLegacyAdapters` flag is an emergency compatibility escape hatch that authorizes every configured custom source and therefore expands the executable-code trust boundary.
 
 ## How to Contribute
 
@@ -140,7 +162,17 @@ This repository is maintained by individuals, and needs to be updated with some 
 
 ## How to support private libraries
 
-If your project is a private library, you can also refer to [vuetify](https://github.com/common-intellisense/vuetify3), provide an exported uri, if your uri is an accessible packaged `dist/index.cjs` address, in vscode `common-intellisense.remoteUris`, configure this link, the plug-in will request this link and get the corresponding prompt information. You can also directly configure an npm package name (@xx/yy-ui), configure it in `common-intellisense.remoteNpmUris`, so that the plug-in will request the `dist/index.cjs` produced by the npm package and get the corresponding prompt information. [Bilibili video](https://www.bilibili.com/video/BV1zn2oYUEQG/)
+Publish a `schemaVersion: 1` JSON manifest like the example above. Point `common-intellisense.remoteUris` to its HTTPS URL, use `common-intellisense.localUris` for a manifest inside the workspace, or publish it in npm and configure:
+
+```json
+{
+  "common-intellisense.remoteNpmUris": [
+    { "name": "@company/ui-metadata", "resource": "dist/manifest.json" }
+  ]
+}
+```
+
+Legacy `dist/index.cjs` adapters are executable code and are supported only as a temporary migration path for an explicitly approved source/digest. Do not enable the deprecated global legacy flag unless every configured custom source is trusted.
 
 ## How to configure the component's JSON
 ```json

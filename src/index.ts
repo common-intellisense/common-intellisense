@@ -1,85 +1,462 @@
-import type { Directives, PropsConfig, SubCompletionItem } from './ui/utils'
+import type { CompletionRenderContext, Directives, PropsConfig, SubCompletionItem } from './ui/utils'
 import fsp from 'node:fs/promises'
 import { createFilter } from '@rollup/pluginutils'
-import { CreateWebview } from '@vscode-use/createwebview'
-import { addEventListener, createCompletionItem, createHover, createMarkdownString, createPosition, createRange, createSelect, getActiveText, getActiveTextEditor, getActiveTextEditorLanguageId, getConfiguration, getCurrentFileUrl, getLineText, getLocale, getPosition, getSelection, insertText, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText, updateText } from '@vscode-use/utils'
-import { findUp } from 'find-up'
+import { addEventListener, createCompletionItem, createHover, createMarkdownString, createSelect, getConfiguration, getLocale, message, openExternalUrl, registerCommand, registerCompletionItemProvider, setConfiguration, setCopyText } from '@vscode-use/utils'
 import * as vscode from 'vscode'
 import { nameMap } from './constants'
-import { cacheFetch, localCacheUri } from './services/fetch'
+import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri, normalizeHostname } from './services/fetch'
+import type { ComponentSourceScope } from './services/component-resolver'
+import { findComponentSourceScope, isLocalModuleSource, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
+import { createImportEdits, createPlannedImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
+import { isNativeTag } from './services/native-tags'
+import { invalidateRootPackageCacheForManifest } from './services/ui-cache'
 import { prettierType } from './prettier-type'
-import { findPrefixedComponent, generateScriptNames, hyphenate, isVine, isVue, toCamel } from './ui/utils'
-import { deactivateUICache, findUI, getCacheMap, getCurrentPkgUiNames, getOptionsComponents, getUiCompletions, logger } from './ui/ui-find'
-import { fixedTagName, getAlias, getImportUiComponents, getIsShowSlots, getUiDeps } from './ui/ui-utils'
-import { detectSlots, findDynamicComponent, getImportDeps, parser, registerCodeLensProviderFn } from './parser'
+import { escapeAttributeValue, escapeSnippetText, findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
+import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, handlePackageManifestLifecycle, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resetCustomSourcesForApprovalChange, resolvePackagePathForDocument } from './ui/ui-find'
+import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getUiImportedName } from './ui/ui-utils'
+import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn, resolveLocalWrappedComponent } from './parser'
 
-const defaultExclude = getConfiguration('common-intellisense.exclude')
-const filterId = createFilter(defaultExclude)
 const filter = ['javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte']
-let documentAnalysisCache: {
+
+export function supportsSlotAnalysis(document: Pick<vscode.TextDocument, 'languageId' | 'uri'>) {
+  return document.languageId === 'vue' || document.uri.fsPath?.endsWith('.vine.ts') === true
+}
+
+export function getHoverPropName(result: { propName?: unknown }) {
+  return typeof result.propName === 'string' ? result.propName : undefined
+}
+
+export function unwrapLiteral(value: string) {
+  const normalized = value.trim()
+  const match = /^(['"`])([\s\S]*)\1$/.exec(normalized)
+  return match ? match[2] : normalized
+}
+
+const jsIdentifierRE = /^[A-Z_$][\w$]*$/i
+
+export function getComponentImportName(value: string) {
+  const root = value.split('.')[0]
+  if (jsIdentifierRE.test(root))
+    return root
+  const normalized = root
+    .split(/[^\w$]+/)
+    .filter(Boolean)
+    .map(segment => `${segment[0].toUpperCase()}${segment.slice(1)}`)
+    .join('')
+  return jsIdentifierRE.test(normalized) ? normalized : undefined
+}
+
+export function renderDirectiveSnippet(item: Directives[0]) {
+  if (!item.params?.length)
+    return item.name
+  const values = item.params
+    .filter((param: any) => typeof param?.name === 'string' && typeof param?.type === 'string')
+    .reduce((acc: Record<string, unknown>, param: any) => {
+      const type = param.type.toLocaleLowerCase()
+      acc[param.name] = param.default ?? (type === 'boolean' ? false : type === 'number' ? 0 : '')
+      return acc
+    }, {})
+  const expression = JSON.stringify(values, null, 2)
+    .replace(/"([A-Z_$][\w$]*)":/gi, '$1:')
+  return `:${item.name}="${escapeSnippetText(escapeAttributeValue(expression))}"`
+}
+
+interface DocumentAnalysisCacheEntry {
   uri: string
   version: number
   code: string
-  uiDeps?: Record<string, string>
-  importDeps?: Record<string, string>
-} | null = null
+  uiDepsByBlock: Map<number, Record<string, string>>
+  importDepsByBlock: Map<number, Record<string, string>>
+}
+const documentAnalysisCache = new Map<string, DocumentAnalysisCacheEntry>()
+const maxDocumentAnalysisEntries = 10
+let excludePatterns: string[] = []
+let excludeFilter = createFilter([])
 
-function getDocumentAnalysis(document: vscode.TextDocument) {
-  const uri = document.uri.toString()
-  const version = document.version
-  if (!documentAnalysisCache || documentAnalysisCache.uri !== uri || documentAnalysisCache.version !== version) {
-    documentAnalysisCache = {
-      uri,
-      version,
-      code: document.getText(),
+function refreshExcludeFilter() {
+  excludePatterns = getConfiguration('common-intellisense.exclude') || []
+  excludeFilter = createFilter(excludePatterns)
+}
+
+export function normalizeScopedSource(from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): string | undefined {
+  if (!from)
+    return
+  if (sourceScopes) {
+    const scope = getSourceScope({ sourceScopes }, from)
+    if (scope)
+      return scope.exactLib || scope.lib
+  }
+  const packageName = from.startsWith('@') ? from.split('/').slice(0, 2).join('/') : from.split('/')[0]
+  const configured = alias[from] || alias[packageName] || nameMap[from] || nameMap[packageName] || packageName
+  return configured.replace(/\d+$/, '')
+}
+
+export function selectScopedCompletionsStrict(cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): PropsConfig | undefined {
+  if (!from)
+    return
+  const explicitScope = sourceScopes ? getSourceScope({ sourceScopes }, from) : undefined
+  if (explicitScope) {
+    const scoped = cacheMap.get(explicitScope.key)
+    return scoped && typeof scoped === 'object' && !Array.isArray(scoped) ? scoped as PropsConfig : undefined
+  }
+  const fixedFrom = normalizeScopedSource(from, alias, sourceScopes) || from
+  const adapterName = toCamel(fixedFrom)
+  const targetKey = Array.from(cacheMap.keys()).find(key => typeof key === 'string' && key.startsWith(adapterName) && /^\d+$/.test(key.slice(adapterName.length)))
+  const targetValue = targetKey ? cacheMap.get(targetKey) : undefined
+  return targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue) ? targetValue as PropsConfig : undefined
+}
+
+export function selectScopedCompletions(current: PropsConfig, cacheMap: Map<string, any>, from: string | undefined, alias: Record<string, string>, sourceScopes?: Map<string, ComponentSourceScope>): PropsConfig {
+  return selectScopedCompletionsStrict(cacheMap, from, alias, sourceScopes) || current
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, match => `\\${match}`)
+}
+
+export function getPreferredSuggestionNames(suggestions: unknown) {
+  const names = new Set<string>()
+  if (!Array.isArray(suggestions))
+    return names
+  for (const suggestion of suggestions) {
+    if (typeof suggestion === 'string') {
+      if (suggestion)
+        names.add(suggestion)
+      continue
     }
+    if (suggestion && typeof suggestion === 'object' && 'name' in suggestion && typeof suggestion.name === 'string' && suggestion.name)
+      names.add(suggestion.name)
+  }
+  return names
+}
+
+export function hasRenderedComponentTag(code: string, renderedTag: string, languageId?: string) {
+  if (!renderedTag)
+    return false
+  const pattern = new RegExp(`^<\\s*${escapeRegExp(renderedTag)}(?=[\\s/>.])`)
+  const scanScript = (script: string) => {
+    let quote = ''
+    for (let index = 0; index < script.length; index++) {
+      if (!quote && script.startsWith('/*', index)) {
+        const commentEnd = script.indexOf('*/', index + 2)
+        if (commentEnd < 0)
+          return false
+        index = commentEnd + 1
+        continue
+      }
+      if (!quote && script.startsWith('//', index)) {
+        const end = script.indexOf('\n', index + 2)
+        index = end < 0 ? script.length : end
+        continue
+      }
+      const char = script[index]
+      if (quote) {
+        if (char === '\\')
+          index++
+        else if (char === quote)
+          quote = ''
+        continue
+      }
+      if (char === '"' || char.charCodeAt(0) === 39 || char === '`') {
+        quote = char
+        continue
+      }
+      if (char === '<' && pattern.test(script.slice(index)))
+        return true
+    }
+    return false
+  }
+
+  if (languageId === 'vue' || languageId === 'svelte') {
+    const scripts = [...code.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(match => match[1] || '')
+    const markup = code
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+    if (new RegExp(`<\\s*${escapeRegExp(renderedTag)}(?=[\\s/>.])`).test(markup))
+      return true
+    return scripts.some(scanScript)
+  }
+
+  return scanScript(code.replace(/<!--[\s\S]*?-->/g, ''))
+}
+
+export function hasComponentTag(code: string, name: string, prefix = '') {
+  const rootName = name.split('.')[0]
+  const candidates = new Set([name, rootName])
+  if (prefix) {
+    candidates.add(`${prefix}${rootName}`)
+    candidates.add(`${prefix[0]?.toUpperCase() || ''}${prefix.slice(1)}${rootName}`)
+    candidates.add(`${prefix}-${rootName.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')}`)
+  }
+  return [...candidates].some(candidate => new RegExp(`<\\s*${escapeRegExp(candidate)}(?=[\\s/>.])`).test(code))
+}
+
+export function getRefVariableNames(result: any): string[] {
+  const names: unknown[] = Array.isArray(result?.refs)
+    ? result.refs.map((ref: string | [string, string]) => Array.isArray(ref) ? ref[0] : ref)
+    : Object.keys(result?.refsMap || {})
+  return [...new Set(names.filter((name: unknown): name is string => typeof name === 'string' && !!name))]
+}
+
+export function getRefMembers(completions: PropsConfig, refName: string | undefined): any[] | undefined {
+  if (!refName)
+    return
+  const component = completions[refName]
+  if (!component)
+    return
+  return [...(component.methods || []), ...(component.exposed || [])]
+}
+
+export async function resolveImportedComponent(rawTag: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>, localDeps: Record<string, string> = uiDeps, currentDocumentPath?: string, workspaceRoot?: string) {
+  if (!rawTag)
+    return {}
+  const importedTag = resolveImportedTag(rawTag, uiDeps)
+  const resolvedSource = importedTag.source || localDeps[importedTag.localRoot]
+  const scope = findComponentSourceScope(sourceScopes, resolvedSource)
+  // Registered package scopes are authoritative. Otherwise, allow the project
+  // resolver to prove that any import spelling (including custom tsconfig paths)
+  // points to a workspace wrapper. Bare packages resolving into node_modules are
+  // rejected by the local resolver and remain authoritative external sources.
+  if (resolvedSource && !scope) {
+    const component = await resolveLocalWrappedComponent(
+      resolvedSource,
+      completions,
+      prefixes,
+      currentDocumentPath,
+      workspaceRoot,
+      source => selectScopedCompletionsStrict(cacheMap, source, alias, sourceScopes),
+    )
+    if (component || isLocalModuleSource(resolvedSource))
+      return { component, source: resolvedSource, scoped: completions }
+  }
+  const scoped = resolvedSource
+    ? selectScopedCompletions(completions, cacheMap, resolvedSource, alias, sourceScopes)
+    : completions
+  const normalizedSource = scope?.exactLib || scope?.lib || (!scope ? normalizeScopedSource(resolvedSource, alias, sourceScopes) : undefined)
+  for (const candidate of importedTag.candidates) {
+    const component = await findDynamicComponent(candidate, {}, scoped, prefixes, normalizedSource)
+    if (component && sourceScopeAccepts(scope, component.lib))
+      return { component, source: resolvedSource, scoped }
+  }
+  return { source: resolvedSource, scoped }
+}
+
+export async function resolveRefMembers(localName: string | undefined, uiDeps: Record<string, string>, completions: PropsConfig, cacheMap: Map<string, any>, alias: Record<string, string>, prefixes: string[], sourceScopes?: Map<string, ComponentSourceScope>, localDeps: Record<string, string> = uiDeps, currentDocumentPath?: string, workspaceRoot?: string) {
+  const { component } = await resolveImportedComponent(localName, uiDeps, completions, cacheMap, alias, prefixes, sourceScopes, localDeps, currentDocumentPath, workspaceRoot)
+  return component ? [...(component.methods || []), ...(component.exposed || [])] : undefined
+}
+
+export function getDocumentAnalysis(document: vscode.TextDocument, code?: string) {
+  const uri = document.uri.toString()
+  let entry = documentAnalysisCache.get(uri)
+  if (!entry || entry.version !== document.version) {
+    entry = {
+      uri,
+      version: document.version,
+      code: code ?? document.getText(),
+      uiDepsByBlock: new Map(),
+      importDepsByBlock: new Map(),
+    }
+    documentAnalysisCache.delete(uri)
+    documentAnalysisCache.set(uri, entry)
+    while (documentAnalysisCache.size > maxDocumentAnalysisEntries)
+      documentAnalysisCache.delete(documentAnalysisCache.keys().next().value!)
+  }
+  else {
+    // Touch the entry so the cache is an actual URI-level LRU.
+    documentAnalysisCache.delete(uri)
+    documentAnalysisCache.set(uri, entry)
   }
   return {
     get code() {
-      return documentAnalysisCache!.code
+      return entry!.code
     },
-    getUiDeps() {
-      if (!documentAnalysisCache!.uiDeps)
-        documentAnalysisCache!.uiDeps = getUiDeps(documentAnalysisCache!.code) || {}
-      return documentAnalysisCache!.uiDeps
+    getUiDeps(activeOffset?: number) {
+      const key = activeOffset ?? -1
+      if (!entry!.uiDepsByBlock.has(key))
+        entry!.uiDepsByBlock.set(key, getUiDeps(entry!.code, { languageId: document.languageId, uri, activeOffset }) || {})
+      return entry!.uiDepsByBlock.get(key)!
     },
-    getImportDeps() {
-      if (!documentAnalysisCache!.importDeps)
-        documentAnalysisCache!.importDeps = getImportDeps(documentAnalysisCache!.code) || {}
-      return documentAnalysisCache!.importDeps
+    getImportDeps(activeOffset?: number) {
+      const key = activeOffset ?? -1
+      if (!entry!.importDepsByBlock.has(key))
+        entry!.importDepsByBlock.set(key, getImportDeps(entry!.code, typeof activeOffset === 'number' ? { activeOffset } : undefined) || {})
+      return entry!.importDepsByBlock.get(key)!
     },
   }
 }
 
-function isSkip() {
-  const id = getActiveTextEditorLanguageId()
+export function clearLocalDocumentAnalysis(uri: string | vscode.Uri) {
+  documentAnalysisCache.delete(typeof uri === 'string' ? uri : uri.toString())
+}
+
+export function getDocumentAnalysisCacheSize() {
+  return documentAnalysisCache.size
+}
+
+function isExcluded(filePath: string) {
+  return excludePatterns.length > 0 && excludeFilter(filePath)
+}
+
+function isSkip(document?: vscode.TextDocument) {
+  const id = document?.languageId || vscode.window.activeTextEditor?.document.languageId
   return !id || !filter.includes(id)
+}
+
+export function shouldSkipDocument(document: vscode.TextDocument): boolean {
+  return isSkip(document) || isExcluded(getDocumentPath(document))
+}
+
+function getDocumentPath(document: vscode.TextDocument) {
+  return document.uri.fsPath || document.uri.toString()
+}
+
+function getDocumentWorkspaceRoot(document: vscode.TextDocument) {
+  return vscode.workspace.getWorkspaceFolder?.(document.uri)?.uri.fsPath
+}
+
+function getDocumentOffset(document: vscode.TextDocument, position: vscode.Position, code = document.getText()) {
+  if (typeof document.offsetAt === 'function')
+    return document.offsetAt(position)
+  const lines = code.split('\n')
+  return lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.character
+}
+
+export function getDependencyScopeOffset(languageId: string, result?: any) {
+  if (languageId !== 'vue' || result?.isInTemplate)
+    return
+  if (result?.type !== 'script' && result?.syntax !== 'jsx')
+    return
+  return typeof result?.loc?.start?.offset === 'number' ? result.loc.start.offset : undefined
+}
+
+function getCompletionRenderContext(document: vscode.TextDocument, result?: any): CompletionRenderContext {
+  const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+  const hostFramework = isVineDocument ? 'vine' : result?.hostFramework || (document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'react')
+  const syntax = result?.syntax === 'jsx' || ['javascriptreact', 'typescriptreact'].includes(document.languageId) ? 'jsx' : 'template'
+  return {
+    languageId: document.languageId,
+    hostFramework,
+    syntax,
+    framework: syntax === 'jsx' ? 'react' : hostFramework,
+    uri: document.uri.toString(),
+    version: document.version,
+    vueBlock: result?.vueBlock,
+    blockLang: result?.blockLang,
+  }
 }
 // todo: 补充类型
 // todo: 补充example
 export async function activate(context: vscode.ExtensionContext) {
+  refreshExcludeFilter()
+  configureCacheStorage(context.globalStorageUri)
   // todo: createWebviewPanel
   // createWebviewPanel(context)
   logger.info('common-intellisense activate!')
   logger.info('🌟 please help star this project: https://github.com/common-intellisense/common-intellisense')
   const isZh = getLocale().includes('zh')
   const LANS = ['javascriptreact', 'typescript', 'typescriptreact', 'vue', 'svelte', 'solid', 'swan', 'react', 'js', 'ts', 'tsx', 'jsx']
-  const alias = getAlias()
-  if (!isSkip())
-    findUI(context, detectSlots)
+  const initialEditor = vscode.window.activeTextEditor
+  const slotTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const ensureDocumentContext = (document: vscode.TextDocument, cleanCache = false) => ensureContextForPath(
+    getDocumentPath(document),
+    context,
+    detectSlots,
+    cleanCache,
+    getDocumentWorkspaceRoot(document),
+  )
+  const analyzeDocumentSlots = async (document: vscode.TextDocument, packageContext: Awaited<ReturnType<typeof ensureContextForPath>>) => {
+    if (!supportsSlotAnalysis(document) || document.isClosed || !getIsShowSlots() || !packageContext?.uiCompletions || shouldSkipDocument(document))
+      return
+    const identity = { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }
+    const cached = getDocumentSlotAnalysis(document.uri)
+    if (cached?.documentVersion === document.version && cached.packagePath === identity.packagePath) {
+      if (cached.contextGeneration > identity.contextGeneration || (cached.contextGeneration === identity.contextGeneration && cached.contextRevision > identity.contextRevision))
+        return
+      if (cached.contextGeneration === identity.contextGeneration && cached.contextRevision === identity.contextRevision)
+        return
+    }
+    if (cached)
+      clearDocumentAnalysis(document.uri)
+    const code = document.getText()
+    if (document.isClosed)
+      return
+    const analysis = getDocumentAnalysis(document, code)
+    await detectSlots(document, packageContext.uiCompletions, analysis.getUiDeps(), packageContext.optionsComponents.prefix, identity, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: analysis.getImportDeps(), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
+  }
+  const rebuildVisibleDocumentContexts = async (existingOnly = false) => {
+    await Promise.all(vscode.window.visibleTextEditors.map(async ({ document }) => {
+      if (!supportsSlotAnalysis(document) || shouldSkipDocument(document))
+        return
+      const packageContext = existingOnly
+        ? getContextForDocumentPath(getDocumentPath(document))
+        : await ensureDocumentContext(document)
+      await analyzeDocumentSlots(document, packageContext)
+    }))
+  }
+  const packageManifestWatcher = vscode.workspace.createFileSystemWatcher?.('**/package.json')
+  if (packageManifestWatcher) {
+    const invalidateManifest = (uri: vscode.Uri) => {
+      const manifestPath = uri.fsPath
+      const segments = manifestPath.split(/[\\/]+/)
+      if (segments.some(segment => ['node_modules', 'dist', 'build', '.cache'].includes(segment)) || isExcluded(manifestPath))
+        return
+      const affected = handlePackageManifestLifecycle(manifestPath)
+      invalidateRootPackageCacheForManifest(manifestPath)
+      const documentPaths = new Set(affected.documentPaths)
+      for (const editor of vscode.window.visibleTextEditors) {
+        const { document } = editor
+        if (!documentPaths.has(getDocumentPath(document)))
+          continue
+        clearDocumentAnalysis(document.uri)
+        clearLocalDocumentAnalysis(document.uri)
+        void ensureDocumentContext(document)
+          .then((packageContext) => {
+            if (document.isClosed || !vscode.window.visibleTextEditors.includes(editor))
+              return
+            return analyzeDocumentSlots(document, packageContext)
+          })
+          .catch(error => logger.error(`Package manifest refresh failed: ${String(error)}`))
+      }
+    }
+    context.subscriptions.push(
+      packageManifestWatcher,
+      packageManifestWatcher.onDidCreate(invalidateManifest),
+      packageManifestWatcher.onDidDelete(invalidateManifest),
+    )
+  }
 
-  const provider = new CreateWebview(context, {
-    viewColumn: vscode.ViewColumn.Beside,
-    scripts: ['main.js'],
-  })
+  context.subscriptions.push(onPackageContextsInvalidated(packagePaths => packagePaths?.length
+    ? clearDocumentAnalysesForPackages(packagePaths)
+    : clearDocumentAnalysis()))
+  context.subscriptions.push(onPackageContextUpdated((packageContext) => {
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (!supportsSlotAnalysis(editor.document))
+        continue
+      const documentPath = getDocumentPath(editor.document)
+      void resolvePackagePathForDocument(documentPath).then((nearestPackagePath) => {
+        if (editor.document.isClosed || !vscode.window.visibleTextEditors.includes(editor))
+          return
+        if (nearestPackagePath !== packageContext.pkgPath)
+          return
+        const latestContext = getContextForPackagePath(nearestPackagePath, getDocumentWorkspaceRoot(editor.document))
+        if (latestContext)
+          return analyzeDocumentSlots(editor.document, latestContext)
+      }).catch(error => logger.error(String(error)))
+    }
+  }))
 
   context.subscriptions.push(registerCommand('common-intellisense.cleanCache', async () => {
+    clearFetchCaches()
+    invalidateContexts()
+    clearDocumentAnalysis()
+    await awaitCacheWrites()
     try {
       await fsp.rm(localCacheUri, { force: true })
     }
     catch {}
-    cacheFetch.clear()
-    findUI(context, detectSlots, true)
+    await rebuildVisibleDocumentContexts()
   }))
   context.subscriptions.push(registerCodeLensProviderFn())
 
@@ -87,13 +464,27 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!editor || editor.document.languageId === 'Log')
       return
 
-    if (isSkip())
+    if (!supportsSlotAnalysis(editor.document) || shouldSkipDocument(editor.document))
       return
     // 找到当前活动的编辑器
     const visibleEditors = vscode.window.visibleTextEditors
     const currentEditor = visibleEditors.find(e => e === editor)
-    if (currentEditor)
-      findUI(context, detectSlots)
+    if (currentEditor) {
+      void ensureDocumentContext(editor.document)
+        .then(packageContext => analyzeDocumentSlots(editor.document, packageContext))
+        .catch(error => logger.error(String(error)))
+    }
+  }))
+
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
+    const key = document.uri.toString()
+    const timer = slotTimers.get(key)
+    if (timer)
+      clearTimeout(timer)
+    slotTimers.delete(key)
+    clearDocumentAnalysis(document.uri)
+    clearLocalDocumentAnalysis(document.uri)
+    releaseDocumentContext(getDocumentPath(document))
   }))
 
   context.subscriptions.push(registerCommand('intellisense.copyDemo', (demo) => {
@@ -102,8 +493,10 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(registerCommand('common-intellisense.pickUI', async () => {
-    const currentPkgUiNames = getCurrentPkgUiNames()
-    if (currentPkgUiNames && currentPkgUiNames.length) {
+    const editor = vscode.window.activeTextEditor
+    const packageContext = editor ? await ensureDocumentContext(editor.document) : undefined
+    const currentPkgUiNames = packageContext?.currentPkgUiNames ? [...packageContext.currentPkgUiNames] : undefined
+    if (packageContext && currentPkgUiNames?.length) {
       if (currentPkgUiNames.some(i => i.includes('bitsUi'))) {
         currentPkgUiNames.filter(i => i.startsWith('bitsUi')).map(i => i.replace('bitsUi', 'shadcnSvelte')).forEach((i) => {
           if (!currentPkgUiNames!.includes(i))
@@ -112,14 +505,8 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       const rawCfg = getConfiguration('common-intellisense.ui') as any
-      const options: ({ label: string, picked?: boolean })[] = currentPkgUiNames.map((label: string) => {
-        const picked = Array.isArray(rawCfg)
-          ? rawCfg.includes(label)
-          : (rawCfg && typeof rawCfg === 'object')
-              ? Object.values(rawCfg).flat().includes(label)
-              : false
-        return picked ? { label, picked: true } : { label }
-      })
+      const selectedForPackage = getSelectedUIs(packageContext.pkgPath, packageContext.workspaceRoot) || []
+      const options: ({ label: string, picked?: boolean })[] = currentPkgUiNames.map((label: string) => selectedForPackage.includes(label) ? { label, picked: true } : { label })
 
       const data = await createSelect(options, {
         canSelectMany: true,
@@ -129,15 +516,8 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!data)
         return
 
-      // find package.json for current file and save selection keyed by its path
-      const cwd = getCurrentFileUrl()
-      let pkgPath: string | undefined
-      try {
-        if (cwd && cwd !== 'exthhost')
-          pkgPath = await findUp('package.json', { cwd })
-      }
-      catch {}
-
+      // Save the selection for the active editor's package only.
+      const pkgPath = packageContext.pkgPath
       let newCfg: any
       if (pkgPath) {
         if (rawCfg && typeof rawCfg === 'object' && !Array.isArray(rawCfg))
@@ -158,222 +538,265 @@ export async function activate(context: vscode.ExtensionContext) {
   }))
 
   context.subscriptions.push(addEventListener('config-change', (e) => {
-    if (e.affectsConfiguration('common-intellisense.ui'))
-      findUI(context, detectSlots, true)
-  }))
+    const affects = (key: string) => e.affectsConfiguration(`common-intellisense.${key}`)
+    const excludeChanged = affects('exclude')
+    if (excludeChanged) {
+      refreshExcludeFilter()
+      clearDocumentAnalysis()
+      documentAnalysisCache.clear()
+      void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to refresh after exclude change: ${String(error)}`))
+    }
 
-  context.subscriptions.push(registerCommand('common-intellisense.import', async (params, loc, _lineOffset) => {
-    if (!params)
+    if (affects('showSlots')) {
+      clearDocumentAnalysis()
+      if (getIsShowSlots())
+        void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to refresh slots after configuration change: ${String(error)}`))
+    }
+
+    const rebuildContexts = ['ui', 'prefix', 'alias', 'translate'].some(affects)
+    const approvalChanged = affects('legacyAdapterAllowlist') || affects('allowLegacyAdapters')
+    const rebuildSources = ['remoteUris', 'remoteNpmUris', 'localUris', 'trustedHosts', 'legacyAdapterAllowlist', 'allowLegacyAdapters'].some(affects)
+    if (!rebuildContexts && !rebuildSources)
       return
-    const { data, lib, prefix, dynamicLib, importWay } = params
-    const name = data.name.split('.')[0]
-    const fromName = data.from
-    const from = fromName || dynamicLib ? dynamicLib.replace('${name}', hyphenate(name)) : lib
-    const code = getActiveText()!
-    const uiComponents = getImportUiComponents(code)
-    let deps = data.suggestions?.length === 1
-      ? data.suggestions.map((i: any) => {
-          const name = i.split('.')[0]
-          if (i.includes('-'))
-            return toCamel(name.slice(prefix.length))
 
-          return name
-        })
-      : []
-
-    const importTarget = uiComponents[from]
-    if (importTarget)
-      deps.push(...uiComponents[from].components)
-    else
-      deps.push(name)
-
-    deps = [...new Set(deps)]
-    if (importTarget) {
-      const line = importTarget.match[1].startsWith('\n')
-      if (deps.includes(name))
-        return
-      deps.push(name)
-
-      const offsetStart = code.match(importTarget.match[0])!.index!
-      const offsetEnd = offsetStart + importTarget.match[0].length
-      const posStart = getPosition(offsetStart).position
-      const posEnd = getPosition(offsetEnd).position
-      const str = importWay === 'as default'
-        ? `import * as ${deps.join(', ')} from '${from}'`
-        : importWay === 'default'
-          ? `import ${deps.join(', ')} from '${from}'`
-          : line
-            ? `import {\n    ${deps.join(',\n    ')}\n  } from '${from}'`
-            : `import { ${deps.join(', ')} } from '${from}'`
-      updateText(edit => edit.replace(createRange(posStart, posEnd), str))
+    if (rebuildSources)
+      clearFetchCaches()
+    if (rebuildContexts) {
+      invalidateContexts()
+      void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
+    }
+    else if (approvalChanged) {
+      void resetCustomSourcesForApprovalChange().then(() => rebuildVisibleDocumentContexts()).catch(error => logger.error(`Failed to apply legacy adapter approvals: ${String(error)}`))
     }
     else {
-      // 顶部导入
-      const _isVue = isVue()
-      let str = importWay === 'as default'
-        ? `${_isVue ? '  ' : ''}import * as ${deps.join(', ')} from '${from}'`
-        : importWay === 'default'
-          ? `${_isVue ? '  ' : ''}import ${deps.join(', ')} from '${from}'`
-          : `${_isVue ? '  ' : ''}import { ${deps.join(', ')} } from '${from}'`
-      let pos: any = null
-      if (_isVue) {
-        if (loc) {
-          if (getLineText(loc.start.line)?.trim()) {
-            str += '\n'
-          }
-          pos = createPosition(loc.start.line, 0)
-        }
-        else {
-          const match = code.match(/<script[^>]*>/)
-          if (match) {
-            const offset = match.index! + match[0].length
-            pos = getPosition(offset)
-            str = `\n${str}`
-          }
-          else {
-            pos = createPosition(0, 0)
-            str = `<script setup>\n${str}</script>`
-          }
-        }
-      }
-      else {
-        const match = code.match(/<script[^>]*>/)
-        if (match) {
-          const offset = match.index! + match[0].length
-          pos = getPosition(offset)
-          str = `\n  ${str}`
-        }
-        else {
-          str += '\n'
-          pos = createPosition(0, 0)
-        }
-      }
-
-      updateText(edit => edit.insert(pos, str))
+      invalidateContexts()
+      void rebuildVisibleDocumentContexts().catch(error => logger.error(`Failed to reload contexts after configuration change: ${String(error)}`))
     }
+    clearDocumentAnalysis()
+    documentAnalysisCache.clear()
+  }))
+
+  context.subscriptions.push(registerCommand('common-intellisense.import', async (params, activeLoc) => {
+    if (!params?.document?.uri || typeof params.document.version !== 'number')
+      return
+    const uri = vscode.Uri.parse(params.document.uri)
+    const document = await vscode.workspace.openTextDocument(uri)
+    // The completion list may be filtered for several keystrokes before the
+    // selected snippet is applied. A version delta is therefore not a reliable
+    // freshness check; only reject a document older than the captured request.
+    if (document.version < params.document.version)
+      return
+    const capturedIdentity = params.document
+    if (capturedIdentity.packagePath
+      || typeof capturedIdentity.contextGeneration === 'number'
+      || typeof capturedIdentity.contextRevision === 'number'
+      || capturedIdentity.sourceId) {
+      const currentContext = getContextForDocumentPath(getDocumentPath(document))
+        || await ensureDocumentContext(document)
+      if (!currentContext
+        || (capturedIdentity.packagePath && currentContext.pkgPath !== capturedIdentity.packagePath)
+        || (typeof capturedIdentity.contextGeneration === 'number' && currentContext.generation !== capturedIdentity.contextGeneration)
+        || (capturedIdentity.sourceId && currentContext.sourceSignatures.get(capturedIdentity.sourceId) !== capturedIdentity.sourceSignature)
+        || (!capturedIdentity.sourceId && typeof capturedIdentity.contextRevision === 'number' && currentContext.revision !== capturedIdentity.contextRevision)) {
+        return
+      }
+    }
+    const { data, lib, prefix = '', dynamicLib, importWay = 'specifier' } = params
+    if (typeof data?.name !== 'string' || !data.name.trim())
+      return
+    const code = document.getText()
+    if (params.renderedTag
+      ? !hasRenderedComponentTag(code, params.renderedTag, document.languageId)
+      : !hasComponentTag(code, data.name, prefix)) {
+      return
+    }
+    const name = getComponentImportName(data.name)
+    if (!name)
+      return
+    const importHost = document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'script'
+    const preferredOffset = typeof activeLoc?.start?.offset === 'number' ? activeLoc.start.offset : undefined
+    const editContext = {
+      languageId: document.languageId,
+      uri: document.uri.toString(),
+      preferredOffset: params.document.vueBlock ? undefined : preferredOffset,
+      preferredVueBlock: params.document.vueBlock,
+      expectedBlockLang: params.document.blockLang,
+      registerVueComponent: typeof params.registerVueComponent === 'boolean' ? params.registerVueComponent : preferredOffset === undefined,
+    }
+    const plannedImports = Array.isArray(data.__imports)
+      ? data.__imports.filter((item: any) => item && typeof item.localName === 'string' && typeof item.source === 'string' && ['as default', 'default', 'specifier'].includes(item.importWay))
+      : []
+    const edits = plannedImports.length
+      ? createPlannedImportEdits(code, plannedImports, importHost, editContext)
+      : createImportEdits(
+          code,
+          resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')),
+          [...getSuggestedImportNames(data.suggestions, prefix, importWay), name],
+          importWay,
+          importHost,
+          editContext,
+        )
+    if (!edits.length)
+      return
+    const workspaceEdit = new vscode.WorkspaceEdit()
+    for (const item of edits) {
+      const start = document.positionAt(item.start)
+      const end = document.positionAt(item.end)
+      if (item.start === item.end)
+        workspaceEdit.insert(uri, start, item.text)
+      else
+        workspaceEdit.replace(uri, new vscode.Range(start, end), item.text)
+    }
+    await vscode.workspace.applyEdit(workspaceEdit)
   }))
 
   // 监听pkg变化
-  if (getIsShowSlots()) {
-    context.subscriptions.push(registerCommand('common-intellisense.slots', async (child, name, offset, detail) => {
-      const UiCompletions = getUiCompletions()
-      const activeText = getActiveText()
-      if (!activeText)
-        return
-      if (!child && UiCompletions) {
-        const uiDeps = getUiDeps(activeText)
-        const optionsComponents = getOptionsComponents()
-        const componentsPrefix = optionsComponents.prefix
-        detectSlots(UiCompletions, uiDeps, componentsPrefix)
-        return
-      }
-      if (!child.children)
-        return
+  context.subscriptions.push(registerCommand('common-intellisense.slots', async (target, name, detail, editIdentity) => {
+    if (!getIsShowSlots() || !editIdentity?.uri || typeof editIdentity.version !== 'number')
+      return
+    const uri = vscode.Uri.parse(editIdentity.uri)
+    const document = await vscode.workspace.openTextDocument(uri)
+    const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+    if (document.languageId !== 'vue' && !isVineDocument)
+      return
+    if (document.version !== editIdentity.version)
+      return
+    const packageContext = getContextForDocumentPath(getDocumentPath(document))
+      || await ensureDocumentContext(document)
+    if (!packageContext?.uiCompletions
+      || packageContext.pkgPath !== editIdentity.packagePath
+      || packageContext.generation !== editIdentity.contextGeneration
+      || packageContext.revision !== editIdentity.contextRevision) {
+      return
+    }
+    if (!Number.isInteger(target?.start) || !Number.isInteger(target?.end))
+      return
 
-      let lastChild = child.children[child.children.findLastIndex((c: any) => c.type !== 2)]
-      let slotName = `#${name}`
-      if (child.range)
-        slotName = `v-slot:${name}`
-      if (detail.params)
-        slotName += '="slotProps"'
+    let slotName = isVineDocument ? `#${name}` : `v-slot:${name}`
+    if (detail.params)
+      slotName += '="slotProps"'
+    const workspaceEdit = new vscode.WorkspaceEdit()
+    const insertAt = (at: number, text: string) => workspaceEdit.insert(uri, document.positionAt(at), text)
+    const replaceAt = (start: number, end: number, text: string) => workspaceEdit.replace(uri, new vscode.Range(document.positionAt(start), document.positionAt(end)), text)
 
-      if (lastChild) {
-        if (isVine() && lastChild.codegenNode) {
-          lastChild = lastChild.codegenNode
-        }
-        const pos = lastChild.loc.end
-        const endColumn = Math.max(pos.column - 1, 0)
-        if (isVine())
-          await insertText(`\n<template ${slotName}></template>`, getPosition(pos.offset + offset).position)
-        else
-          await insertText(`\n<template ${slotName}>$1</template>`, createPosition(pos.line - 1, endColumn))
+    if (Number.isInteger(target.lastChildEnd)) {
+      insertAt(target.lastChildEnd, `
+<template ${slotName}></template>`)
+    }
+    else {
+      const nodeText = document.getText().slice(target.start, target.end)
+      const tag = target.tag || nodeText.match(/^<\s*([\w.$:-]+)/)?.[1]
+      if (!tag)
+        return
+      const empty = ' '.repeat(Math.max((target.column || 1) - 1, 0))
+      if (target.selfClosing) {
+        const closeIndex = nodeText.lastIndexOf('/>')
+        if (closeIndex < 0)
+          return
+        replaceAt(target.start + closeIndex, target.end, `>
+  <template ${slotName}></template>
+</${tag}>`)
       }
       else {
-        const empty = ' '.repeat(Math.max(child.loc.start.column - 1, 0))
-
-        if (child.isSelfClosing) {
-          if (isVine())
-            await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(getPosition(child.loc.end.offset + offset - 3).position, getPosition(child.loc.end.offset + offset).position))
-          else
-            await insertText(`>\n  <template ${slotName}>$1</template>\n</${child.tag}>`, createRange(createPosition(child.loc.end.line - 1, child.loc.end.column - 3), createPosition(child.loc.end.line - 1, child.loc.end.column)))
-        }
-        else {
-          const isNeedLineBlock = child.loc.start.line === child.loc.end.line
-          const index = child.loc.start.offset + child.loc.source.indexOf(`</${child.tag}`) - (isNeedLineBlock ? 0 : (child.loc.end.column - `</${child.tag}>`.length - 1))
-          const pos = getPosition(index)
-          if (isVine())
-            await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, getPosition(index + offset).position)
-          else
-            await insertText(`${isNeedLineBlock ? '\n' : empty}  <template ${slotName}>$1</template>\n`, createPosition(pos.line, pos.column))
-        }
+        const closeIndex = nodeText.lastIndexOf('</')
+        if (closeIndex < 0)
+          return
+        insertAt(target.start + closeIndex, `${target.sameLine ? '\n' : empty}  <template ${slotName}></template>
+`)
       }
-    }))
+    }
+    await vscode.workspace.applyEdit(workspaceEdit)
+  }))
 
-    context.subscriptions.push(addEventListener('text-change', ({ contentChanges, document }) => {
-      if (contentChanges.length === 0 || document.languageId === 'Log')
-        return
-      const UiCompletions = getUiCompletions()
-      const optionsComponents = getOptionsComponents()
-      const componentsPrefix = optionsComponents.prefix
-      if (isSkip())
-        return
-      const activeText = getActiveText()
-      if (UiCompletions && activeText) {
-        const uiDeps = getUiDeps(activeText)
-        detectSlots(UiCompletions, uiDeps, componentsPrefix)
+  context.subscriptions.push({ dispose() {
+    for (const timer of slotTimers.values())
+      clearTimeout(timer)
+    slotTimers.clear()
+  } })
+  context.subscriptions.push(addEventListener('text-change', ({ contentChanges, document }) => {
+    const key = document.uri.toString()
+    const previous = slotTimers.get(key)
+    if (previous)
+      clearTimeout(previous)
+    slotTimers.delete(key)
+    if (!supportsSlotAnalysis(document) || !getIsShowSlots() || contentChanges.length === 0 || document.languageId === 'Log' || shouldSkipDocument(document))
+      return
+    clearDocumentAnalysis(document.uri)
+    slotTimers.set(key, setTimeout(() => {
+      slotTimers.delete(key)
+      const analyze = async () => {
+        if (document.isClosed)
+          return
+        const packageContext = await ensureDocumentContext(document)
+        if (document.isClosed || !packageContext?.uiCompletions)
+          return
+        const code = document.getText()
+        if (document.isClosed)
+          return
+        const analysis = getDocumentAnalysis(document, code)
+        await detectSlots(document, packageContext.uiCompletions, analysis.getUiDeps(), packageContext.optionsComponents.prefix, { packagePath: packageContext.pkgPath, contextGeneration: packageContext.generation, contextRevision: packageContext.revision }, { cacheMap: packageContext.cacheMap, sourceScopes: packageContext.sourceScopes, localDeps: analysis.getImportDeps(), currentDocumentPath: getDocumentPath(document), workspaceRoot: packageContext.workspaceRoot })
       }
-    }))
-  }
+      void analyze().catch(error => logger.error(`Slot analysis failed: ${String(error)}`))
+    }, 200))
+  }))
 
   context.subscriptions.push(registerCompletionItemProvider(filter, async (document, position) => {
-    const optionsComponents = getOptionsComponents()
+    if (shouldSkipDocument(document))
+      return
+    const packageContext = await ensureDocumentContext(document)
+    if (!packageContext?.uiCompletions)
+      return
+    const optionsComponents = packageContext.optionsComponents
     const componentsPrefix = optionsComponents.prefix
-    let UiCompletions = getUiCompletions()
-    if (!UiCompletions)
-      return
-    const { lineText } = getSelection()!
+    const UiCompletions = packageContext.uiCompletions
+    const alias = getAlias(packageContext.pkgPath, packageContext.workspaceRoot) || {}
+    const lineText = document.lineAt(position.line).text
     const p = position
-    const activeTextEditor = getActiveTextEditor()
-    if (!activeTextEditor)
-      return
-
-    if (isSkip())
-      return
-
-    const preText = lineText.slice(0, activeTextEditor.selection.active.character)
+    const preText = lineText.slice(0, position.character)
     let completionsCallback: SubCompletionItem[] | undefined
     let eventCallback: SubCompletionItem[] | undefined
     const activeText = getEffectWord(preText)
-    const result = parser(document.getText(), p)
+    const completionAnalysis = getDocumentAnalysis(document)
+    const documentCode = completionAnalysis.code
+    const result = parser(documentCode, p, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, p, documentCode) })
     if (!result)
       return
     if (activeText === ':' && result.type === 'text')
       return
 
-    const lan = getActiveTextEditorLanguageId()
-    const isVue = (lan === 'vue' && result.template) || isVine()
-    const analysis = getDocumentAnalysis(document)
-    const deps = isVue ? analysis.getImportDeps() : {}
-    const uiDeps = analysis.getUiDeps()
+    const isVineDocument = document.uri.fsPath.endsWith('.vine.ts')
+    const isVue = document.languageId === 'vue' || result.hostFramework === 'vue' || isVineDocument
+    const renderContext = {
+      ...getCompletionRenderContext(document, result),
+      parent: result.parent,
+      packagePath: packageContext.pkgPath,
+      contextGeneration: packageContext.generation,
+      contextRevision: packageContext.revision,
+    }
+    const isTemplateSyntax = renderContext.syntax !== 'jsx'
+    const dependencyScopeOffset = getDependencyScopeOffset(document.languageId, result)
+    const deps = isVue ? completionAnalysis.getImportDeps(dependencyScopeOffset) : {}
+    const uiDeps = completionAnalysis.getUiDeps(dependencyScopeOffset)
     const { character } = position
     const isPreEmpty = lineText[character - 1] === ' '
     const isValue = result.isValue
 
-    if (result.type === 'script' && Object.keys(result.refsMap || {}).length && !isPreEmpty) {
+    const refVariableNames = getRefVariableNames(result)
+    if (result.type === 'script' && (Object.keys(result.refsMap || {}).length || refVariableNames.length) && !isPreEmpty) {
       if (lineText?.slice(-1)[0] === '.') {
         for (const key in result.refsMap) {
           const value = result.refsMap[key]
-          if (isVue && (lineText.endsWith(`.$refs.${key}.`) || lineText.endsWith(`${key}.value.`)) && UiCompletions[value])
-            return [...UiCompletions[value].methods, ...UiCompletions[value].exposed]
-          else if (!isVue && lineText.endsWith(`${key}.current.`) && UiCompletions[value])
-            return [...UiCompletions[value].methods, ...UiCompletions[value].exposed]
+          if (isVue && (lineText.endsWith(`.$refs.${key}.`) || lineText.endsWith(`${key}.value.`)))
+            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+          else if (!isVue && lineText.endsWith(`${key}.current.`))
+            return resolveRefMembers(value, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
         }
       }
       if (isVue && lineText.slice(character, character + 6) !== '.value' && /\.value\.?$/.test(lineText.slice(0, character)))
-        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.value`, documentation: `${refName}.value`, preselect: true, sortText: '0' }))
+        return refVariableNames.map(refName => createCompletionItem({ content: refName, snippet: `${refName}.value`, documentation: `${refName}.value`, preselect: true, sortText: '0' }))
 
       if (!isVue && lineText.slice(character, character + 8) !== '.current' && /\.current\.?$/.test(lineText.slice(0, character)))
-        return result.refs.map((refName: string) => createCompletionItem({ content: refName, snippet: `${refName}.current`, documentation: `${refName}.current`, preselect: true, sortText: '0' }))
+        return refVariableNames.map(refName => createCompletionItem({ content: refName, snippet: `${refName}.current`, documentation: `${refName}.current`, preselect: true, sortText: '0' }))
 
       return
     }
@@ -384,34 +807,35 @@ export async function activate(context: vscode.ExtensionContext) {
     ) {
       const parentTag = result.parent?.tag || result.parent?.name || result.parentTag
       if (parentTag) {
-        let matchedComponent = findPrefixedComponent(parentTag, componentsPrefix, UiCompletions)
-        if (!matchedComponent) {
-          matchedComponent = UiCompletions[fixedTagName(parentTag)]
-        }
-        const slots = matchedComponent?.slots
+        const { component, source } = await resolveImportedComponent(parentTag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+        const slots = component?.slots
         if (slots)
           return slots
+        if (source)
+          return
       }
     }
 
-    let matchedComponent = result.tag ? findPrefixedComponent(result.tag, componentsPrefix, UiCompletions) : null
-    if (result.tag) {
-      if (!matchedComponent)
-        matchedComponent = UiCompletions[fixedTagName(result.tag)]
-    }
+    const importedResolution = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+    let matchedComponent = importedResolution.component
+    const matchedSource = importedResolution.source
+    if (!matchedSource && isNativeTag(result.tag))
+      return
+    if (!matchedComponent && result.tag && !matchedSource)
+      matchedComponent = findPrefixedComponent(result.tag, componentsPrefix, UiCompletions)
     if (matchedComponent) {
       if (result.propName === 'icon')
         return matchedComponent.icons
       const existingPropsSet = new Set(getExistingPropNames(result, lineText))
       const existingProps = existingPropsSet.size ? existingPropsSet : null
       if (result.isEvent) {
-        const events = matchedComponent.events?.[0]?.(isVue) || []
+        const events = matchedComponent.events?.[0]?.(renderContext) || []
         return existingProps ? filterExistingCompletions(events, existingProps) : events
       }
       // slot suggestions for all slot-related scenarios
       if (matchedComponent.slots && (result.type === 'slots' || result.type === 'slot' || result.isSlot || (typeof result.propName === 'string' && result.propName.startsWith('#'))))
         return matchedComponent.slots
-      const completions = matchedComponent.completions?.[0]?.(isVue) || []
+      const completions = matchedComponent.completions?.[0]?.(renderContext) || []
       return existingProps ? filterExistingCompletions(completions, existingProps) : completions
     }
 
@@ -420,36 +844,8 @@ export async function activate(context: vscode.ExtensionContext) {
         return UiCompletions.icons
       const name = fixedTagName(result.tag)
       const propName = result.propName
-      const from = uiDeps?.[name]
-      const cacheMap = getCacheMap()
-      if (from && cacheMap.size > 2) {
-        // 存在多个 UI 库
-        let fixedFrom = nameMap[from] || from
-        if (fixedFrom in alias) {
-          const v = alias[fixedFrom]
-          fixedFrom = v.replace(/\d+$/, '')
-        }
-
-        const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
-        const keys = Array.from(cacheMap.keys())
-        const targetKey = keys.find(k => nameReg.test(k))!
-        const targetValue = cacheMap.get(targetKey)! as PropsConfig
-        UiCompletions = targetValue
-      }
-      let target = await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, from)
-      const importUiSource = uiDeps?.[name]
-      if (importUiSource && (!target || target.uiName !== importUiSource)) {
-        for (const p of optionsComponents.prefix.filter(Boolean)) {
-          const realName = p[0].toUpperCase() + p.slice(1) + name
-          const newTarget = UiCompletions[realName]
-          if (!newTarget)
-            continue
-          if (newTarget.uiName === importUiSource) {
-            target = newTarget
-            break
-          }
-        }
-      }
+      const resolved = importedResolution
+      const target = resolved.component || (!resolved.source ? await findDynamicComponent(name, deps, UiCompletions, componentsPrefix, undefined, getDocumentPath(document)) : undefined)
 
       if (!target) {
         if (result.isEvent && propName !== 'on') {
@@ -466,8 +862,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
       const { events, completions, uiName } = target
       const directives = optionsComponents.directivesMap[uiName]
-      const directivesCompletions = directives
-        ? directives.map((item: Directives[0]) => {
+      const directivesCompletions = Array.isArray(directives)
+        ? directives.filter((item: any) => typeof item?.name === 'string' && (!item.params || Array.isArray(item.params))).map((item: Directives[0]) => {
             const detail = isZh ? item.description_zh : item.description
             const content = `${item.name}  ${detail}`
             const documentation = createMarkdownString()
@@ -478,7 +874,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             if (item.params?.length) {
               documentation.appendCodeblock('\n')
-              item.params.forEach((i) => {
+              item.params.filter((i: any) => typeof i?.name === 'string' && typeof i?.type === 'string').forEach((i: any) => {
                 documentation.appendMarkdown(`**🌟 ${i.name}** \n`)
                 documentation.appendMarkdown(`- ${isZh ? '类型' : 'type'}: ${i.type}\n`)
                 documentation.appendMarkdown(`- ${isZh ? '描述' : 'description'}: ${isZh ? i.description_zh : i.description}\n`)
@@ -486,15 +882,7 @@ export async function activate(context: vscode.ExtensionContext) {
               })
             }
 
-            const snippet = item.params?.length
-              ? `:${item.name}="${JSON.stringify(item.params.reduce((acc, i) => {
-                const key = i.name
-                const type = i.type.toLocaleLowerCase()
-                const value = i.default || type === 'boolean' ? false : type === 'number' ? 0 : type === 'string' ? '' : ''
-                acc[key] = value
-                return acc
-              }, {} as Record<string, any>), null, 2).replace(/"([^"]+)":/g, '$1:').replace(/"/g, '`')}"`
-              : item.name
+            const snippet = renderDirectiveSnippet(item)
 
             return createCompletionItem({
               content,
@@ -508,8 +896,8 @@ export async function activate(context: vscode.ExtensionContext) {
             })
           })
         : []
-      eventCallback = events[0](isVue) || []
-      completionsCallback = [...completions[0](isVue), ...(isVue ? [] : eventCallback), ...directivesCompletions]
+      eventCallback = events[0](renderContext) || []
+      completionsCallback = [...completions[0](renderContext), ...(isTemplateSyntax ? [] : eventCallback), ...(isTemplateSyntax ? directivesCompletions : [])]
 
       const hasProps = new Set(getExistingPropNames(result, lineText))
       const hasProp = (item: any) => {
@@ -522,16 +910,19 @@ export async function activate(context: vscode.ExtensionContext) {
       else if (propName) {
         const r: any[] = []
         if (isValue) {
+          if (result.isDynamicArgument)
+            return
+          const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
           completionsCallback.filter((item: any) => hasProp(item)).filter((item: any) => {
             const reg = propName === 'bind'
-              ? new RegExp('^:')
-              : new RegExp(`^:?${propName}`)
+              ? /^:/
+              : new RegExp(`^:?${escapedPropName}`)
             return reg.test(item.label)
           }).forEach((item: any) => {
-            item.propType?.split('/').forEach((p: string) => {
+            item.propType?.split('/').map(unwrapLiteral).filter(Boolean).forEach((value: string) => {
               r.push(createCompletionItem({
-                content: p.trim(),
-                snippet: p.trim().replace(/'`/g, ''),
+                content: value,
+                snippet: value,
                 documentation: item.documentation,
                 sortText: '0',
                 preselect: true,
@@ -553,7 +944,7 @@ export async function activate(context: vscode.ExtensionContext) {
             type: item.kind,
           }))))
         }
-        const events = isVue
+        const events = isTemplateSyntax
           ? []
           : isValue
             ? []
@@ -581,7 +972,7 @@ export async function activate(context: vscode.ExtensionContext) {
     else if (!result.isInTemplate || !optionsComponents) {
       return
     }
-    else if (isValue && (isVue || !result.isDynamicFlag)) {
+    else if (isValue && (isTemplateSyntax || !result.isDynamicFlag)) {
       return
     }
 
@@ -593,15 +984,16 @@ export async function activate(context: vscode.ExtensionContext) {
       ? optionsComponents.prefix.some((reg: string) => !reg || prefix.startsWith(reg) || reg.startsWith(prefix))
       : true) {
       const parent = result.parent
-      const data = await Promise.all(optionsComponents.data.map(c => c(parent)).flat())
+      const data = await Promise.all(optionsComponents.data.map(c => c(parent, renderContext)).flat())
       if (parent) {
         const parentTag = parent.tag || parent.name
         if (UiCompletions) {
           const suggestions = UiCompletions[fixedTagName(parentTag)]?.suggestions
           if (suggestions && suggestions.length) {
+            const preferredNames = getPreferredSuggestionNames(suggestions)
             data.forEach((child) => {
               const label = typeof child.label === 'string' ? child.label.split(' ')[0] : child.label.label.split(' ')[0]
-              child.sortText = suggestions.includes(label) ? '1' : '2';
+              child.sortText = preferredNames.has(label) ? '1' : '2';
               (child as any).loc = result.loc
             })
           }
@@ -618,7 +1010,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   }, (item: SubCompletionItem) => {
     if (!item.command) {
-      if (item.params?.isReact) {
+      if (item.params?.requiresImport ?? item.params?.isReact) {
         item.command = {
           title: 'common-intellisense-import',
           command: 'common-intellisense.import',
@@ -637,66 +1029,27 @@ export async function activate(context: vscode.ExtensionContext) {
     return item
   }, ['"', '\'', '-', ' ', '@', '.', ':', '\n']))
 
-  context.subscriptions.push(registerCommand('intellisense.openDocument', (args) => {
-    // 注册全局的 link 点击事件
-    const url = args.link
-    if (!url)
-      return
-    provider.create(`
-      <!DOCTYPE html>
-      <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Webview</title>
-          <style>
-            body{
-              width:100%;
-              height:100vh;
-            }
-          </style>
-        </head>
-        <body>
-          <iframe src="${url}" width="100%" height="100%"></iframe>
-        </body>
-      </html>
-      `, ({ data, type }) => {
-      // callback 获取 js 层的 postMessage 数据
-      if (type === 'copy') {
-        setCopyText(data).then(() => {
-          const isZh = getLocale().includes('zh')
-          message.info(`${isZh ? '复制成功' : 'copy successfully'}!  ✅`)
-        })
-      }
-    })
-  }))
-
-  context.subscriptions.push(registerCommand('intellisense.openDocumentExternal', (args) => {
-    // 注册全局的 link 点击事件
-    const url = args.link
-    if (!url)
-      return
-    openExternalUrl(url)
-  }))
+  const openTrustedDocumentation = (args: any) => {
+    const url = getTrustedDocumentationUrl(args?.link)
+    if (url)
+      openExternalUrl(url)
+  }
+  context.subscriptions.push(registerCommand('intellisense.openDocument', openTrustedDocumentation))
+  context.subscriptions.push(registerCommand('intellisense.openDocumentExternal', openTrustedDocumentation))
 
   context.subscriptions.push(vscode.languages.registerHoverProvider(LANS, {
     async provideHover(document, position) {
-      const optionsComponents = getOptionsComponents()
+      if (shouldSkipDocument(document))
+        return
+      const packageContext = await ensureDocumentContext(document)
+      if (!packageContext?.uiCompletions)
+        return
+      const optionsComponents = packageContext.optionsComponents
       const componentsPrefix = optionsComponents.prefix
-      let UiCompletions = getUiCompletions()
-      if (!optionsComponents || !UiCompletions)
-        return
-
-      const editor = getActiveTextEditor()
-      if (!editor)
-        return
-
-      const currentFileUrl = getCurrentFileUrl()
-
-      if (!currentFileUrl)
-        return
-
-      if (filterId(currentFileUrl))
+      const UiCompletions = packageContext.uiCompletions
+      const alias = getAlias(packageContext.pkgPath, packageContext.workspaceRoot) || {}
+      const currentFileUrl = getDocumentPath(document)
+      if (isExcluded(currentFileUrl))
         return
 
       const range = document.getWordRangeAtPosition(position)
@@ -705,22 +1058,17 @@ export async function activate(context: vscode.ExtensionContext) {
 
       let word = document.getText(range)
 
-      const lineText = getLineText(position.line)
+      const lineText = document.lineAt(position.line).text
       if (!lineText)
         return
 
       const analysis = getDocumentAnalysis(document)
       const code = analysis.code
-      const uiDeps = analysis.getUiDeps()
-      let parsedResult: any
-      let parsedResolved = false
-      const getParsedResult = () => {
-        if (!parsedResolved) {
-          parsedResolved = true
-          parsedResult = parser(code, position as any)
-        }
-        return parsedResult
-      }
+      const parsedResult: any = parser(code, position as any, { languageId: document.languageId, uri: document.uri.toString(), offset: getDocumentOffset(document, position as any, code) })
+      const dependencyScopeOffset = getDependencyScopeOffset(document.languageId, parsedResult)
+      const uiDeps = analysis.getUiDeps(dependencyScopeOffset)
+      const deps = analysis.getImportDeps(dependencyScopeOffset)
+      const getParsedResult = () => parsedResult
       // word 修正
       if (lineText[range.end.character] === '.' || lineText[range.end.character] === '-') {
         let index = range.end.character
@@ -741,18 +1089,18 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!result)
           return
         if (result.type === 'tag') {
-          const data = await Promise.all(optionsComponents.data.map(c => c()).flat())
-          if (!data?.length || !word)
+          if (!word)
             return createHover('')
-          const tag = fixedTagName(result.tag)
-          const target = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
-          if (target?.tableDocument)
-            return createHover(target.tableDocument)
+          const resolved = await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+          if (resolved.component?.tableDocument)
+            return createHover(resolved.component.tableDocument)
+          if (resolved.source)
+            return
 
           const fixedWord = fixedTagName(word)
           const direct = UiCompletions[fixedWord]
             || findPrefixedComponent(fixedWord, componentsPrefix, UiCompletions)
-            || await findDynamicComponent(fixedWord, {}, UiCompletions, componentsPrefix, uiDeps?.[fixedWord])
+            || await findDynamicComponent(fixedWord, {}, UiCompletions, componentsPrefix, normalizeScopedSource(uiDeps?.[fixedWord], alias, packageContext.sourceScopes))
           if (direct?.tableDocument)
             return createHover(direct.tableDocument)
         }
@@ -761,30 +1109,12 @@ export async function activate(context: vscode.ExtensionContext) {
           if (!parentTag)
             return
 
-          const name = fixedTagName(parentTag)
           const slotName = result.props.find((item: any) => item.name === 'slot')?.arg?.content
 
           if (!slotName)
             return
 
-          const from = uiDeps?.[name]
-          const cacheMap = getCacheMap()
-
-          if (from && cacheMap.size > 2) {
-            // 存在多个 UI 库
-            let fixedFrom = nameMap[from] || from
-            if (fixedFrom in alias) {
-              const v = alias[fixedFrom]
-              fixedFrom = v.replace(/\d+$/, '')
-            }
-
-            const nameReg = new RegExp(`${toCamel(fixedFrom)}\\d+$`)
-            const keys = Array.from(cacheMap.keys())
-            const targetKey = keys.find(k => nameReg.test(k))!
-            const targetValue = cacheMap.get(targetKey)! as PropsConfig
-            UiCompletions = targetValue
-          }
-          const target = await findDynamicComponent(name, {}, UiCompletions, componentsPrefix, from)
+          const target = (await resolveImportedComponent(parentTag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)).component
           if (!target)
             return
           const targetSlot = target.rawSlots?.find(s => s.name === slotName)
@@ -803,20 +1133,18 @@ export async function activate(context: vscode.ExtensionContext) {
           return
         }
         // 这个实现有些问题,要从底层去修改 propName 上的信息,才能拿到准确的数据
-        const findBind = () => result.props.find((p: any) => p.name === 'bind')
-        const findOn = () => result.props.find((p: any) => p.name === 'on')
-        const propName = result.propName === true ? result.props[0].name === 'on' ? findOn()?.arg.content : findBind()?.arg.content : result.propName
+        const propName = getHoverPropName(result)
 
         if (typeof propName !== 'string')
           return
 
         if (['class', 'className', 'style', 'id'].includes(propName))
           return
-        const tag = fixedTagName(result.tag)
-        const r = UiCompletions[tag] || await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
+        const r = (await resolveImportedComponent(result.tag, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)).component
         if (!r)
           return
-        const completions = result.isEvent ? r.events[0]?.() : r.completions[0]?.()
+        const renderContext = getCompletionRenderContext(document, result)
+        const completions = result.isEvent ? r.events[0]?.(renderContext) : r.completions[0]?.(renderContext)
         if (!completions)
           return
 
@@ -826,7 +1154,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return createHover(`**Details** \n\n${detail}`)
       }
       // todo: 优化这里的条件,在 react 中, 也可以减少更多的处理步骤
-      if (isVue()) {
+      if (document.languageId === 'vue') {
         const r = getParsedResult()
         if (r) {
           if (!r.template)
@@ -836,13 +1164,14 @@ export async function activate(context: vscode.ExtensionContext) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = refsMap[key]
-            if (!refName)
+            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+            if (!refMembers)
               return
 
             if (lineText.slice(range.start.character, range.end.character) === 'value') {
               // hover .value.区域 提示所有方法
               const groupMd = createMarkdownString()
-                ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
+              refMembers.forEach((m, i) => {
                 let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
                 if (i !== 0) {
                   content = stripLeadingMarkdownTitle(content)
@@ -855,7 +1184,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             const targetKey = word.slice(index + '.value.'.length)
             // FIXME: label可能是对象,string | vscode.CompletionItemLabel
-            const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find(item => item.label === targetKey)
+            const target = refMembers.find(item => item.label === targetKey)
 
             if (!target)
               return
@@ -866,19 +1195,20 @@ export async function activate(context: vscode.ExtensionContext) {
             return
         }
       }
-      else if (isVine()) {
+      else if (document.uri.fsPath.endsWith('.vine.ts')) {
         const r = getParsedResult()
         if (r) {
           if (word.includes('.value.') && r.type === 'script' && Object.keys(r.refsMap || {}).length) {
             const index = word.indexOf('.value.')
             const key = word.slice(0, index)
             const refName = r.refsMap[key]
-            if (!refName)
+            const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+            if (!refMembers)
               return
             if (lineText.slice(range.start.character, range.end.character) === 'value') {
               // hover .value.区域 提示所有方法
               const groupMd = createMarkdownString()
-                ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m: any, i: number) => {
+              refMembers.forEach((m: any, i: number) => {
                 let content = m.documentation.value
                 if (content && i !== 0) {
                   content = stripLeadingMarkdownTitle(content)
@@ -889,7 +1219,7 @@ export async function activate(context: vscode.ExtensionContext) {
               return createHover(groupMd)
             }
             const targetKey = word.slice(index + '.value.'.length)
-            const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find((item: any) => item.label === targetKey)
+            const target = refMembers.find((item: any) => item.label === targetKey)
 
             if (!target)
               return
@@ -900,7 +1230,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return
         }
       }
-      else if (getActiveTextEditorLanguageId()?.includes('react')) {
+      else if (document.languageId.includes('react')) {
         if (word.includes('.current.')) {
           const r = getParsedResult()
           if (!r)
@@ -908,13 +1238,14 @@ export async function activate(context: vscode.ExtensionContext) {
           const index = word.indexOf('.current.')
           const key = word.slice(0, index)
           const refName = r.refsMap?.[key]
-          if (!refName)
+          const refMembers = await resolveRefMembers(refName, uiDeps, UiCompletions, packageContext.cacheMap, alias, componentsPrefix, packageContext.sourceScopes, deps, getDocumentPath(document), packageContext.workspaceRoot)
+          if (!refMembers)
             return
 
           if (lineText.slice(range.start.character, range.end.character) === 'current') {
             // hover .value.区域 提示所有方法
             const groupMd = createMarkdownString()
-              ;[...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].forEach((m, i) => {
+            refMembers.forEach((m, i) => {
               let content = typeof m.documentation === 'string' ? m.documentation : m.documentation?.value || ''
               if (i !== 0) {
                 content = stripLeadingMarkdownTitle(content)
@@ -925,7 +1256,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return createHover(groupMd)
           }
           const targetKey = word.slice(index + '.current.'.length)
-          const target = [...UiCompletions[refName].methods, ...UiCompletions[refName].exposed].find(item => item.label === targetKey)
+          const target = refMembers.find(item => item.label === targetKey)
 
           if (!target)
             return
@@ -934,32 +1265,61 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
 
+      const explicitSource = uiDeps?.[word]
+      if (explicitSource) {
+        const importedName = getUiImportedName(uiDeps, word)
+        const scoped = selectScopedCompletions(UiCompletions, packageContext.cacheMap, explicitSource, alias, packageContext.sourceScopes)
+        const target = await findDynamicComponent(importedName, {}, scoped, optionsComponents.prefix, normalizeScopedSource(explicitSource, alias, packageContext.sourceScopes))
+        return target?.tableDocument ? createHover(target.tableDocument) : undefined
+      }
+
       const matchedComponent = findPrefixedComponent(word, componentsPrefix, UiCompletions)
-      if (matchedComponent && matchedComponent.tableDocument) {
+      if (matchedComponent?.tableDocument)
         return createHover(matchedComponent.tableDocument)
-      }
-      if (UiCompletions[word] && UiCompletions[word].tableDocument) {
+      if (UiCompletions[word]?.tableDocument)
         return createHover(UiCompletions[word].tableDocument)
-      }
-      const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix, uiDeps?.[word])
+      const target = await findDynamicComponent(word, {}, UiCompletions, optionsComponents.prefix)
       if (target?.tableDocument)
         return createHover(target.tableDocument)
 
-      if (isVue()) {
+      if (document.languageId === 'vue') {
         const parsed = getParsedResult()
         if (parsed?.type === 'tag' && parsed.tag) {
           const tag = fixedTagName(parsed.tag)
-          const fallbackTarget = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, uiDeps?.[tag])
+          const fallbackTarget = await findDynamicComponent(tag, {}, UiCompletions, componentsPrefix, normalizeScopedSource(uiDeps?.[tag], alias, packageContext.sourceScopes))
           if (fallbackTarget?.tableDocument)
             return createHover(fallbackTarget.tableDocument)
         }
       }
     },
   }))
+
+  void Promise.resolve(getLocalCache).then(async () => {
+    if (!initialEditor || !supportsSlotAnalysis(initialEditor.document) || shouldSkipDocument(initialEditor.document))
+      return
+    const packageContext = await ensureDocumentContext(initialEditor.document)
+    await analyzeDocumentSlots(initialEditor.document, packageContext)
+  }).catch(error => logger.error(`Initial context preload failed: ${String(error)}`))
 }
 
 export function deactivate() {
+  clearDocumentAnalysis()
+  documentAnalysisCache.clear()
+  clearFetchCaches()
   deactivateUICache()
+}
+
+function getTrustedDocumentationUrl(value: unknown) {
+  if (typeof value !== 'string')
+    return
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'https:')
+      return url.toString()
+    if (url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(normalizeHostname(url.hostname)))
+      return url.toString()
+  }
+  catch {}
 }
 
 function stripLeadingMarkdownTitle(content: string) {

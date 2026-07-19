@@ -6,10 +6,14 @@ import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 import { getConfiguration } from '@vscode-use/utils'
 import { findUp } from 'find-up'
+import ts from 'typescript'
+// @ts-expect-error browser build avoids optional Node template-engine dependencies
+import { parse as parseVueSfc } from '@vue/compiler-sfc/dist/compiler-sfc.esm-browser.js'
 import { nameMap } from '../constants'
 import { toCamel } from '../ui/utils'
 // import { componentsReducer, propsReducer } from './ui/utils'
 import type { ComponentOptions, PropsOptions } from '../ui/utils'
+import { getSvelteInstanceScript } from '../services/svelte-script'
 
 export interface UIconfig {
   getPropsConfig: (context: vscode.ExtensionContext, lang: string) => Promise<PropsOptions>
@@ -20,59 +24,148 @@ export interface UIconfig {
  * @description 获取是否显示插槽配置
  */
 export const getIsShowSlots = () => getConfiguration('common-intellisense.showSlots')
-/**
- * @description 获取组件别名配置，支持按 package.json 路径区分的配置映射
- * 如果用户配置为对象映射 { [pkgPath]: aliasMap }，则优先返回对应 pkgPath 的值，
- * 否则回退到老的直接返回值（兼容旧配置）
- */
-export function getAlias(pkgPath?: string) {
-  const raw = getConfiguration('common-intellisense.alias') as any
-  if (pkgPath && raw && typeof raw === 'object' && !Array.isArray(raw) && raw[pkgPath])
-    return raw[pkgPath] as Record<string, string>
-  return raw as Record<string, string>
-}
-/**
- * @description 获取组件前缀配置，支持按 package.json 路径区分的配置映射
- */
-export function getPrefix(pkgPath?: string) {
-  const raw = getConfiguration('common-intellisense.prefix') as any
-  if (pkgPath && raw && typeof raw === 'object' && !Array.isArray(raw) && raw[pkgPath])
-    return raw[pkgPath] as Record<string, string>
-  return raw as Record<string, string>
-}
-/**
- * @description 获取运行组件配置，支持按 package.json 路径区分的配置映射
- */
-export function getSelectedUIs(pkgPath?: string) {
-  const raw = getConfiguration('common-intellisense.ui') as any
-  if (pkgPath && raw && typeof raw === 'object' && !Array.isArray(raw) && raw[pkgPath])
-    return raw[pkgPath] as string[]
-  return raw as string[]
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-const UIIMPORT_REG = /import\s+\{([^}]+)\}\s+from\s+['"]([^"']+)['"]/g
-const UIIMPORTDefault_REG = /import\s+(\S+)\s+from\s+['"]([^"']+)['"]/g
-export function getUiDeps(text: string) {
+function getPackageScopedValue(raw: Record<string, unknown>, pkgPath?: string, workspaceRoot?: string) {
+  if (!pkgPath)
+    return
+  if (Object.prototype.hasOwnProperty.call(raw, pkgPath))
+    return raw[pkgPath]
+  if (!workspaceRoot)
+    return
+
+  for (const [configuredPath, value] of Object.entries(raw)) {
+    const relativePath = configuredPath.startsWith('${workspaceFolder}/')
+      ? configuredPath.slice('${workspaceFolder}/'.length)
+      : configuredPath.startsWith('./')
+        ? configuredPath.slice(2)
+        : undefined
+    if (relativePath && resolve(workspaceRoot, relativePath) === resolve(pkgPath))
+      return value
+  }
+}
+
+export function normalizePackageRecordConfiguration(raw: unknown, pkgPath?: string, workspaceRoot?: string): Record<string, string> {
+  if (!isRecord(raw))
+    return {}
+
+  const scoped = getPackageScopedValue(raw, pkgPath, workspaceRoot)
+  if (scoped !== undefined) {
+    if (isRecord(scoped))
+      return Object.fromEntries(Object.entries(scoped).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    return {}
+  }
+
+  // A record-valued entry identifies the package-scoped shape. Never leak that
+  // outer package-path mapping to callers expecting an alias/prefix map.
+  if (Object.values(raw).some(isRecord))
+    return {}
+
+  return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+}
+
+/** @description 获取组件别名配置，支持按 package.json 路径区分的配置映射 */
+export function getAlias(pkgPath?: string, workspaceRoot?: string): Record<string, string> {
+  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.alias'), pkgPath, workspaceRoot)
+}
+
+/** @description 获取组件前缀配置，支持按 package.json 路径区分的配置映射 */
+export function getPrefix(pkgPath?: string, workspaceRoot?: string): Record<string, string> {
+  return normalizePackageRecordConfiguration(getConfiguration('common-intellisense.prefix'), pkgPath, workspaceRoot)
+}
+
+/** @description 获取运行组件配置，支持按 package.json 路径区分的配置映射 */
+export function normalizeSelectedUIs(raw: unknown, pkgPath?: string, workspaceRoot?: string): string[] {
+  if (Array.isArray(raw))
+    return raw.filter((value): value is string => typeof value === 'string')
+  if (isRecord(raw)) {
+    const scoped = getPackageScopedValue(raw, pkgPath, workspaceRoot)
+    if (scoped !== undefined) {
+      return Array.isArray(scoped)
+        ? scoped.filter((value): value is string => typeof value === 'string')
+        : ['auto']
+    }
+  }
+  return ['auto']
+}
+
+export function getSelectedUIs(pkgPath?: string, workspaceRoot?: string): string[] {
+  return normalizeSelectedUIs(getConfiguration('common-intellisense.ui'), pkgPath, workspaceRoot)
+}
+
+const uiImportedNames = new WeakMap<Record<string, string>, Record<string, string>>()
+
+export function getUiImportedName(deps: Record<string, string> | undefined, localName: string) {
+  return deps ? uiImportedNames.get(deps)?.[localName] || localName : localName
+}
+
+export interface UiDepsDocumentContext {
+  languageId?: string
+  uri?: string
+  /** When provided for a Vue SFC, analyze only the script block containing this offset. */
+  activeOffset?: number
+}
+
+function scriptKindForLang(lang?: string) {
+  switch (lang?.toLowerCase()) {
+    case 'tsx': return ts.ScriptKind.TSX
+    case 'jsx': return ts.ScriptKind.JSX
+    case 'js': return ts.ScriptKind.JS
+    default: return ts.ScriptKind.TS
+  }
+}
+
+export function getUiDeps(text: string, context: UiDepsDocumentContext = {}) {
   if (!text)
     return
-  text = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '')
   const deps: Record<string, string> = {}
-  for (const match of text.matchAll(UIIMPORT_REG)) {
-    if (!match)
-      continue
-    const from = match[2]
-    const _deps = match[1].trim().replace(/\s+/g, ' ').split(/,\s*/).filter(Boolean)
-    _deps.forEach((d) => {
-      deps[d] = from
-    })
+  const importedNames: Record<string, string> = {}
+  const languageId = context.languageId?.toLowerCase()
+  const uri = context.uri?.toLowerCase() || ''
+  let sources: Array<{ code: string, kind: ts.ScriptKind }> = [{ code: text, kind: scriptKindForLang(languageId === 'typescriptreact' ? 'tsx' : languageId === 'javascriptreact' ? 'jsx' : languageId) }]
+  if (languageId === 'vue' || uri.endsWith('.vue')) {
+    const { descriptor } = parseVueSfc(text)
+    const blocks = [descriptor.script, descriptor.scriptSetup].filter((block): block is NonNullable<typeof block> => !!block)
+    const active = typeof context.activeOffset === 'number'
+      ? blocks.find(block => context.activeOffset! >= block.loc.start.offset && context.activeOffset! <= block.loc.end.offset)
+      : undefined
+    sources = (active ? [active] : blocks).map(block => ({ code: block.content, kind: scriptKindForLang(block.lang) }))
   }
-  for (const match of text.matchAll(UIIMPORTDefault_REG)) {
-    if (!match)
-      continue
-    const from = match[2]
-    const key = match[1]
-    deps[key] = from
+  else if (languageId === 'svelte' || uri.endsWith('.svelte')) {
+    const instance = getSvelteInstanceScript(text)
+    sources = instance ? [{ code: instance.content, kind: scriptKindForLang(languageId) }] : []
   }
+  for (const source of sources) {
+    const sourceFile = ts.createSourceFile('component', source.code, ts.ScriptTarget.Latest, true, source.kind)
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.importClause?.isTypeOnly)
+        continue
+      const from = statement.moduleSpecifier.text
+      const clause = statement.importClause
+      if (!clause)
+        continue
+      if (clause.name) {
+        deps[clause.name.text] = from
+        importedNames[clause.name.text] = clause.name.text
+      }
+      const bindings = clause.namedBindings
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        deps[bindings.name.text] = from
+        importedNames[bindings.name.text] = '*'
+      }
+      else if (bindings) {
+        for (const element of bindings.elements) {
+          if (!element.isTypeOnly) {
+            deps[element.name.text] = from
+            importedNames[element.name.text] = element.propertyName?.text || element.name.text
+          }
+        }
+      }
+    }
+  }
+  uiImportedNames.set(deps, importedNames)
   return deps
 }
 
