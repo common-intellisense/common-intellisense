@@ -450,6 +450,30 @@ describe('activation registration', () => {
     expect(mocks.workspaceEdits[0].entries[0][1]).toEqual(expect.objectContaining({ value: 'file:///workspace/A.tsx' }))
   })
 
+  it('imports kebab-case component manifests with a valid PascalCase binding', async () => {
+    const source = {
+      languageId: 'typescriptreact',
+      version: 4,
+      uri: { fsPath: '/workspace/A.tsx', toString: () => 'file:///workspace/A.tsx' },
+      getText: () => 'export default () => <el-button />',
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    }
+    mocks.openTextDocument.mockResolvedValue(source)
+    const { activate } = await import('../src/index')
+    await activate({ globalStorageUri: { fsPath: '/tmp/storage' }, subscriptions: [] } as any)
+
+    await mocks.commandHandlers.get('common-intellisense.import')?.({
+      data: { name: 'el-button' },
+      lib: 'ui',
+      importWay: 'specifier',
+      document: { uri: 'file:///workspace/A.tsx', version: 3 },
+    })
+
+    const insertedText = mocks.workspaceEdits.flatMap(edit => edit.entries).map(entry => entry[3]).join('\n')
+    expect(insertedText).toContain('import { ElButton } from "ui"')
+    expect(mocks.applyEdit).toHaveBeenCalledTimes(1)
+  })
+
   it('registers a template completion in an existing Vue Options API script', async () => {
     const code = `<template><Button /></template>\n<script>\nexport default { name: 'Page' }\n</script>`
     const source = {

@@ -11,7 +11,7 @@ import { createImportEdits, getSuggestedImportNames, resolveImportSource } from 
 import { isNativeTag } from './services/native-tags'
 import { invalidateRootPackageCacheForManifest } from './services/ui-cache'
 import { prettierType } from './prettier-type'
-import { findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
+import { escapeAttributeValue, escapeSnippetText, findPrefixedComponent, generateScriptNames, toCamel } from './ui/utils'
 import { deactivateUICache, ensureContextForPath, getContextForDocumentPath, getContextForPackagePath, getSourceScope, handlePackageManifestLifecycle, invalidateContexts, logger, onPackageContextsInvalidated, onPackageContextUpdated, releaseDocumentContext, resetCustomSourcesForApprovalChange, resolvePackagePathForDocument } from './ui/ui-find'
 import { fixedTagName, getAlias, getIsShowSlots, getSelectedUIs, getUiDeps, getUiImportedName } from './ui/ui-utils'
 import { clearDocumentAnalysesForPackages, clearDocumentAnalysis, detectSlots, findDynamicComponent, getDocumentSlotAnalysis, getImportDeps, parser, registerCodeLensProviderFn, resolveLocalWrappedComponent } from './parser'
@@ -30,6 +30,35 @@ export function unwrapLiteral(value: string) {
   const normalized = value.trim()
   const match = /^(['"`])([\s\S]*)\1$/.exec(normalized)
   return match ? match[2] : normalized
+}
+
+const jsIdentifierRE = /^[A-Z_$][\w$]*$/i
+
+export function getComponentImportName(value: string) {
+  const root = value.split('.')[0]
+  if (jsIdentifierRE.test(root))
+    return root
+  const normalized = root
+    .split(/[^\w$]+/)
+    .filter(Boolean)
+    .map(segment => `${segment[0].toUpperCase()}${segment.slice(1)}`)
+    .join('')
+  return jsIdentifierRE.test(normalized) ? normalized : undefined
+}
+
+export function renderDirectiveSnippet(item: Directives[0]) {
+  if (!item.params?.length)
+    return item.name
+  const values = item.params
+    .filter((param: any) => typeof param?.name === 'string' && typeof param?.type === 'string')
+    .reduce((acc: Record<string, unknown>, param: any) => {
+      const type = param.type.toLocaleLowerCase()
+      acc[param.name] = param.default ?? (type === 'boolean' ? false : type === 'number' ? 0 : '')
+      return acc
+    }, {})
+  const expression = JSON.stringify(values, null, 2)
+    .replace(/"([A-Z_$][\w$]*)":/gi, '$1:')
+  return `:${item.name}="${escapeSnippetText(escapeAttributeValue(expression))}"`
 }
 
 interface DocumentAnalysisCacheEntry {
@@ -581,7 +610,9 @@ export async function activate(context: vscode.ExtensionContext) {
       : !hasComponentTag(code, data.name, prefix)) {
       return
     }
-    const name = data.name.split('.')[0]
+    const name = getComponentImportName(data.name)
+    if (!name)
+      return
     const from = resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, ''))
     const deps = [...getSuggestedImportNames(data.suggestions, prefix, importWay), name]
     const importHost = document.languageId === 'vue' ? 'vue' : document.languageId === 'svelte' ? 'svelte' : 'script'
@@ -840,15 +871,7 @@ export async function activate(context: vscode.ExtensionContext) {
               })
             }
 
-            const snippet = item.params?.length
-              ? `:${item.name}="${JSON.stringify(item.params.filter((i: any) => typeof i?.name === 'string' && typeof i?.type === 'string').reduce((acc: Record<string, any>, i: any) => {
-                const key = i.name
-                const type = i.type.toLocaleLowerCase()
-                const value = i.default ?? (type === 'boolean' ? false : type === 'number' ? 0 : '')
-                acc[key] = value
-                return acc
-              }, {} as Record<string, any>), null, 2).replace(/"([^"]+)":/g, '$1:').replace(/"/g, '`')}"`
-              : item.name
+            const snippet = renderDirectiveSnippet(item)
 
             return createCompletionItem({
               content,

@@ -609,6 +609,87 @@ describe('fetch service additional tests (mocked)', () => {
     expect(vi.mocked(ofetchMod.ofetch)).toHaveBeenCalledTimes(1)
   })
 
+  it('isolates malformed custom source entries from valid siblings without retaining configuration details', async () => {
+    const ofetchMod = await import('ofetch')
+    vi.mocked(ofetchMod.ofetch).mockImplementation(async (uri: any) => `module.exports = { ${String(uri).includes('first') ? 'First' : 'Second'}Props: () => ({ ok: true }) }`)
+    remoteUris = ['https://fake/first.js', null, undefined, 'http-secret', { secret: 'http-object-secret' }, 'https://fake/second.js'] as any
+    remoteNpmUris = [
+      { name: '@common-intellisense/first', resource: 'first.cjs' },
+      null,
+      undefined,
+      { secret: 'npm-secret' },
+      { name: '@common-intellisense/second', resource: 'second.cjs' },
+    ] as any
+    localUris = ['./first.cjs', null, undefined, { secret: 'local-secret' }, './second.cjs'] as any
+    const npm = await import('@simon_he/fetch-npm')
+    vi.mocked(npm.fetchAndExtractPackage).mockImplementation(async ({ name }: any) => `module.exports = { ${String(name).includes('first') ? 'First' : 'Second'}Props: () => ({ ok: true }) }`)
+    vi.mocked(fsp.readFile).mockImplementation(async (file: any) => `module.exports = { ${String(file).includes('first') ? 'First' : 'Second'}Props: () => ({ ok: true }) }`)
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [http, remoteNpm, local] = await Promise.all([
+      mod.fetchRemoteUrlSourceResults(),
+      mod.fetchRemoteNpmSourceResults(),
+      mod.fetchLocalSourceResults('/workspace'),
+    ])
+
+    for (const [kind, results] of [['http', http], ['npm', remoteNpm], ['local', local]] as const) {
+      const expectedLength = kind === 'http' ? 6 : 5
+      const invalidEnd = expectedLength - 1
+      expect(results.map(result => result.configurationIndex)).toEqual(Array.from({ length: expectedLength }, (_, index) => index))
+      expect(results.map(result => result.status)).toEqual(['success', ...Array.from({ length: invalidEnd - 1 }, () => 'failed'), 'success'])
+      expect(results.slice(1, invalidEnd).map(result => result.id)).toEqual(
+        Array.from({ length: invalidEnd - 1 }, (_, index) => `${kind}:invalid:${index + 1}`),
+      )
+      expect(results.slice(1, invalidEnd).map(result => String(result.error))).toEqual(
+        Array.from({ length: invalidEnd - 1 }, () => 'Error: Invalid custom source configuration'),
+      )
+      expect(JSON.stringify(results)).not.toContain('secret')
+      expect(results[0].value).toHaveProperty('FirstProps')
+      expect(results[invalidEnd].value).toHaveProperty('SecondProps')
+    }
+  })
+
+  it('skips malformed entries in the aggregate custom source APIs', async () => {
+    remoteUris = [null, 'https://fake/remote.js', undefined] as any
+    remoteNpmUris = [null, { name: '@common-intellisense/button' }, {}] as any
+    localUris = [undefined, './adapter.cjs', { name: './not-a-string.cjs' }] as any
+    const ofetchMod = await import('ofetch')
+    const npm = await import('@simon_he/fetch-npm')
+    vi.mocked(ofetchMod.ofetch).mockResolvedValue('module.exports = { RemoteProps: () => ({ ok: true }) }')
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue('module.exports = { NpmProps: () => ({ ok: true }) }')
+    vi.mocked(fsp.readFile).mockResolvedValue('module.exports = { LocalProps: () => ({ ok: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [http, remoteNpm, local] = await Promise.all([
+      mod.fetchFromRemoteUrls(),
+      mod.fetchFromRemoteNpmUrls(),
+      mod.fetchFromLocalUris('/workspace'),
+    ])
+
+    expect(http.RemoteProps().ok).toBe(true)
+    expect(remoteNpm.NpmProps().ok).toBe(true)
+    expect(local.LocalProps().ok).toBe(true)
+  })
+
+  it('uses the canonical local adapter path without resolving it a second time', async () => {
+    localUris = ['./adapter.cjs']
+    vi.mocked(fsp.realpath)
+      .mockResolvedValueOnce('/workspace')
+      .mockResolvedValueOnce('/workspace/canonical-adapter.cjs')
+    vi.mocked(fsp.readFile).mockResolvedValue('module.exports = { LocalProps: () => ({ ok: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const [result] = await mod.fetchLocalSourceResults('/workspace')
+
+    expect(result.status).toBe('success')
+    expect(vi.mocked(fsp.realpath)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fsp.stat)).toHaveBeenLastCalledWith('/workspace/canonical-adapter.cjs')
+    expect(vi.mocked(fsp.readFile)).toHaveBeenCalledWith('/workspace/canonical-adapter.cjs', 'utf8')
+  })
+
   it('isolates mixed remote URI failures per configured source', async () => {
     remoteUris = ['https://fake/good.js', 'https://fake/bad.js']
     const ofetchMod = await import('ofetch')

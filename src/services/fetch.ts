@@ -51,6 +51,20 @@ function sanitizeRemoteError(error: unknown) {
   return new Error(message)
 }
 
+function requireRemoteUri(value: unknown) {
+  if (typeof value !== 'string' || !value.trim())
+    throw new Error('Invalid remote URI configuration')
+  try {
+    const target = new URL(value)
+    if (target.protocol !== 'http:' && target.protocol !== 'https:')
+      throw new Error('Unsupported remote URI protocol')
+  }
+  catch {
+    throw new Error('Invalid remote URI configuration')
+  }
+  return value
+}
+
 export function getRemoteSourceIdentity(uri: string) {
   const digest = createHash('sha256').update(uri).digest('hex')
   return {
@@ -1094,11 +1108,30 @@ function getOrCreateSourceTask(key: string, id: string, load: () => Promise<Cust
   return task
 }
 
-async function settleCustomSources(items: Array<{ id: string, taskKey: string, load: () => Promise<CustomSourceLoadValue> }>): Promise<CustomSourceResult[]> {
-  return Promise.all(items.map(async ({ id, taskKey, load }, configurationIndex) => ({
-    ...await getOrCreateSourceTask(taskKey, id, load),
-    configurationIndex,
-  })))
+interface CustomSourceDescriptor {
+  id: string
+  taskKey: string
+  load: () => Promise<CustomSourceLoadValue>
+}
+
+async function settleCustomSources(items: readonly unknown[], kind: 'http' | 'npm' | 'local', createDescriptor: (item: unknown, index: number) => CustomSourceDescriptor): Promise<CustomSourceResult[]> {
+  return Promise.all(items.map(async (item, configurationIndex) => {
+    try {
+      const { id, taskKey, load } = createDescriptor(item, configurationIndex)
+      return {
+        ...await getOrCreateSourceTask(taskKey, id, load),
+        configurationIndex,
+      }
+    }
+    catch {
+      return {
+        id: `${kind}:invalid:${configurationIndex}`,
+        status: 'failed' as const,
+        error: new Error('Invalid custom source configuration'),
+        configurationIndex,
+      }
+    }
+  }))
 }
 
 async function evaluateCustomAdapterForEpoch(content: string, sourceId: string, displayName: string, epoch: number) {
@@ -1158,18 +1191,23 @@ async function loadRemoteUrlSource(uri: string, epoch: number): Promise<CustomSo
 }
 
 export function fetchRemoteUrlSourceResults(): Promise<CustomSourceResult[]> {
-  const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
+  const configured = getConfiguration('common-intellisense.remoteUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
   const epoch = sourceEpoch
   const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: getLegacyConfigurationIdentity() })
-  return settleCustomSources(uris.map((uri) => {
+  return settleCustomSources(uris, 'http', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid remote URI configuration at index ${index}`)
+    const uri = requireRemoteUri(raw)
     const identity = getRemoteSourceIdentity(uri)
     return { id: identity.id, taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`, load: () => loadRemoteUrlSource(uri, epoch) }
-  }))
+  })
 }
 
 export function fetchFromRemoteUrls() {
-  const uris = (getConfiguration('common-intellisense.remoteUris') as string[] | undefined) || []
-  const key = getSourceTaskKey('http', uris.map(uri => getRemoteSourceIdentity(uri).cacheKey))
+  const configured = getConfiguration('common-intellisense.remoteUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
+  const key = getSourceTaskKey('http', uris)
   const existing = remoteHttpTasks.get(key)
   if (existing)
     return existing
@@ -1182,26 +1220,31 @@ export function fetchFromRemoteUrls() {
   })
 }
 
-async function fetchFromRemoteUrlsInternal(uris: string[], epoch: number) {
+async function fetchFromRemoteUrlsInternal(uris: readonly unknown[], epoch: number) {
   if (!uris.length)
     return {}
-  const trusted = uris.filter((uri) => {
-    if (isTrustedRemoteUri(uri))
-      return true
-    logger.error(`Skipped untrusted remoteUri: ${getRemoteSourceIdentity(uri).displayName}`)
-    return false
+  const trustIdentity = JSON.stringify({ trustedHosts: getConfiguration('common-intellisense.trustedHosts') || [], legacy: getLegacyConfigurationIdentity() })
+  const results = await settleCustomSources(uris, 'http', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid remote URI configuration at index ${index}`)
+    const uri = requireRemoteUri(raw)
+    const identity = getRemoteSourceIdentity(uri)
+    if (!isTrustedRemoteUri(uri)) {
+      logger.error(`Skipped untrusted remoteUri: ${identity.displayName}`)
+      return {
+        id: identity.id,
+        taskKey: `${epoch}\0${identity.id}\0${trustIdentity}\0skipped`,
+        load: async () => ({ value: {}, signature: `skipped:${identity.id}` }),
+      }
+    }
+    return { id: identity.id, taskKey: `${epoch}\0${identity.id}\0${trustIdentity}`, load: () => loadRemoteUrlSource(uri, epoch) }
   })
-  try {
-    const loaded = await Promise.all(trusted.map(uri => loadRemoteUrlSource(uri, epoch)))
-    if (sourceEpoch !== epoch)
-      return {}
-    return Object.assign({}, ...loaded.map(item => item.value || {}))
-  }
-  catch (error) {
-    if (sourceEpoch !== epoch)
-      return {}
-    throw error
-  }
+  if (sourceEpoch !== epoch)
+    return {}
+  const failed = results.find(result => result.status === 'failed' && !result.id.startsWith('http:invalid:'))
+  if (failed)
+    throw failed.error
+  return Object.assign({}, ...results.filter(result => result.status === 'success').map(result => result.value || {}))
 }
 
 export function normalizeNpmResource(input: string) {
@@ -1235,22 +1278,29 @@ async function loadRemoteNpmSource(item: { name: string, resource?: string } | s
 }
 
 export function fetchRemoteNpmSourceResults(): Promise<CustomSourceResult[]> {
-  const uris = (getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[] | undefined) || []
+  const configured = getConfiguration('common-intellisense.remoteNpmUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
   const epoch = sourceEpoch
-  return settleCustomSources(uris.map((item) => {
-    const name = typeof item === 'string' ? item : item.name
-    const rawResource = typeof item === 'string' ? 'index.cjs' : item.resource || 'index.cjs'
-    const id = `npm:${name}::${rawResource}`
+  return settleCustomSources(uris, 'npm', (raw, index) => {
+    if (typeof raw !== 'string' && !isPlainObject(raw))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const name = typeof raw === 'string' ? raw : raw.name
+    const rawResource = typeof raw === 'string' ? undefined : raw.resource
+    if (typeof name !== 'string' || !name.trim() || (rawResource !== undefined && typeof rawResource !== 'string'))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const item = { name, resource: normalizeNpmResource(rawResource || 'index.cjs') }
+    const id = `npm:${item.name}::${item.resource}`
     return {
       id,
       taskKey: `${epoch}\0${id}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
       load: () => loadRemoteNpmSource(item, epoch),
     }
-  }))
+  })
 }
 
 export function fetchFromRemoteNpmUrls() {
-  const uris = (getConfiguration('common-intellisense.remoteNpmUris') as ({ name: string, resource?: string } | string)[] | undefined) || []
+  const configured = getConfiguration('common-intellisense.remoteNpmUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
   const key = getSourceTaskKey('npm', uris)
   const existing = remoteNpmTasks.get(key)
   if (existing)
@@ -1264,11 +1314,28 @@ export function fetchFromRemoteNpmUrls() {
   })
 }
 
-async function fetchFromRemoteNpmUrlsInternal(uris: ({ name: string, resource?: string } | string)[], epoch: number) {
+async function fetchFromRemoteNpmUrlsInternal(uris: readonly unknown[], epoch: number) {
   if (!uris.length)
     return {}
-  const loaded = await Promise.all(uris.map(item => loadRemoteNpmSource(item, epoch)))
-  return Object.assign({}, ...loaded.map(item => item.value || {}))
+  const results = await settleCustomSources(uris, 'npm', (raw, index) => {
+    if (typeof raw !== 'string' && !isPlainObject(raw))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const name = typeof raw === 'string' ? raw : raw.name
+    const rawResource = typeof raw === 'string' ? undefined : raw.resource
+    if (typeof name !== 'string' || !name.trim() || (rawResource !== undefined && typeof rawResource !== 'string'))
+      throw new Error(`Invalid remote npm configuration at index ${index}`)
+    const item = { name, resource: normalizeNpmResource(rawResource || 'index.cjs') }
+    const id = `npm:${item.name}::${item.resource}`
+    return {
+      id,
+      taskKey: `${epoch}\0${id}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
+      load: () => loadRemoteNpmSource(item, epoch),
+    }
+  })
+  const failed = results.find(result => result.status === 'failed' && !result.id.startsWith('npm:invalid:'))
+  if (failed)
+    throw failed.error
+  return Object.assign({}, ...results.filter(result => result.status === 'success').map(result => result.value || {}))
 }
 
 export function resolveLocalAdapterPath(workspaceRoot: string, configuredUri: string) {
@@ -1294,11 +1361,12 @@ export async function resolveLocalAdapterFile(workspaceRoot: string, configuredU
     return
   }
   try {
-    const [realTarget, stat] = await Promise.all([fsp.realpath(target), fsp.stat(target)])
+    const realTarget = await fsp.realpath(target)
+    const stat = await fsp.stat(realTarget)
     const relative = path.relative(realRoot, realTarget)
     if (!stat.isFile() || relative.startsWith('..') || path.isAbsolute(relative))
       return
-    return target
+    return realTarget
   }
   catch {
     if (!options.allowMissing)
@@ -1324,11 +1392,10 @@ async function loadLocalSource(configuredUri: string, epoch: number, workspaceRo
   const uri = await resolveLocalAdapterFile(normalizedRoot, configuredUri)
   if (!uri)
     throw new Error(`Skipped unsafe local adapter: ${configuredUri}`)
-  const realUri = await fsp.realpath(uri)
-  const stat = await fsp.stat(realUri)
+  const stat = await fsp.stat(uri)
   if (stat.size > maxRemoteScriptSize)
     throw new Error(`Local adapter is too large: ${uri}`)
-  const scriptContent = await fsp.readFile(realUri, 'utf8')
+  const scriptContent = await fsp.readFile(uri, 'utf8')
   assertAdapterInputSize(scriptContent, uri)
   const signature = createHash('sha256').update(scriptContent).digest('hex')
   // Always re-check the current source/digest approval before reusing executable
@@ -1343,21 +1410,25 @@ async function loadLocalSource(configuredUri: string, epoch: number, workspaceRo
 }
 
 export function fetchLocalSourceResults(workspaceRoot?: string): Promise<CustomSourceResult[]> {
-  const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
+  const configured = getConfiguration('common-intellisense.localUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
   const epoch = sourceEpoch
   const root = workspaceRoot || getRootPath() || ''
-  return settleCustomSources(uris.map((configuredUri) => {
-    const id = `local:${resolveLocalAdapterPath(root, configuredUri) || configuredUri}`
+  return settleCustomSources(uris, 'local', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid local adapter configuration at index ${index}`)
+    const id = `local:${resolveLocalAdapterPath(root, raw) || raw}`
     return {
       id,
       taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
-      load: () => loadLocalSource(configuredUri, epoch, workspaceRoot),
+      load: () => loadLocalSource(raw, epoch, workspaceRoot),
     }
-  }))
+  })
 }
 
 export function fetchFromLocalUris(workspaceRoot?: string) {
-  const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
+  const configured = getConfiguration('common-intellisense.localUris') as unknown
+  const uris = Array.isArray(configured) ? configured : []
   const key = getSourceTaskKey('local', uris, workspaceRoot)
   const existing = localTasks.get(key)
   if (existing)
@@ -1371,11 +1442,24 @@ export function fetchFromLocalUris(workspaceRoot?: string) {
   })
 }
 
-async function fetchFromLocalUrisInternal(uris: string[], epoch: number, workspaceRoot?: string) {
+async function fetchFromLocalUrisInternal(uris: readonly unknown[], epoch: number, workspaceRoot?: string) {
   if (!uris.length)
     return {}
-  const loaded = await Promise.all(uris.map(item => loadLocalSource(item, epoch, workspaceRoot)))
-  return Object.assign({}, ...loaded.map(item => item.value || {}))
+  const root = workspaceRoot || getRootPath() || ''
+  const results = await settleCustomSources(uris, 'local', (raw, index) => {
+    if (typeof raw !== 'string' || !raw.trim())
+      throw new Error(`Invalid local adapter configuration at index ${index}`)
+    const id = `local:${resolveLocalAdapterPath(root, raw) || raw}`
+    return {
+      id,
+      taskKey: `${epoch}\0${id}\0root:${root}\0legacy:${JSON.stringify(getLegacyConfigurationIdentity())}`,
+      load: () => loadLocalSource(raw, epoch, workspaceRoot),
+    }
+  })
+  const failed = results.find(result => result.status === 'failed' && !result.id.startsWith('local:invalid:'))
+  if (failed)
+    throw failed.error
+  return Object.assign({}, ...results.filter(result => result.status === 'success').map(result => result.value || {}))
 }
 
 export function clearFetchCaches() {

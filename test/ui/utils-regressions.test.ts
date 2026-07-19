@@ -54,6 +54,21 @@ vi.mock('vscode', () => ({
 }))
 
 describe('utils reducer regressions', () => {
+  it('escapes literal and choice snippet metacharacters', async () => {
+    const { escapeSnippetChoice, escapeSnippetText, propsReducer } = await import('../../src/ui/utils')
+    expect(escapeSnippetText('$value}\\path')).toBe('\\$value\\}\\\\path')
+    expect(escapeSnippetChoice('$a,b|c}\\d')).toBe('\\$a\\,b\\|c\\}\\\\d')
+
+    const result = await propsReducer({
+      uiName: 'fixture',
+      lib: 'fixture-lib',
+      map: [{ name: 'Demo', props: { size: { value: ['a,b', 'c|d', 'e}f', 'g\\h'] } } }] as any,
+    })
+    const completion = result.Demo.completions[0]({ languageId: 'vue', framework: 'vue', syntax: 'template', uri: '' })
+      .find(item => item.content === 'size')
+    expect(completion?.snippet).toContain('${1|a\\,b,c\\|d,e\\}f,g\\\\h|}')
+  })
+
   it('propsReducer keeps prop metadata immutable, preserves global defaults, and uses command trust allowlist', async () => {
     const { propsReducer } = await import('../../src/ui/utils')
 

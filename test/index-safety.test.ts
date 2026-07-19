@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDependencyScopeOffset, getHoverPropName, getPreferredSuggestionNames, getRefMembers, getRefVariableNames, hasComponentTag, hasRenderedComponentTag, selectScopedCompletions, supportsSlotAnalysis, unwrapLiteral } from '../src/index'
+import { getComponentImportName, getDependencyScopeOffset, getHoverPropName, getPreferredSuggestionNames, getRefMembers, getRefVariableNames, hasComponentTag, hasRenderedComponentTag, renderDirectiveSnippet, selectScopedCompletions, supportsSlotAnalysis, unwrapLiteral } from '../src/index'
 
 describe('provider safety helpers', () => {
   it('limits slot analysis to Vue and Vine documents', () => {
@@ -21,6 +21,28 @@ describe('provider safety helpers', () => {
     expect(getHoverPropName({ propName: true })).toBeUndefined()
     expect(getHoverPropName({ propName: undefined })).toBeUndefined()
     expect(getHoverPropName({ propName: 'disabled' })).toBe('disabled')
+  })
+
+  it('escapes data-only directive values in both snippet and attribute contexts', () => {
+    expect(renderDirectiveSnippet({
+      name: 'loading',
+      params: [{ name: 'delay', type: 'number', default: 100 }],
+    } as any)).toBe(':loading="{\n  delay: 100\n\\}"')
+
+    const snippet = renderDirectiveSnippet({
+      name: 'loading',
+      params: [{ name: 'message', type: 'string', default: '$1|},\\"<script>' }],
+    } as any)
+    expect(snippet).toContain('&quot;\\$1|\\}')
+    expect(snippet).toContain('&lt;script&gt;')
+    expect(snippet).not.toContain('<script>')
+    expect(snippet).toMatch(/\\\}"$/)
+  })
+
+  it('derives valid import bindings from supported component names', () => {
+    expect(getComponentImportName('Button.Group')).toBe('Button')
+    expect(getComponentImportName('el-button')).toBe('ElButton')
+    expect(getComponentImportName('123-button')).toBeUndefined()
   })
 
   it('merges Vue script dependencies for template results and scopes script results', () => {

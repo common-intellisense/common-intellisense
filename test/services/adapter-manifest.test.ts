@@ -27,6 +27,67 @@ describe('data-only adapter manifest validation', () => {
     expect(exportsData.demo.map[0].events[0].ignored).toBeUndefined()
   })
 
+  it.each([
+    ' foo',
+    'foo ',
+    'foo\nbar',
+    'foo" bar="baz',
+    'foo></template><script>x()</script>',
+    '${1:placeholder}',
+    'foo|bar',
+    'foo\\bar',
+  ])('rejects unsafe source token %j across manifest names', (token) => {
+    const manifests = [
+      { uiName: 'demo', lib: 'demo', map: [{ name: token }] },
+      { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { [token]: {} } }] },
+      { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: token }] }] },
+      { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', slots: [{ name: token }] }] },
+      { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', methods: [{ name: token }] }] },
+      { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', exposed: [{ name: token }] }] },
+      { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', suggestions: [token] }] },
+    ]
+    for (const manifest of manifests)
+      expect(() => normalizeAdapterManifestExports({ demo: manifest }, 'fixture')).toThrow(/Invalid adapter manifest field/)
+    expect(() => normalizeAdapterManifestExports({ demoComponents: { lib: 'demo', directives: [{ name: token }], map: [['Demo', 'Demo']] } }, 'fixture')).toThrow(/Invalid adapter manifest field/)
+  })
+
+  it('accepts safe static source tokens and rejects unknown component DSL fields', () => {
+    expect(() => normalizeAdapterManifestExports({
+      demo: {
+        uiName: 'demo',
+        lib: 'demo',
+        map: [{
+          name: 'Namespace.Component',
+          props: { ':model-value': {} },
+          events: [{ name: 'update:modelValue' }],
+          slots: [{ name: 'header-extra' }],
+        }],
+      },
+    }, 'fixture')).not.toThrow()
+    expect(() => normalizeAdapterManifestExports({
+      demo: { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', unexpected: true }] },
+    }, 'fixture')).toThrow(/Invalid adapter manifest field/)
+    expect(() => normalizeAdapterManifestExports({
+      demo: { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { value: { $parent: 'unsafe' } } }] },
+    }, 'fixture')).toThrow(/Invalid adapter manifest field/)
+  })
+
+  it('accepts JavaScript dollar-prefixed method and exposed member names', () => {
+    expect(() => normalizeAdapterManifestExports({
+      demo: {
+        uiName: 'demo',
+        lib: 'demo',
+        map: [{ name: 'Demo', methods: [{ name: '$reset' }, { name: '$reset()' }], exposed: [{ name: '$refs' }] }],
+      },
+    }, 'fixture')).not.toThrow()
+  })
+
+  it('accepts bounded enum values that are escaped by the snippet renderer', () => {
+    expect(() => normalizeAdapterManifestExports({
+      demo: { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { size: { value: ['a,b', 'c|d', 'e}f', 'g\\h'] } } }] },
+    }, 'fixture')).not.toThrow()
+  })
+
   it('rejects thenable export keys before crossing an async boundary', () => {
     expect(() => normalizeAdapterManifestExports({ then: { uiName: 'then', lib: 'demo', map: [] } }, 'fixture')).toThrow('Unsafe adapter export key')
   })

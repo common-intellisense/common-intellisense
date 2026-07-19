@@ -1049,11 +1049,11 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
             try {
               preparedPrefix.set(result.id, await prepareCustomSnapshot(context, result.id, result.value || {}, signature, result.configurationIndex))
             }
-            catch (error) {
+            catch {
               loaderFailed = true
               if (old)
                 preparedPrefix.set(result.id, old)
-              logger.error(`custom source reduction failed [${result.id}]: ${String(error)}`)
+              logger.error(`custom source reduction failed [${prefix}:${result.configurationIndex ?? 'unknown'}]`)
             }
           }
         }
@@ -1061,7 +1061,7 @@ function startContextEnhancements(context: PackageContext, expectedEpoch: number
           if (old)
             preparedPrefix.set(result.id, old)
           loaderFailed = true
-          logger.error(`custom source failed [${result.id}]: ${String(result.error)}`)
+          logger.error(`custom source failed [${prefix}:${result.configurationIndex ?? 'unknown'}]`)
         }
       }
 

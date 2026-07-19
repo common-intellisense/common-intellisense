@@ -27,7 +27,7 @@ describe('local adapter workspace boundary', () => {
     await fsp.symlink(outside, path.join(root, 'escape.json'))
     await fsp.symlink(outsideDirectory, path.join(root, 'escape-directory'))
     await fsp.symlink(path.join(base, 'missing.json'), path.join(root, 'broken.json'))
-    expect(await resolveLocalAdapterFile(root, './inside.json')).toBe(path.join(root, 'inside.json'))
+    expect(await resolveLocalAdapterFile(root, './inside.json')).toBe(await fsp.realpath(path.join(root, 'inside.json')))
     expect(await resolveLocalAdapterFile(root, './missing.json', { allowMissing: true })).toBe(path.join(root, 'missing.json'))
     expect(await resolveLocalAdapterFile(root, '.')).toBeUndefined()
     expect(await resolveLocalAdapterFile(root, '../outside.json')).toBeUndefined()

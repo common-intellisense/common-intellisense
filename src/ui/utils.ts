@@ -23,6 +23,18 @@ function enableCommandTrust(documentation: vscode.MarkdownString) {
   return documentation
 }
 
+export function escapeSnippetText(value: string) {
+  return value.replace(/[$}\\]/g, character => `\\${character}`)
+}
+
+export function escapeSnippetChoice(value: string) {
+  return value.replace(/[$\\,|}]/g, character => `\\${character}`)
+}
+
+export function escapeAttributeValue(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 export type CompletionFramework = 'vue' | 'vine' | 'react' | 'svelte'
 export interface CompletionRenderContext {
   languageId: string
@@ -336,11 +348,11 @@ export function propsReducer(options: PropsOptions) {
         }
         else if (Array.isArray(value.value)) {
           content = key
-          snippet = `${key}="\${1|${value.value.map((i: string) => i.replace(/['`\s]/g, '').replace(/,/g, '\\,')).join(',')}|}"`
+          snippet = `${key}="\${1|${value.value.map((i: string) => escapeSnippetChoice(escapeAttributeValue(i))).join(',')}|}"`
         }
         else if (value.value) {
           content = key
-          snippet = `${key}="${value.value}"`
+          snippet = `${key}="${escapeSnippetText(escapeAttributeValue(String(value.value)))}"`
         }
         else if (normalizedType && normalizedType.toLowerCase().trim() === 'boolean' && normalizedDefault === 'false') {
           content = snippet = key
@@ -376,7 +388,7 @@ export function propsReducer(options: PropsOptions) {
           content = `${key}=""`
 
           if (normalizedType?.includes('/'))
-            snippet = `${key}="\${1|${normalizedType.split('/').map((i: string) => i.replace(/['"`\s]/g, '').replace(/,/g, '\\,')).filter((i: string) => i.length).join(',')}|}"`
+            snippet = `${key}="\${1|${normalizedType.split('/').map((i: string) => escapeSnippetChoice(escapeAttributeValue(i.replace(/['"`\s]/g, '')))).filter((i: string) => i.length).join(',')}|}"`
           else
             snippet = `${key}="\${1}"`
         }
@@ -478,18 +490,18 @@ export function propsReducer(options: PropsOptions) {
         let content
         if (isVue) {
           const [snippetEventNameOptions, _name] = generateScriptNames(name)
-          snippet = `${name}="\${1|${snippetEventNameOptions.join(',')}|}"`
+          snippet = `${name}="\${1|${snippetEventNameOptions.map(escapeSnippetChoice).join(',')}|}"`
           content = `@${name}="on${_name}"`
         }
         else if (isSvelte) {
           const eventPropName = renderSvelteEventPropName(events)
           const handlerName = eventPropName.replace(/:(\w)/, (_: string, v: string) => v.toUpperCase())
-          snippet = `${eventPropName}={\${1:${handlerName}}}`
+          snippet = `${eventPropName}={\${1:${escapeSnippetText(handlerName)}}}`
           content = `${eventPropName}={${handlerName}}`
         }
         else {
           const [snippetEventNameOptions, _name] = generateScriptNames(name)
-          snippet = `${name}={\${1|${snippetEventNameOptions.join(',')}|}}`
+          snippet = `${name}={\${1|${snippetEventNameOptions.map(escapeSnippetChoice).join(',')}|}}`
           content = `${name}={${_name}}`
         }
 
@@ -1101,7 +1113,7 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
           if (isVue)
             attr = `${key}="\${${index}:${tagName}${keyName[0].toUpperCase()}${keyName.slice(1)}}"`
           else
-            attr = `${key.slice(1)}={\${${index}:${v}}}`
+            attr = `${key.slice(1)}={\${${index}:${escapeSnippetText(v)}}}`
         }
       }
     }
@@ -1137,13 +1149,13 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
           types.unshift(defaultText)
         }
         const typeTips = types
-          .map((item: string) => escapeRegExp(item).replace(/,/g, '\\,'))
+          .map((item: string) => escapeSnippetChoice(escapeAttributeValue(item)))
           .join(',')
 
         if (v)
-          attr = `${key}="${v}"`
+          attr = `${key}="${escapeSnippetText(escapeAttributeValue(v))}"`
         else
-          attr = `${key}="\${${++index}|${prefix ? item.value + prefix : typeTips}|}"`
+          attr = `${key}="\${${++index}|${prefix ? escapeSnippetChoice(escapeAttributeValue(String(item.value) + prefix)) : typeTips}|}"`
       }
     }
     requiredProps.push(attr)
@@ -1154,10 +1166,11 @@ export async function getRequireProp(content: any, index = 0, framework: Complet
       continue
     index++
     const [snippetEventNameOptions] = generateScriptNames(e.name)
-    const snippetVue = `@${e.name}="\${${index}|${snippetEventNameOptions.join(',')}|}"`
-    const snippetJsx = `${e.name}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
+    const handlerChoices = snippetEventNameOptions.map(escapeSnippetChoice).join(',')
+    const snippetVue = `@${e.name}="\${${index}|${handlerChoices}|}"`
+    const snippetJsx = `${e.name}={\${${index}|${handlerChoices}|}}`
     const svelteName = renderSvelteEventPropName(e)
-    const snippetSvelte = `${svelteName}={\${${index}|${snippetEventNameOptions.join(',')}|}}`
+    const snippetSvelte = `${svelteName}={\${${index}|${handlerChoices}|}}`
     requiredProps.push(isVue ? snippetVue : framework === 'svelte' ? snippetSvelte : snippetJsx)
   }
 
