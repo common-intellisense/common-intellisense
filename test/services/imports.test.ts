@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createImportEdits, getSuggestedImportNames, isSafeBindingIdentifier, resolveImportSource } from '../../src/services/imports'
+import { createImportEdits, createPlannedImportEdits, getSuggestedImportNames, isSafeBindingIdentifier, resolveImportSource } from '../../src/services/imports'
 
 function applyEdits(code: string, edits: ReturnType<typeof createImportEdits>) {
   return [...edits].sort((a, b) => b.start - a.start).reduce(
@@ -297,6 +297,30 @@ const view = [Button, Input]
     expect(applyEdits('', createImportEdits('', 'ui', ['UI', 'Icons'], 'as default'))).toBe(
       'import * as UI from "ui"\nimport * as Icons from "ui"\n',
     )
+  })
+
+  it('coalesces duplicate and type-only planned imports', () => {
+    const code = `import type { Menu, MenuItem } from "ui"\nexport default () => <Menu><Menu.Item /></Menu>\n`
+    const output = applyEdits(code, createPlannedImportEdits(code, [
+      { localName: 'Menu', source: 'ui', importWay: 'specifier' },
+      { localName: 'Menu', source: 'ui', importWay: 'specifier' },
+      { localName: 'MenuItem', source: 'ui', importWay: 'specifier' },
+    ], 'script'))
+
+    expect(output).toContain('import { Menu, MenuItem } from "ui"')
+    expect(output.match(/import \{ Menu, MenuItem \}/g)).toHaveLength(1)
+  })
+
+  it('serializes planned imports and Vue component registration', () => {
+    const vue = `<template><Parent><Child /></Parent></template>\n<script>\nexport default { components: {} }\n</script>\n`
+    const output = applyEdits(vue, createPlannedImportEdits(vue, [
+      { localName: 'Parent', source: '@custom/parent', importWay: 'default' },
+      { localName: 'Child', source: '@custom/child', importWay: 'default' },
+    ], 'vue', { registerVueComponent: true }))
+
+    expect(output).toContain('import Parent from "@custom/parent"')
+    expect(output).toContain('import Child from "@custom/child"')
+    expect(output).toMatch(/components:\s*\{\s*Parent\s*,\s*Child\s*\}/)
   })
 
   it.each([

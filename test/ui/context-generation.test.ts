@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { findUpMock, fetchMock, localFetchMock, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock, resolveInstalledVersionMock, readFileMock } = vi.hoisted(() => ({
+const { findUpMock, fetchMock, localFetchMock, localSourceId, remoteFetchMock, npmFetchMock, resolveLocalAdapterFileMock, getConfigurationMock, watchFileMock, resolveInstalledVersionMock, readFileMock } = vi.hoisted(() => ({
   findUpMock: vi.fn(),
   fetchMock: vi.fn(),
   localFetchMock: vi.fn(async (_root?: string) => ({})),
+  localSourceId: { value: 'local:test' },
   remoteFetchMock: vi.fn(async () => ({})),
   npmFetchMock: vi.fn(async () => ({})),
   resolveLocalAdapterFileMock: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock('node:fs/promises', () => ({
 vi.mock('../../src/services/fetch', () => ({
   fetchFromCommonIntellisense: fetchMock,
   resolveLocalAdapterFile: resolveLocalAdapterFileMock,
-  fetchLocalSourceResults: async (root?: string) => [{ id: 'local:test', status: 'success', value: await localFetchMock(root) }],
+  fetchLocalSourceResults: async (root?: string) => [{ id: localSourceId.value, status: 'success', value: await localFetchMock(root) }],
   fetchRemoteNpmSourceResults: async () => [{ id: 'npm:test', status: 'success', value: await npmFetchMock() }],
   fetchRemoteUrlSourceResults: async () => {
     const value = await remoteFetchMock()
@@ -53,6 +54,7 @@ describe('package context generations', () => {
     findUpMock.mockReset()
     fetchMock.mockReset()
     localFetchMock.mockReset().mockResolvedValue({})
+    localSourceId.value = 'local:test'
     remoteFetchMock.mockReset().mockResolvedValue({})
     npmFetchMock.mockReset().mockResolvedValue({})
     resolveLocalAdapterFileMock.mockReset().mockImplementation(async (root: string, uri: string) => `${root}/${uri}`)
@@ -657,6 +659,29 @@ describe('package context generations', () => {
 
     expect(watchFileMock).not.toHaveBeenCalledWith('/workspace/adapter.js', expect.anything())
     expect(mod.getContextRegistryStats().localWatchers).toBe(0)
+  })
+
+  it('watches local-source aliases and removes their lexical snapshot after deletion', async () => {
+    findUpMock.mockResolvedValue('/workspace/package.json')
+    fetchMock.mockResolvedValue({})
+    getConfigurationMock.mockImplementation((key: string) => key === 'common-intellisense.localUris' ? ['adapter-link.js'] : null)
+    localSourceId.value = 'local:/workspace/adapter-link.js'
+    localFetchMock.mockResolvedValue({ LocalProps: () => ({ LocalButton: { lib: 'local' } }) })
+    resolveLocalAdapterFileMock.mockResolvedValue('/workspace/real/adapter.js')
+    const mod = await import('../../src/ui/ui-find')
+    const documentPath = '/workspace/src/App.tsx'
+
+    await mod.ensureContextForPath(documentPath, {} as any, () => {}, false, '/workspace')
+    await vi.waitFor(() => expect(mod.getContextForDocumentPath(documentPath)?.customSourceSnapshots.has(localSourceId.value)).toBe(true))
+    await vi.waitFor(() => {
+      expect(watchFileMock).toHaveBeenCalledWith('/workspace/adapter-link.js', expect.objectContaining({ onDelete: expect.any(Function) }))
+      expect(watchFileMock).toHaveBeenCalledWith('/workspace/real/adapter.js', expect.objectContaining({ onDelete: expect.any(Function) }))
+    })
+
+    resolveLocalAdapterFileMock.mockResolvedValue(undefined)
+    await mod.handleLocalSourceChanged('/workspace', '/workspace/adapter-link.js')
+
+    expect(mod.getContextForDocumentPath(documentPath)?.customSourceSnapshots.has(localSourceId.value)).toBe(false)
   })
 
   it('retains root resources while a sibling context is still loading', async () => {

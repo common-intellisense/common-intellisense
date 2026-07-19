@@ -1,4 +1,4 @@
-import type * as vscode from 'vscode'
+import * as vscode from 'vscode'
 import type { OptionsComponents, PropsConfig, Uis } from './types'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -831,10 +831,24 @@ async function buildCompletions(uis: Uis, options: UpdateCompletionsOptions, cwd
   }
 }
 
-async function getConfiguredLocalSourcePaths(workspaceRoot: string, allowMissing = false) {
-  const uris = (getConfiguration('common-intellisense.localUris') as string[] | undefined) || []
-  const resolved = await Promise.all(uris.map(uri => resolveLocalAdapterFile(workspaceRoot, uri, { allowMissing })))
-  return resolved.filter((sourcePath): sourcePath is string => !!sourcePath)
+function getConfiguredLocalSourcePaths(workspaceRoot: string) {
+  const root = path.resolve(workspaceRoot)
+  const uris = getConfiguration('common-intellisense.localUris') as unknown
+  if (!Array.isArray(uris))
+    return []
+  return uris
+    .filter((uri): uri is string => typeof uri === 'string' && !!uri.trim())
+    .map(uri => path.resolve(root, uri))
+    .filter(sourcePath => sourcePath !== root && isSameOrWithin(sourcePath, root))
+}
+
+async function getConfiguredLocalSources(workspaceRoot: string) {
+  const configuredPaths = getConfiguredLocalSourcePaths(workspaceRoot)
+  const resolved = await Promise.all(configuredPaths.map(async configuredPath => ({
+    configuredPath,
+    resolvedPath: await resolveLocalAdapterFile(workspaceRoot, configuredPath, { allowMissing: true }),
+  })))
+  return resolved.filter((source): source is { configuredPath: string, resolvedPath: string } => !!source.resolvedPath)
 }
 
 export async function resetCustomSourcesForApprovalChange() {
@@ -864,11 +878,10 @@ export async function resetCustomSourcesForApprovalChange() {
 
 export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath: string) {
   const resolvedSource = path.resolve(sourcePath)
-  const safePaths = await getConfiguredLocalSourcePaths(workspaceRoot, true)
-  if (!safePaths.includes(resolvedSource))
+  if (!getConfiguredLocalSourcePaths(workspaceRoot).includes(resolvedSource))
     return
   const sourceId = `local:${resolvedSource}`
-  const exists = await fsp.stat(resolvedSource).then(stat => stat.isFile(), () => false)
+  const exists = !!(await resolveLocalAdapterFile(workspaceRoot, resolvedSource))
   for (const context of [...contexts.values()]) {
     if (path.resolve(context.workspaceRoot) !== path.resolve(workspaceRoot))
       continue
@@ -893,7 +906,7 @@ export async function handleLocalSourceChanged(workspaceRoot: string, sourcePath
 }
 
 async function ensureLocalSourceWatchers(context: PackageContext, expectedEpoch: number) {
-  const configuredPaths = await getConfiguredLocalSourcePaths(context.workspaceRoot, true)
+  const configuredSources = await getConfiguredLocalSources(context.workspaceRoot)
   const contextKey = getContextKeyForContext(context)
   const isContextLive = () => registryEpoch === expectedEpoch
     && contexts.get(contextKey)?.generation === context.generation
@@ -901,29 +914,40 @@ async function ensureLocalSourceWatchers(context: PackageContext, expectedEpoch:
     return
   const rootPrefix = `${path.resolve(context.workspaceRoot)}\0`
   for (const [key, entry] of localSourceWatchers) {
-    if (key.startsWith(rootPrefix) && !configuredPaths.some(sourcePath => key === `${rootPrefix}${sourcePath}`)) {
+    if (key.startsWith(rootPrefix) && !configuredSources.some(source => key === `${rootPrefix}${source.configuredPath}`)) {
       entry.stop()
       if (entry.timer)
         clearTimeout(entry.timer)
       localSourceWatchers.delete(key)
     }
   }
-  for (const sourcePath of configuredPaths) {
+  for (const { configuredPath, resolvedPath } of configuredSources) {
     if (!isContextLive())
       return
-    const key = `${path.resolve(context.workspaceRoot)}\0${sourcePath}`
+    const key = `${path.resolve(context.workspaceRoot)}\0${configuredPath}`
     if (localSourceWatchers.has(key))
       continue
     const entry: { stop: () => void, timer?: ReturnType<typeof setTimeout> } = { stop: () => {} }
-    entry.stop = watchFile(sourcePath, {
-      onChange: () => {
-        if (entry.timer)
-          clearTimeout(entry.timer)
-        entry.timer = setTimeout(() => {
-          void handleLocalSourceChanged(context.workspaceRoot, sourcePath).catch(error => logger.error(`local source refresh failed: ${String(error)}`))
-        }, 200)
-      },
-    })
+    const scheduleRefresh = () => {
+      if (entry.timer)
+        clearTimeout(entry.timer)
+      entry.timer = setTimeout(() => {
+        void handleLocalSourceChanged(context.workspaceRoot, configuredPath).catch(error => logger.error(`local source refresh failed: ${String(error)}`))
+      }, 200)
+    }
+    const stops: Array<() => void> = []
+    for (const watchPath of new Set([configuredPath, resolvedPath])) {
+      stops.push(watchFile(watchPath, { onChange: scheduleRefresh, onDelete: scheduleRefresh }))
+      const createWatcher = vscode.workspace.createFileSystemWatcher?.(watchPath, false, true, true)
+      if (createWatcher) {
+        const createSubscription = createWatcher.onDidCreate(scheduleRefresh)
+        stops.push(() => {
+          createSubscription.dispose()
+          createWatcher.dispose()
+        })
+      }
+    }
+    entry.stop = () => stops.forEach(stop => stop())
     localSourceWatchers.set(key, entry)
   }
 }

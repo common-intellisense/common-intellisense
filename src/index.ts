@@ -7,7 +7,7 @@ import { nameMap } from './constants'
 import { awaitCacheWrites, clearFetchCaches, configureCacheStorage, getLocalCache, localCacheUri, normalizeHostname } from './services/fetch'
 import type { ComponentSourceScope } from './services/component-resolver'
 import { findComponentSourceScope, isLocalModuleSource, resolveImportedTag, sourceScopeAccepts } from './services/component-resolver'
-import { createImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
+import { createImportEdits, createPlannedImportEdits, getSuggestedImportNames, resolveImportSource } from './services/imports'
 import { isNativeTag } from './services/native-tags'
 import { invalidateRootPackageCacheForManifest } from './services/ui-cache'
 import { prettierType } from './prettier-type'
@@ -627,7 +627,7 @@ export async function activate(context: vscode.ExtensionContext) {
       ? data.__imports.filter((item: any) => item && typeof item.localName === 'string' && typeof item.source === 'string' && ['as default', 'default', 'specifier'].includes(item.importWay))
       : []
     const edits = plannedImports.length
-      ? plannedImports.flatMap((item: any) => createImportEdits(code, item.source, [item.localName], item.importWay, importHost, editContext))
+      ? createPlannedImportEdits(code, plannedImports, importHost, editContext)
       : createImportEdits(
           code,
           resolveImportSource(data.from, dynamicLib, lib, name, value => value.replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '')),

@@ -21,6 +21,12 @@ export interface ImportDocumentContext {
   registerVueComponent?: boolean
 }
 
+export interface PlannedImport {
+  localName: string
+  source: string
+  importWay: ImportWay
+}
+
 interface ScriptRegion {
   code: string
   offset: number
@@ -220,6 +226,43 @@ export function createImportEdits(code: string, source: string, dependencies: st
     end: script.offset + insertion,
     text: createStatementInsertionText(script.code, insertion, statements, insertion === 0 && (host === 'svelte' || (script.offset > 0 && script.code.startsWith('\n')))),
   }], [...existing, ...missing])
+}
+
+export function createPlannedImportEdits(code: string, plans: PlannedImport[], host: ImportHost, context: ImportDocumentContext = {}): ImportEdit[] {
+  const grouped = new Map<string, PlannedImport & { names: string[] }>()
+  for (const plan of plans) {
+    const key = `${plan.source}\0${plan.importWay}`
+    const group = grouped.get(key)
+    if (group) {
+      if (!group.names.includes(plan.localName))
+        group.names.push(plan.localName)
+    }
+    else {
+      grouped.set(key, { ...plan, names: [plan.localName] })
+    }
+  }
+
+  let updated = code
+  for (const { source, importWay, names } of grouped.values()) {
+    const edits = createImportEdits(updated, source, names, importWay, host, context)
+    updated = [...edits]
+      .sort((left, right) => right.start - left.start)
+      .reduce((text, edit) => text.slice(0, edit.start) + edit.text + text.slice(edit.end), updated)
+  }
+  if (updated === code)
+    return []
+
+  let start = 0
+  const sharedLength = Math.min(code.length, updated.length)
+  while (start < sharedLength && code[start] === updated[start])
+    start++
+  let end = code.length
+  let updatedEnd = updated.length
+  while (end > start && updatedEnd > start && code[end - 1] === updated[updatedEnd - 1]) {
+    end--
+    updatedEnd--
+  }
+  return [{ start, end, text: updated.slice(start, updatedEnd) }]
 }
 
 function getNamedImportInsertionEdits(script: ScriptRegion, sourceFile: ts.SourceFile, bindings: ts.NamedImports, names: string[]): ImportEdit[] {
