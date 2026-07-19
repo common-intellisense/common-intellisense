@@ -82,10 +82,14 @@ export function notifyLegacyAdapterBlocked(source: string, approval?: string) {
       return vscode.env.openExternal(vscode.Uri.parse(legacyMigrationUrl))
   }).catch(error => logger.error(`Failed to show legacy adapter migration warning: ${String(error)}`))
 }
-const cacheSchemaVersion = 2
+const cacheSchemaVersion = 3
 const maxCacheSize = 16 * 1024 * 1024
 const maxCacheEntrySize = 8 * 1024 * 1024
 const maxCacheEntries = 100
+
+function isPersistentFetchCacheKey(key: string) {
+  return key.startsWith('official:') || key.startsWith('remote:') || key.startsWith('remote-npm:')
+}
 
 function cacheEntrySize(key: string, value: string) {
   return Buffer.byteLength(key) + Buffer.byteLength(value)
@@ -537,12 +541,12 @@ async function readLocalCache() {
       throw new Error(`Cache is too large: ${stat.size}`)
     const text = await fsp.readFile(cachePath, 'utf8')
     const parsed = JSON.parse(text)
-    const entries = Array.isArray(parsed) ? parsed : parsed?.schemaVersion === cacheSchemaVersion ? parsed.entries : null
+    const entries = parsed?.schemaVersion === cacheSchemaVersion ? parsed.entries : null
     if (!Array.isArray(entries))
       throw new Error('Unsupported cache schema')
     const pendingEntries = new Map<string, string>()
     for (const entry of entries) {
-      if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string')
+      if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string' && isPersistentFetchCacheKey(entry[0]))
         pendingEntries.set(entry[0], entry[1])
     }
     if (epoch === cacheReadEpoch && cachePath === localCacheUri) {
@@ -574,10 +578,11 @@ export function writeLocalCache() {
     if (epoch !== cacheWriteEpoch)
       return
     pruneFetchCache()
-    let payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: Array.from(cacheFetch.entries()) })
-    while (Buffer.byteLength(payload) > maxCacheSize && cacheFetch.size) {
-      cacheFetch.delete(cacheFetch.keys().next().value!)
-      payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: Array.from(cacheFetch.entries()) })
+    const persistentEntries = Array.from(cacheFetch.entries()).filter(([key]) => isPersistentFetchCacheKey(key))
+    let payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: persistentEntries })
+    while (Buffer.byteLength(payload) > maxCacheSize && persistentEntries.length) {
+      persistentEntries.shift()
+      payload = JSON.stringify({ schemaVersion: cacheSchemaVersion, entries: persistentEntries })
     }
     await fsp.mkdir(path.dirname(localCacheUri), { recursive: true })
     const temporary = `${localCacheUri}.${process.pid}.${Date.now()}.tmp`
@@ -647,12 +652,15 @@ function getRawNpmChannelTask(key: string, factory: () => Promise<string>) {
   return task
 }
 
-function getRawNpmDownloadTask(key: string, name: string, version: string, resource: string) {
-  const extract = getRawNpmChannelTask(`${key}:extract`, () => fetchAndExtractPackage({ name, dist: resource, retry, logger }))
-  const legacy = resource === 'index.cjs'
-    ? getRawNpmChannelTask(`${key}:cjs`, () => fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>)
-    : Promise.reject(new Error(`No legacy fallback for ${name}/${resource}`))
-  return Promise.any([extract, legacy])
+async function getRawNpmDownloadTask(key: string, name: string, version: string, resource: string) {
+  try {
+    return await getRawNpmChannelTask(`${key}:extract`, () => fetchAndExtractPackage({ name: `${name}@${version}`, dist: resource, retry, logger }))
+  }
+  catch (error) {
+    if (resource !== 'index.cjs')
+      throw error
+    return getRawNpmChannelTask(`${key}:cjs`, () => fetchFromCjsForCommonIntellisense({ name, version, retry }) as Promise<string>)
+  }
 }
 
 function getOfficialAdapterScript(scriptKey: string, name: string, version: string, epoch: number, forceNetwork = false) {
@@ -664,7 +672,7 @@ function getOfficialAdapterScript(scriptKey: string, name: string, version: stri
     }
   }
   logger.info(isZh ? `准备拉取的资源: ${scriptKey}` : `ready fetchingKey: ${scriptKey}`)
-  return withDeadline(getRawNpmDownloadTask(`official:${scriptKey}`, name, version, 'index.cjs'), npmDownloadDeadline, `Downloading ${name}`).then((content) => {
+  return withDeadline(getRawNpmDownloadTask(scriptKey, name, version, 'index.cjs'), npmDownloadDeadline, `Downloading ${name}`).then((content) => {
     if (sourceEpoch !== epoch)
       throw new Error(`Adapter source invalidated before validation: ${scriptKey}`)
     return { content, fromCache: false }
@@ -701,7 +709,7 @@ export async function fetchFromCommonIntellisense(tag: string, options?: { pkgNa
     return
   }
   logger.info(isZh ? `找到 ${name} 的最新版本: ${version}` : `Found the latest version of ${name}: ${version}`)
-  const scriptKey = `${name}@${version}`
+  const scriptKey = `official:${name}@${version}`
   const key = JSON.stringify({
     scriptKey,
     pkgName: options?.pkgName || '',
@@ -1211,11 +1219,11 @@ async function loadRemoteNpmSource(item: { name: string, resource?: string } | s
   const version = await getLatestVersion(name)
   if (!version)
     throw new Error(`No supported remote npm adapter version: ${name}`)
-  const key = `${name}@${version}::${resource}`
+  const key = `remote-npm:${name}@${version}::${resource}`
   const cached = getFetchCacheEntry(key)
   const scriptContent = cached !== undefined
     ? cached
-    : await withDeadline(getRawNpmDownloadTask(`remote:${key}`, name, version, resource), npmDownloadDeadline, `Downloading ${name}/${resource}`)
+    : await withDeadline(getRawNpmDownloadTask(key, name, version, resource), npmDownloadDeadline, `Downloading ${name}/${resource}`)
   const reduced: Record<string, any> = {}
   appendReducedExports(reduced, await evaluateCustomAdapterForEpoch(scriptContent || '', `npm:${name}::${resource}`, key, epoch), key)
   if (sourceEpoch !== epoch)
@@ -1331,7 +1339,6 @@ async function loadLocalSource(configuredUri: string, epoch: number, workspaceRo
   appendReducedExports(reduced, exportsData, uri)
   if (sourceEpoch !== epoch)
     throw new Error('Local adapter configuration changed')
-  setFetchCacheEntry(uri, scriptContent)
   return { value: reduced, signature }
 }
 

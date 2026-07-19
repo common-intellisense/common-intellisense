@@ -5,6 +5,7 @@ const maxComponentMembers = 250
 const maxAggregateComponents = 1_000
 const maxAggregateMembers = 20_000
 const maxDomainStringLength = 10_000
+const maxDemoStringLength = 64 * 1024
 const unsafeObjectKeys = new Set(['__proto__', 'prototype', 'constructor', 'then'])
 const reservedComponentNames = new Set([...unsafeObjectKeys, 'icons'])
 
@@ -75,7 +76,7 @@ function normalizeParams(value: unknown, path: string, budget: NormalizationBudg
   consumeMembers(budget, value.length)
   return value.map((entry, index) => {
     if (typeof entry === 'string')
-      return entry
+      return requireNonEmptyString(entry, `${path}[${index}]`)
     if (!isPlainRecord(entry))
       invalid(`${path}[${index}]`)
     for (const key of ['name', 'description', 'description_zh', 'type', 'default'])
@@ -291,9 +292,9 @@ function normalizeComponentsExport(value: PlainRecord, path: string, budget: Nor
     const normalizedComponent = typeof component === 'string'
       ? requireSafeComponentName(component, `${path}.map[${index}][0]`)
       : normalizeComponent(component, `${path}.map[${index}][0]`, budget)
-    if (entry[1] !== undefined && typeof entry[1] !== 'string')
+    if (entry[1] !== undefined && (typeof entry[1] !== 'string' || entry[1].length > maxDomainStringLength))
       invalid(`${path}.map[${index}][1]`)
-    if (entry[2] !== undefined && typeof entry[2] !== 'string')
+    if (entry[2] !== undefined && (typeof entry[2] !== 'string' || entry[2].length > maxDemoStringLength))
       invalid(`${path}.map[${index}][2]`)
     return [normalizedComponent, ...entry.slice(1)]
   })

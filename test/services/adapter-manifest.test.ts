@@ -120,6 +120,8 @@ describe('data-only adapter manifest validation', () => {
   })
 
   it.each([
+    { demoComponents: { lib: 'demo', map: [['Demo', 'x'.repeat(10_001)]] } },
+    { demoComponents: { lib: 'demo', map: [['Demo', 'detail', 'x'.repeat(64 * 1024 + 1)]] } },
     {
       demoComponents: {
         lib: 'demo',
@@ -183,6 +185,7 @@ describe('data-only adapter manifest validation', () => {
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'change', params: Array.from({ length: 251 }, (_, index) => `param${index}`) }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', methods: [{ name: 'open', params: 'x'.repeat(10_001) }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', typeDetail: { options: 'x'.repeat(10_001) } }] },
+    { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', methods: [{ name: 'open', params: ['x'.repeat(10_001)] }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', props: { ':': { type: 'string' } } }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'click', kind: 'invalid' }] }] },
     { uiName: 'demo', lib: 'demo', map: [{ name: 'Demo', events: [{ name: 'submit', required: 'false' }] }] },

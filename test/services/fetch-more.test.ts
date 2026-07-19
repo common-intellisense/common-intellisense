@@ -122,7 +122,7 @@ describe('fetch service additional tests (mocked)', () => {
     expect(comps[0].name).toBe('X')
 
     // version mocked to 2.0.0 and prefix in module is '@common-intellisense/'
-    const key = '@common-intellisense/Button@2.0.0'
+    const key = 'official:@common-intellisense/Button@2.0.0'
     expect(mod.cacheFetch.has(key)).toBe(true)
   })
 
@@ -144,8 +144,54 @@ describe('fetch service additional tests (mocked)', () => {
     expect(result.SecondProps).toBeTypeOf('function')
     expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({ dist: 'dist/manifest.json' }))
     expect(vi.mocked(fetchNpm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({ dist: 'dist/alternate.json' }))
-    expect(mod.cacheFetch.has('@common-intellisense/button@2.0.0::dist/manifest.json')).toBe(true)
-    expect(mod.cacheFetch.has('@common-intellisense/button@2.0.0::dist/alternate.json')).toBe(true)
+    expect(mod.cacheFetch.has('remote-npm:@common-intellisense/button@2.0.0::dist/manifest.json')).toBe(true)
+    expect(mod.cacheFetch.has('remote-npm:@common-intellisense/button@2.0.0::dist/alternate.json')).toBe(true)
+  })
+
+  it('pins the extract channel to the resolved version and does not race the legacy channel', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    vi.mocked(npm.fetchAndExtractPackage).mockResolvedValue('module.exports = { ButtonProps: () => ({ source: "extract" }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteNpmUrls()
+
+    expect(result.ButtonProps().source).toBe('extract')
+    expect(vi.mocked(npm.fetchAndExtractPackage)).toHaveBeenCalledWith(expect.objectContaining({
+      name: '@common-intellisense/button@2.0.0',
+      dist: 'index.cjs',
+    }))
+    expect(vi.mocked(cjs.fetchFromCjsForCommonIntellisense)).not.toHaveBeenCalled()
+  })
+
+  it('uses the legacy npm channel only after the pinned extract channel fails', async () => {
+    const npm = await import('@simon_he/fetch-npm')
+    const cjs = await import('@simon_he/fetch-npm-cjs')
+    vi.mocked(npm.fetchAndExtractPackage).mockRejectedValue(new Error('extract failed'))
+    vi.mocked(cjs.fetchFromCjsForCommonIntellisense).mockResolvedValue('module.exports = { ButtonProps: () => ({ source: "legacy" }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromRemoteNpmUrls()
+
+    expect(result.ButtonProps().source).toBe('legacy')
+    expect(vi.mocked(cjs.fetchFromCjsForCommonIntellisense)).toHaveBeenCalledWith(expect.objectContaining({
+      name: '@common-intellisense/button',
+      version: '2.0.0',
+    }))
+  })
+
+  it('does not add workspace-local source paths to the shared fetch cache', async () => {
+    localUris = ['./adapter.cjs']
+    vi.mocked(fsp.readFile).mockResolvedValue('module.exports = { LocalProps: () => ({ local: true }) }')
+    const mod = await import('../../src/services/fetch')
+    mod.clearFetchCaches()
+
+    const result = await mod.fetchFromLocalUris('/workspace')
+
+    expect(result.LocalProps().local).toBe(true)
+    expect(mod.cacheFetch.has('/workspace/adapter.cjs')).toBe(false)
   })
 
   it('rejects npm adapters that exceed the UTF-8 byte budget', async () => {
@@ -233,7 +279,7 @@ describe('fetch service additional tests (mocked)', () => {
 
     resolveRaw('3.0.0')
     await Promise.all([oldTask, retriedTask])
-    expect(mod.cacheFetch.has('@common-intellisense/button@3.0.0')).toBe(true)
+    expect(mod.cacheFetch.has('official:@common-intellisense/button@3.0.0')).toBe(true)
   })
 
   it('fetchFromCommonIntellisense supports concurrent fetches for different keys', async () => {

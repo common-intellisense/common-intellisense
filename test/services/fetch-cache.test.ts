@@ -96,11 +96,11 @@ describe('persistent fetch cache', () => {
     renameMock.mockResolvedValue(undefined)
     const mod = await import('../../src/services/fetch')
     mod.configureCacheStorage('/tmp/cache')
-    mod.cacheFetch.set('first', 'one')
+    mod.cacheFetch.set('official:first', 'one')
 
     const first = mod.writeLocalCache()
     await vi.waitFor(() => expect(writeFileMock).toHaveBeenCalledTimes(1))
-    mod.cacheFetch.set('second', 'two')
+    mod.cacheFetch.set('remote-npm:second', 'two')
     const second = mod.writeLocalCache()
     expect(writeFileMock).toHaveBeenCalledTimes(1)
 
@@ -108,7 +108,7 @@ describe('persistent fetch cache', () => {
     await Promise.all([first, second])
     expect(writeFileMock).toHaveBeenCalledTimes(2)
     expect(renameMock).toHaveBeenCalledTimes(2)
-    expect(writeFileMock.mock.calls[1][1]).toContain('["second","two"]')
+    expect(writeFileMock.mock.calls[1][1]).toContain('["remote-npm:second","two"]')
   })
 
   it('bounds cache entries and keeps recently read values', async () => {
@@ -138,6 +138,69 @@ describe('persistent fetch cache', () => {
     expect(mod.getFetchCacheStats().bytes).toBeLessThanOrEqual(16 * 1024 * 1024)
     expect(mod.setFetchCacheEntry('oversized', 'z'.repeat(8 * 1024 * 1024 + 1))).toBe(false)
     expect(mod.cacheFetch.has('oversized')).toBe(false)
+  })
+
+  it('restores only allowlisted keys from the current cache schema', async () => {
+    vi.resetModules()
+    statMock.mockReset().mockResolvedValue({ size: 100 })
+    readFileMock.mockReset().mockResolvedValue(JSON.stringify({
+      schemaVersion: 3,
+      entries: [
+        ['official:@scope/pkg@1.0.0', 'official'],
+        ['remote:abc123', 'remote'],
+        ['remote-npm:@scope/pkg@1.0.0::index.cjs', 'npm'],
+        ['/workspace/private/adapter.cjs', 'local'],
+      ],
+    }))
+    const mod = await import('../../src/services/fetch')
+    mod.configureCacheStorage('/tmp/cache')
+
+    await Promise.resolve(mod.getLocalCache)
+
+    expect(mod.cacheFetch.get('official:@scope/pkg@1.0.0')).toBe('official')
+    expect(mod.cacheFetch.get('remote:abc123')).toBe('remote')
+    expect(mod.cacheFetch.get('remote-npm:@scope/pkg@1.0.0::index.cjs')).toBe('npm')
+    expect(mod.cacheFetch.has('/workspace/private/adapter.cjs')).toBe(false)
+  })
+
+  it('ignores historical cache schemas that may contain absolute paths', async () => {
+    vi.resetModules()
+    statMock.mockReset().mockResolvedValue({ size: 100 })
+    readFileMock.mockReset().mockResolvedValue(JSON.stringify({
+      schemaVersion: 2,
+      entries: [
+        ['/workspace/private/adapter.cjs', 'local'],
+        ['official:@scope/pkg@1.0.0', 'old-official'],
+      ],
+    }))
+    const mod = await import('../../src/services/fetch')
+    mod.configureCacheStorage('/tmp/cache')
+
+    await expect(Promise.resolve(mod.getLocalCache)).resolves.toBe('done reading')
+    expect(mod.cacheFetch.size).toBe(0)
+  })
+
+  it('writes only allowlisted persistent cache keys', async () => {
+    vi.resetModules()
+    writeFileMock.mockReset().mockResolvedValue(undefined)
+    renameMock.mockReset().mockResolvedValue(undefined)
+    const mod = await import('../../src/services/fetch')
+    mod.configureCacheStorage('/tmp/cache')
+    mod.cacheFetch.set('official:@scope/pkg@1.0.0', 'official')
+    mod.cacheFetch.set('remote:abc123', 'remote')
+    mod.cacheFetch.set('remote-npm:@scope/pkg@1.0.0::index.cjs', 'npm')
+    mod.cacheFetch.set('/workspace/private/adapter.cjs', 'local')
+
+    await mod.writeLocalCache()
+
+    const payload = JSON.parse(String(writeFileMock.mock.calls[0][1]))
+    expect(payload.schemaVersion).toBe(3)
+    expect(payload.entries).toEqual([
+      ['official:@scope/pkg@1.0.0', 'official'],
+      ['remote:abc123', 'remote'],
+      ['remote-npm:@scope/pkg@1.0.0::index.cjs', 'npm'],
+    ])
+    expect(mod.cacheFetch.has('/workspace/private/adapter.cjs')).toBe(true)
   })
 
   it('settles when cached JSON is corrupted', async () => {
